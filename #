@@ -1,0 +1,17 @@
+Starting backend on port 8080...
+Backend started (PID=5078), logs: /Users/kevinicnine/Desktop/smart_travel/backend.log
+Launching lib/main.dart on iPhone 16e in debug mode...
+Running Xcode build...                                          
+Xcode build done.                                            4.4s
+Syncing files to device iPhone 16e...                               74ms
+
+Flutter run key commands.
+r Hot reload. 🔥🔥🔥
+R Hot restart.
+h List all available interactive commands.
+d Detach (terminate "flutter run" but leave application running).
+c Clear the screen
+q Quit (terminate the application on the device).
+
+A Dart VM Service on iPhone 16e is available at: http://127.0.0.1:49342/fa_52MPzpaA=/
+The Flutter DevTools debugger and profiler on iPhone 16e is available at: http://127.0.0.1:9100?uri=http://127.0.0.1:49342/fa_52MPzpaA=/

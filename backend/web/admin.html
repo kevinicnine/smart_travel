@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Smart Travel 後台管理</title>
+    <style>
+      :root {
+        --bg: #f4efe7;
+        --card: #ffffff;
+        --ink: #1f1f1f;
+        --muted: #6d6d6d;
+        --accent: #7a91c9;
+      }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: var(--bg);
+        color: var(--ink);
+      }
+      header {
+        padding: 16px 24px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        background: #fff;
+        border-bottom: 1px solid #eee;
+      }
+      header h1 {
+        margin: 0;
+        font-size: 18px;
+      }
+      .container {
+        padding: 20px 24px 40px;
+      }
+      .tabs {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 16px;
+      }
+      .tab {
+        padding: 8px 14px;
+        border-radius: 12px;
+        background: #fff;
+        border: 1px solid #e6e6e6;
+        cursor: pointer;
+      }
+      .tab.active {
+        background: var(--accent);
+        color: #fff;
+        border-color: var(--accent);
+      }
+      .card {
+        background: var(--card);
+        border-radius: 14px;
+        padding: 16px;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06);
+      }
+      .row {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      input, select, textarea, button {
+        font-size: 14px;
+        padding: 8px 10px;
+        border: 1px solid #ddd;
+        border-radius: 10px;
+      }
+      button.primary {
+        background: var(--accent);
+        color: #fff;
+        border: none;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 12px;
+      }
+      th, td {
+        text-align: left;
+        padding: 10px;
+        border-bottom: 1px solid #eee;
+        font-size: 13px;
+      }
+      .muted { color: var(--muted); }
+      .hidden { display: none; }
+      .token {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .notice { margin-top: 8px; color: var(--muted); font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Smart Travel 後台管理</h1>
+      <div class="token">
+        <button id="logoutBtn" class="primary hidden" onclick="logout()">登出</button>
+      </div>
+    </header>
+    <div id="loginCard" class="card" style="max-width:420px;margin:40px auto;">
+      <h2>管理員登入</h2>
+      <div class="row">
+        <input id="adminUser" placeholder="帳號" />
+        <input id="adminPass" type="password" placeholder="密碼" />
+        <button class="primary" onclick="login()">登入</button>
+      </div>
+    </div>
+
+    <div id="adminApp" class="container hidden">
+      <div class="tabs">
+        <div class="tab active" data-tab="places" onclick="showTab('places')">景點管理</div>
+        <div class="tab" data-tab="users" onclick="showTab('users')">使用者</div>
+        <div class="tab" data-tab="import" onclick="showTab('import')">匯入/匯出</div>
+      </div>
+
+      <section id="places" class="card">
+        <div class="row">
+          <input id="q" placeholder="搜尋名稱/地址/城市" />
+          <input id="category" placeholder="tag (例如 museum)" />
+          <button class="primary" onclick="loadPlaces()">查詢</button>
+          <button onclick="openEditor()">新增景點</button>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>名稱</th>
+              <th>標籤</th>
+              <th>城市</th>
+              <th>地址</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="placesBody"></tbody>
+        </table>
+      </section>
+
+      <section id="users" class="card hidden">
+        <button class="primary" onclick="loadUsers()">重新整理</button>
+        <table>
+          <thead>
+            <tr>
+              <th>使用者</th>
+              <th>Email</th>
+              <th>電話</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="usersBody"></tbody>
+        </table>
+      </section>
+
+      <section id="import" class="card hidden">
+        <div class="row">
+          <button class="primary" onclick="exportDb()">匯出 db.json</button>
+          <input type="file" id="importFile" />
+          <button onclick="importPlaces()">匯入 places</button>
+        </div>
+        <p class="notice">匯入格式需為 { "places": [ ... ] }</p>
+      </section>
+    </div>
+
+    <div id="editor" class="hidden">
+      <div class="card" style="position:fixed; right:20px; top:80px; width:360px; z-index:10; max-height:80vh; overflow:auto;">
+        <h3 id="editorTitle">新增景點</h3>
+        <input id="eid" placeholder="id (留空自動產生)" />
+        <input id="ename" placeholder="name" />
+        <input id="etags" placeholder="tags (逗號分隔)" />
+        <input id="ecity" placeholder="city" />
+        <input id="eaddress" placeholder="address" />
+        <input id="elat" placeholder="lat" />
+        <input id="elng" placeholder="lng" />
+        <input id="eimage" placeholder="imageUrl" />
+        <textarea id="edesc" rows="3" placeholder="description"></textarea>
+        <div class="row" style="margin-top:8px;">
+          <button class="primary" type="button" onclick="loadReviews()">查看評論</button>
+        </div>
+        <div id="reviewsPanel" class="hidden">
+          <p class="muted">評論/簡介</p>
+          <div id="reviewsSummary" class="muted"></div>
+          <ul id="reviewsList"></ul>
+        </div>
+        <div class="row" style="margin-top:12px;">
+          <button class="primary" onclick="savePlace()">儲存</button>
+          <button onclick="closeEditor()">關閉</button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const api = '/api/admin';
+      function getToken() { return localStorage.getItem('adminToken') || ''; }
+      function setToken(token) { localStorage.setItem('adminToken', token); }
+
+      function headers() {
+        return { 'Content-Type': 'application/json', 'x-admin-token': getToken() };
+      }
+      function showTab(name) {
+        for (const sec of ['places','users','import']) {
+          document.getElementById(sec).classList.toggle('hidden', sec !== name);
+        }
+        document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+      }
+      async function loadPlaces() {
+        const q = document.getElementById('q').value;
+        const category = document.getElementById('category').value;
+        const url = `${api}/places?q=${encodeURIComponent(q)}&category=${encodeURIComponent(category)}`;
+        const res = await fetch(url, { headers: headers() });
+        const data = await res.json();
+        const body = document.getElementById('placesBody');
+        body.innerHTML = '';
+        (data.data?.places || []).forEach(p => {
+          const tr = document.createElement('tr');
+          const tags = (p.tags || []).join(', ');
+          tr.innerHTML = `<td>${p.name}</td><td>${tags}</td><td>${p.city}</td><td>${p.address}</td>
+            <td><button onclick='editPlace(${JSON.stringify(p)})'>編輯</button>
+            <button onclick='deletePlace("${p.id}")'>刪除</button></td>`;
+          body.appendChild(tr);
+        });
+      }
+      async function loadUsers() {
+        const res = await fetch(`${api}/users`, { headers: headers() });
+        const data = await res.json();
+        const body = document.getElementById('usersBody');
+        body.innerHTML = '';
+        (data.data?.users || []).forEach(u => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${u.username}</td><td>${u.email}</td><td>${u.phone}</td>
+            <td><button onclick='deleteUser("${u.id}")'>刪除</button></td>`;
+          body.appendChild(tr);
+        });
+      }
+      function openEditor() {
+        document.getElementById('editor').classList.remove('hidden');
+        document.getElementById('editorTitle').innerText = '新增景點';
+        ['eid','ename','etags','ecity','eaddress','elat','elng','eimage','edesc'].forEach(id => document.getElementById(id).value = '');
+        document.getElementById('reviewsPanel').classList.add('hidden');
+        document.getElementById('reviewsSummary').innerText = '';
+        document.getElementById('reviewsList').innerHTML = '';
+      }
+      function closeEditor() { document.getElementById('editor').classList.add('hidden'); }
+      function editPlace(p) {
+        openEditor();
+        document.getElementById('editorTitle').innerText = '編輯景點';
+        document.getElementById('eid').value = p.id;
+        document.getElementById('ename').value = p.name;
+        document.getElementById('etags').value = (p.tags || []).join(', ');
+        document.getElementById('ecity').value = p.city;
+        document.getElementById('eaddress').value = p.address;
+        document.getElementById('elat').value = p.lat;
+        document.getElementById('elng').value = p.lng;
+        document.getElementById('eimage').value = p.imageUrl || '';
+        document.getElementById('edesc').value = p.description || '';
+      }
+      async function loadReviews() {
+        const name = document.getElementById('ename').value.trim();
+        if (!name) {
+          alert('請先輸入景點名稱');
+          return;
+        }
+        try {
+          const res = await fetch(`${api}/place-reviews?name=${encodeURIComponent(name)}`, { headers: headers() });
+          const data = await res.json();
+          if (!res.ok) {
+            alert(data.message || '找不到評論');
+            return;
+          }
+          const panel = document.getElementById('reviewsPanel');
+          const summary = document.getElementById('reviewsSummary');
+          const list = document.getElementById('reviewsList');
+          panel.classList.remove('hidden');
+          summary.innerText = data.data?.editorial_summary || '';
+          list.innerHTML = '';
+          (data.data?.reviews || []).forEach(r => {
+            const li = document.createElement('li');
+            li.innerText = r;
+            list.appendChild(li);
+          });
+        } catch (err) {
+          alert('無法讀取評論，請確認後端已啟動');
+        }
+      }
+      async function savePlace() {
+        const payload = {
+          id: document.getElementById('eid').value || undefined,
+          name: document.getElementById('ename').value,
+          tags: document.getElementById('etags').value.split(',').map(t => t.trim()).filter(Boolean),
+          city: document.getElementById('ecity').value,
+          address: document.getElementById('eaddress').value,
+          lat: Number(document.getElementById('elat').value || 0),
+          lng: Number(document.getElementById('elng').value || 0),
+          imageUrl: document.getElementById('eimage').value,
+          description: document.getElementById('edesc').value,
+        };
+        const method = payload.id ? 'PUT' : 'POST';
+        const url = payload.id ? `${api}/places/${payload.id}` : `${api}/places`;
+        await fetch(url, { method, headers: headers(), body: JSON.stringify(payload) });
+        closeEditor();
+        loadPlaces();
+      }
+      async function deletePlace(id) {
+        if (!confirm('確定刪除？')) return;
+        await fetch(`${api}/places/${id}`, { method: 'DELETE', headers: headers() });
+        loadPlaces();
+      }
+      async function deleteUser(id) {
+        if (!confirm('確定刪除使用者？')) return;
+        await fetch(`${api}/users/${id}`, { method: 'DELETE', headers: headers() });
+        loadUsers();
+      }
+      async function exportDb() {
+        const res = await fetch(`${api}/export`, { headers: headers() });
+        const data = await res.json();
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'db.json';
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+      async function importPlaces() {
+        const file = document.getElementById('importFile').files[0];
+        if (!file) return alert('請選擇檔案');
+        const text = await file.text();
+        await fetch(`${api}/places/import`, { method: 'POST', headers: headers(), body: text });
+        alert('匯入完成');
+      }
+
+      async function login() {
+        const username = document.getElementById('adminUser').value;
+        const password = document.getElementById('adminPass').value;
+        if (!username || !password) return alert('請輸入管理員帳密');
+        const res = await fetch(`${api}/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.data?.token) {
+          return alert(data.message || '登入失敗');
+        }
+        setToken(data.data.token);
+        alert('登入成功');
+        toggleAuthUi();
+      }
+
+      function logout() {
+        localStorage.removeItem('adminToken');
+        toggleAuthUi();
+      }
+
+      function toggleAuthUi() {
+        const loggedIn = !!getToken();
+        document.getElementById('loginCard').classList.toggle('hidden', loggedIn);
+        document.getElementById('adminApp').classList.toggle('hidden', !loggedIn);
+        document.getElementById('logoutBtn').classList.toggle('hidden', !loggedIn);
+        if (loggedIn) loadPlaces();
+      }
+
+      toggleAuthUi();
+    </script>
+  </body>
+</html>
