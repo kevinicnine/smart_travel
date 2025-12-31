@@ -1,6 +1,7 @@
 FROM dart:stable
 
 WORKDIR /app
+RUN apt-get update && apt-get install -y python3 && rm -rf /var/lib/apt/lists/*
 COPY pubspec.yaml pubspec.lock ./
 RUN dart pub get
 
