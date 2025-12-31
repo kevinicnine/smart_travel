@@ -159,6 +159,20 @@
           <button onclick="importPlaces()">匯入 places</button>
         </div>
         <p class="notice">匯入格式需為 { "places": [ ... ] }</p>
+        <hr style="margin:16px 0; border:none; border-top:1px solid #eee;" />
+        <h3>自動爬取</h3>
+        <div class="row">
+          <select id="crawlMode">
+            <option value="places">抓景點 (fetch_places.py)</option>
+            <option value="reviews">抓評論+標籤 (fetch_places_with_reviews.py)</option>
+            <option value="merge_tags">合併標籤 (merge_tags_from_reviews.py)</option>
+          </select>
+          <button class="primary" onclick="startCrawl()">開始爬取</button>
+          <button onclick="stopCrawl()">停止</button>
+        </div>
+        <div class="notice">抓評論需要設定 GOOGLE_MAPS_API_KEY。</div>
+        <div id="crawlStatus" class="notice"></div>
+        <pre id="crawlLogs" style="background:#111; color:#eaeaea; padding:12px; border-radius:10px; max-height:200px; overflow:auto; font-size:12px;"></pre>
       </section>
     </div>
 
@@ -328,6 +342,50 @@
         await fetch(`${api}/places/import`, { method: 'POST', headers: headers(), body: text });
         alert('匯入完成');
       }
+      let crawlTimer = null;
+      async function startCrawl() {
+        const mode = document.getElementById('crawlMode').value;
+        const res = await fetch(`${api}/crawl/start`, {
+          method: 'POST',
+          headers: headers(),
+          body: JSON.stringify({ mode }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          return alert(data.message || '啟動失敗');
+        }
+        await refreshCrawlStatus();
+        if (!crawlTimer) {
+          crawlTimer = setInterval(refreshCrawlStatus, 2000);
+        }
+      }
+      async function stopCrawl() {
+        await fetch(`${api}/crawl/stop`, { method: 'POST', headers: headers() });
+        await refreshCrawlStatus();
+      }
+      async function refreshCrawlStatus() {
+        const res = await fetch(`${api}/crawl/status`, { headers: headers() });
+        const data = await res.json();
+        const status = document.getElementById('crawlStatus');
+        const logs = document.getElementById('crawlLogs');
+        const job = data.data || {};
+        if (!job.running && !job.id) {
+          status.textContent = '目前沒有爬取任務。';
+          logs.textContent = '';
+          if (crawlTimer) {
+            clearInterval(crawlTimer);
+            crawlTimer = null;
+          }
+          return;
+        }
+        const endText = job.finished_at ? `, 結束 ${job.finished_at}` : '';
+        status.textContent = `狀態: ${job.running ? '進行中' : '已結束'} (模式: ${job.mode}${endText})`;
+        logs.textContent = (job.logs || []).join('\n');
+        if (!job.running && crawlTimer) {
+          clearInterval(crawlTimer);
+          crawlTimer = null;
+        }
+      }
 
       async function login() {
         const username = document.getElementById('adminUser').value;
@@ -357,7 +415,10 @@
         document.getElementById('loginCard').classList.toggle('hidden', loggedIn);
         document.getElementById('adminApp').classList.toggle('hidden', !loggedIn);
         document.getElementById('logoutBtn').classList.toggle('hidden', !loggedIn);
-        if (loggedIn) loadPlaces();
+        if (loggedIn) {
+          loadPlaces();
+          refreshCrawlStatus();
+        }
       }
 
       toggleAuthUi();

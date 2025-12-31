@@ -21,6 +21,36 @@ late final bool _exposeDebugCodes;
 late final String? _adminToken;
 late final String? _adminUser;
 late final String? _adminPass;
+_CrawlJob? _crawlJob;
+
+class _CrawlJob {
+  _CrawlJob({
+    required this.id,
+    required this.mode,
+    required this.process,
+    required this.startedAt,
+  });
+
+  final String id;
+  final String mode;
+  final Process process;
+  final DateTime startedAt;
+  final List<String> logs = [];
+  DateTime? finishedAt;
+  int? exitCode;
+
+  bool get running => exitCode == null;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'mode': mode,
+        'started_at': startedAt.toIso8601String(),
+        'finished_at': finishedAt?.toIso8601String(),
+        'exit_code': exitCode,
+        'running': running,
+        'logs': logs,
+      };
+}
 
 Future<void> main(List<String> args) async {
   _configureLogging();
@@ -37,7 +67,8 @@ Future<void> main(List<String> args) async {
     'Admin login enabled: ${_adminUser != null && _adminPass != null && _adminToken != null}',
   );
 
-  final store = DataStore(dataDirectory: dataDir);
+  final mysqlConfig = MySqlConfig.fromEnv();
+  final store = DataStore.create(dataDirectory: dataDir, mysql: mysqlConfig);
   final notificationService = NotificationService();
   final authService = AuthService(
     store,
@@ -203,6 +234,71 @@ Future<void> main(List<String> args) async {
         );
       }),
     )
+    ..post(
+      '/api/admin/crawl/start',
+      (req) => _withAdmin(req, () async {
+        final body = await parseJsonBody(req);
+        final mode = _asString(body, 'mode');
+        if (_crawlJob != null && _crawlJob!.running) {
+          throw ApiException(409, '已有爬取進行中');
+        }
+        final script = switch (mode) {
+          'places' => 'fetch_places.py',
+          'reviews' => 'fetch_places_with_reviews.py',
+          'merge_tags' => 'merge_tags_from_reviews.py',
+          _ => throw ApiException(400, '未知的爬取模式'),
+        };
+        final scriptPath = p.join(
+          _resolveDataDir(),
+          '..',
+          'scripts',
+          script,
+        );
+        if (!File(scriptPath).existsSync()) {
+          throw ApiException(404, '找不到爬取腳本');
+        }
+        final process = await Process.start(
+          'python3',
+          [scriptPath],
+          workingDirectory: p.dirname(scriptPath),
+          environment: {
+            ...Platform.environment,
+            'PYTHONUNBUFFERED': '1',
+            'PYTHONIOENCODING': 'utf-8',
+          },
+        );
+        final job = _CrawlJob(
+          id: const Uuid().v4(),
+          mode: mode,
+          process: process,
+          startedAt: DateTime.now(),
+        );
+        _crawlJob = job;
+        _captureProcessLogs(job, process);
+        return jsonResponse(200, successBody(message: '已開始爬取', data: job.toJson()));
+      }),
+    )
+    ..post(
+      '/api/admin/crawl/stop',
+      (req) => _withAdmin(req, () async {
+        final job = _crawlJob;
+        if (job == null || !job.running) {
+          return jsonResponse(200, successBody(message: '目前沒有爬取進行中'));
+        }
+        job.process.kill(ProcessSignal.sigterm);
+        return jsonResponse(200, successBody(message: '已送出停止指令'));
+      }),
+    )
+    ..get(
+      '/api/admin/crawl/status',
+      (req) => _withAdmin(req, () async {
+        final job = _crawlJob;
+        if (job == null) {
+          return jsonResponse(200, successBody(data: {'running': false}));
+        }
+        return jsonResponse(200, successBody(data: job.toJson()));
+      }),
+    )
     ..delete(
       '/api/admin/users/<id>',
       (req, String id) => _withAdmin(req, () async {
@@ -365,6 +461,32 @@ Future<void> main(List<String> args) async {
   final server = await shelf_io.serve(pipeline, InternetAddress.anyIPv4, port);
   server.autoCompress = true;
   _log.info('Backend API 已啟動，正在監聽 http://localhost:${server.port}');
+}
+
+void _captureProcessLogs(_CrawlJob job, Process process) {
+  const maxLines = 200;
+  void addLine(String line) {
+    if (line.trim().isEmpty) return;
+    job.logs.add(line);
+    if (job.logs.length > maxLines) {
+      job.logs.removeAt(0);
+    }
+  }
+
+  process.stdout
+      .transform(utf8.decoder)
+      .transform(const LineSplitter())
+      .listen(addLine);
+  process.stderr
+      .transform(utf8.decoder)
+      .transform(const LineSplitter())
+      .listen((line) => addLine('[ERR] $line'));
+
+  process.exitCode.then((code) {
+    job.exitCode = code;
+    job.finishedAt = DateTime.now();
+    _log.info('Crawl job ${job.id} finished with exit code $code');
+  });
 }
 
 Future<Response> _healthHandler(Request request) async {
