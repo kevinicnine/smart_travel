@@ -2,7 +2,7 @@ FROM dart:stable
 
 WORKDIR /app
 RUN apt-get update \
-  && apt-get install -y python3 ca-certificates \
+  && apt-get install -y python3 ca-certificates python3-certifi \
   && update-ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 COPY pubspec.yaml pubspec.lock ./

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 import sys
 import time
 import urllib.parse
@@ -284,12 +285,21 @@ def fetch_json(url: str, params: Dict[str, Any]) -> Dict[str, Any]:
     qs = urllib.parse.urlencode(params, safe=",")
     full_url = f"{url}?{qs}"
     req = urllib.request.Request(full_url, headers={"User-Agent": "smart-travel/1.0"})
-    with urllib.request.urlopen(req, timeout=20) as resp:
+    with urllib.request.urlopen(req, timeout=20, context=_ssl_context()) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     request_count += 1
     if data.get("status") in {"OVER_QUERY_LIMIT", "RESOURCE_EXHAUSTED"}:
         raise RuntimeError("OVER_QUERY_LIMIT/RESOURCE_EXHAUSTED，已停止")
     return data
+
+
+def _ssl_context() -> ssl.SSLContext:
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
 
 
 def text_search(query: str) -> str | None:

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import sys
+import ssl
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -145,12 +146,21 @@ class Place:
 
 def fetch_raw() -> List[Dict]:
     print(f"Downloading {DATA_URL} ...")
-    with urllib.request.urlopen(DATA_URL, timeout=30) as resp:
+    with urllib.request.urlopen(DATA_URL, timeout=30, context=_ssl_context()) as resp:
         text = resp.read()
     data = json.loads(text.decode("utf-8-sig"))
     items = data["XML_Head"]["Infos"]["Info"]
     print("Fetched items:", len(items))
     return items
+
+
+def _ssl_context() -> ssl.SSLContext:
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
 
 
 def keyword_classify(txt: str) -> str:
