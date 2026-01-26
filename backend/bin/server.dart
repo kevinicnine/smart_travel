@@ -102,8 +102,9 @@ Future<void> main(List<String> args) async {
       (req) => _withAdmin(req, () async {
         final data = await store.read();
         final query = req.url.queryParameters['q']?.trim().toLowerCase();
-          final category = req.url.queryParameters['category']?.trim();
-          var places = data.places;
+        final category = req.url.queryParameters['category']?.trim();
+        final sort = req.url.queryParameters['sort']?.trim();
+        var places = data.places;
         if (query != null && query.isNotEmpty) {
           places = places
               .where(
@@ -114,10 +115,15 @@ Future<void> main(List<String> args) async {
               )
               .toList();
         }
-          if (category != null && category.isNotEmpty) {
-            places =
-                places.where((p) => p.tags.contains(category)).toList();
-          }
+        if (category != null && category.isNotEmpty) {
+          places = places.where((p) => p.tags.contains(category)).toList();
+        }
+        if (sort == 'latest') {
+          places = List<Place>.from(places.reversed);
+        } else if (sort == 'name') {
+          places = List<Place>.from(places)
+            ..sort((a, b) => a.name.compareTo(b.name));
+        }
         return jsonResponse(
           200,
           successBody(data: {'places': places.map((p) => p.toJson()).toList()}),

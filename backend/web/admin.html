@@ -120,6 +120,10 @@
         <div class="row">
           <input id="q" placeholder="搜尋名稱/地址/城市" />
           <input id="category" placeholder="tag (例如 museum)" />
+          <select id="sort">
+            <option value="latest" selected>最新優先</option>
+            <option value="name">名稱排序</option>
+          </select>
           <button class="primary" onclick="loadPlaces()">查詢</button>
           <button onclick="openEditor()">新增景點</button>
         </div>
@@ -221,7 +225,8 @@
       async function loadPlaces() {
         const q = document.getElementById('q').value;
         const category = document.getElementById('category').value;
-        const url = `${api}/places?q=${encodeURIComponent(q)}&category=${encodeURIComponent(category)}`;
+        const sort = document.getElementById('sort').value;
+        const url = `${api}/places?q=${encodeURIComponent(q)}&category=${encodeURIComponent(category)}&sort=${encodeURIComponent(sort)}`;
         const res = await fetch(url, { headers: headers() });
         const data = await res.json();
         const body = document.getElementById('placesBody');
