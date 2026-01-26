@@ -246,6 +246,7 @@ Future<void> main(List<String> args) async {
           'places' => 'fetch_places.py',
           'reviews' => 'fetch_places_with_reviews.py',
           'merge_tags' => 'merge_tags_from_reviews.py',
+          'google_places' => 'fetch_places_from_google.py',
           _ => throw ApiException(400, '未知的爬取模式'),
         };
         final scriptPath = p.join(
