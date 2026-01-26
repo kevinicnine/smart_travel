@@ -28,6 +28,15 @@ REVIEWED_PATH = ROOT / "data" / "places_reviewed.json"
 MAX_ITEMS = 1200  # how many to pull from source before filtering/uniq
 KEEP_COUNT = 300  # how many valid places to save
 
+try:
+    import certifi
+
+    ssl._create_default_https_context = lambda: ssl.create_default_context(  # noqa: E731
+        cafile=certifi.where()
+    )
+except Exception:
+    pass
+
 
 # App interest categories (id -> keywords for mapping)
 INTEREST_KEYWORDS: List[tuple[str, str]] = [
@@ -146,8 +155,16 @@ class Place:
 
 def fetch_raw() -> List[Dict]:
     print(f"Downloading {DATA_URL} ...")
-    with urllib.request.urlopen(DATA_URL, timeout=30, context=_ssl_context()) as resp:
-        text = resp.read()
+    try:
+        with urllib.request.urlopen(DATA_URL, timeout=30, context=_ssl_context()) as resp:
+            text = resp.read()
+    except Exception as exc:
+        print("SSL verify failed, retry without verification:", exc)
+        insecure = ssl.create_default_context()
+        insecure.check_hostname = False
+        insecure.verify_mode = ssl.CERT_NONE
+        with urllib.request.urlopen(DATA_URL, timeout=30, context=insecure) as resp:
+            text = resp.read()
     data = json.loads(text.decode("utf-8-sig"))
     items = data["XML_Head"]["Infos"]["Info"]
     print("Fetched items:", len(items))
