@@ -120,9 +120,11 @@
         <div class="row">
           <input id="q" placeholder="搜尋名稱/地址/城市" />
           <input id="category" placeholder="tag (例如 museum)" />
-          <select id="sort">
+          <select id="sort" onchange="loadPlaces()">
             <option value="latest" selected>最新優先</option>
+            <option value="oldest">最舊優先</option>
             <option value="name">名稱排序</option>
+            <option value="city">城市排序</option>
           </select>
           <button class="primary" onclick="loadPlaces()">查詢</button>
           <button onclick="openEditor()">新增景點</button>

@@ -120,9 +120,18 @@ Future<void> main(List<String> args) async {
         }
         if (sort == 'latest') {
           places = List<Place>.from(places.reversed);
+        } else if (sort == 'oldest') {
+          places = List<Place>.from(places);
         } else if (sort == 'name') {
           places = List<Place>.from(places)
             ..sort((a, b) => a.name.compareTo(b.name));
+        } else if (sort == 'city') {
+          places = List<Place>.from(places)
+            ..sort((a, b) {
+              final cityCmp = a.city.compareTo(b.city);
+              if (cityCmp != 0) return cityCmp;
+              return a.name.compareTo(b.name);
+            });
         }
         return jsonResponse(
           200,
