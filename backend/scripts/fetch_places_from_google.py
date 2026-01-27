@@ -1,5 +1,6 @@
 """
-Seed places from Google Places Text Search and merge into db.json.
+Seed places from Google Places Text Search, then fetch details (reviews + ratings)
+and merge into db.json + places_with_reviews.json.
 
 Usage:
   GOOGLE_MAPS_API_KEY=your_key python3 backend/scripts/fetch_places_from_google.py
@@ -24,11 +25,14 @@ from typing import Dict, Any, List
 
 ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = ROOT / "data" / "db.json"
+REVIEWS_PATH = ROOT / "data" / "places_with_reviews.json"
 API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY")
 
 MAX_REQUESTS = int(os.environ.get("MAX_REQUESTS", "100"))
 SLEEP_BETWEEN = 0.2
 MERGE_MODE = os.environ.get("MERGE_MODE", "merge").strip().lower()
+REVIEWS_LIMIT = 5
+MIN_REVIEW_LEN = 12
 
 DEFAULT_QUERIES = [
     "台北 景點",
@@ -240,6 +244,22 @@ def _extract_tags(text: str, types: list[str]) -> list[str]:
     return sorted(tags)
 
 
+def _clean_reviews(raw_reviews: list[str]) -> list[str]:
+    seen = set()
+    cleaned: list[str] = []
+    for text in raw_reviews:
+        text = (text or "").strip()
+        if len(text) < MIN_REVIEW_LEN:
+            continue
+        if text in seen:
+            continue
+        seen.add(text)
+        cleaned.append(text)
+        if len(cleaned) >= REVIEWS_LIMIT:
+            break
+    return cleaned
+
+
 def _fetch_json(url: str, params: Dict[str, Any]) -> Dict[str, Any]:
     params["key"] = API_KEY
     qs = urllib.parse.urlencode(params, safe=",")
@@ -257,6 +277,33 @@ def _load_queries() -> List[str]:
     if raw:
         return [q.strip() for q in raw.split(",") if q.strip()]
     return DEFAULT_QUERIES
+
+
+def _place_details(place_id: str) -> Dict[str, Any] | None:
+    data = _fetch_json(
+        "https://maps.googleapis.com/maps/api/place/details/json",
+        {
+            "place_id": place_id,
+            "language": "zh-TW",
+            "reviews_sort": "most_relevant",
+            "fields": ",".join(
+                [
+                    "place_id",
+                    "name",
+                    "formatted_address",
+                    "geometry",
+                    "editorial_summary",
+                    "reviews",
+                    "rating",
+                    "user_ratings_total",
+                    "types",
+                ]
+            ),
+        },
+    )
+    if data.get("status") != "OK":
+        return None
+    return data.get("result") or {}
 
 
 def _merge_places(existing: List[Dict[str, Any]], fresh: List[Place]) -> List[Dict[str, Any]]:
@@ -282,9 +329,21 @@ def main() -> None:
 
     db = json.loads(DB_PATH.read_text(encoding="utf-8"))
     existing_places = db.get("places") or []
+    if REVIEWS_PATH.exists():
+        reviews_db = json.loads(REVIEWS_PATH.read_text(encoding="utf-8"))
+        if not isinstance(reviews_db, list):
+            reviews_db = []
+    else:
+        reviews_db = []
+    reviews_by_name = {
+        (item.get("source_name") or item.get("name") or "").strip(): item
+        for item in reviews_db
+        if isinstance(item, dict)
+    }
 
     queries = _load_queries()
     output: List[Place] = []
+    reviews_out: List[Dict[str, Any]] = []
     seen = set()
     request_count = 0
 
@@ -307,13 +366,19 @@ def main() -> None:
                 continue
             seen.add(place_id)
             seen.add(name)
-            geometry = item.get("geometry", {}).get("location", {})
+            details = _place_details(place_id) or {}
+            if details:
+                request_count += 1
+            geometry = (details.get("geometry") or item.get("geometry") or {}).get("location", {})
             lat = float(geometry.get("lat") or 0)
             lng = float(geometry.get("lng") or 0)
-            types = item.get("types") or []
-            rating = item.get("rating")
-            rating_total = item.get("user_ratings_total")
-            text = f"{name} {address}"
+            types = details.get("types") or item.get("types") or []
+            rating = details.get("rating") or item.get("rating")
+            rating_total = details.get("user_ratings_total") or item.get("user_ratings_total")
+            editorial = (details.get("editorial_summary") or {}).get("overview") if details else None
+            raw_reviews = [r.get("text", "") for r in (details.get("reviews") or []) if isinstance(r, dict)]
+            reviews = _clean_reviews(raw_reviews)
+            text = f"{name} {address} {editorial or ''} {' '.join(reviews)}"
             tags = _extract_tags(text, types)
             category = tags[0] if tags else "other"
             output.append(
@@ -326,17 +391,39 @@ def main() -> None:
                     address=address,
                     lat=lat,
                     lng=lng,
-                    description="",
+                    description=editorial or "",
                     imageUrl="",
                     rating=float(rating) if rating is not None else None,
                     userRatingsTotal=int(rating_total) if rating_total is not None else None,
                 )
+            )
+            reviews_out.append(
+                {
+                    "source_name": name,
+                    "name": name,
+                    "formatted_address": address,
+                    "rating": rating,
+                    "user_ratings_total": rating_total,
+                    "types": types,
+                    "editorial_summary": editorial or "",
+                    "reviews": reviews,
+                }
             )
         print(f"完成查詢: {query}, 累積 {len(output)} 筆, 用量 {request_count}/{MAX_REQUESTS}")
         time.sleep(SLEEP_BETWEEN)
 
     db["places"] = _merge_places(existing_places, output)
     DB_PATH.write_text(json.dumps(db, ensure_ascii=False, indent=2), encoding="utf-8")
+    if reviews_out:
+        for item in reviews_out:
+            key = (item.get("source_name") or item.get("name") or "").strip()
+            if not key:
+                continue
+            reviews_by_name[key] = item
+        REVIEWS_PATH.write_text(
+            json.dumps(list(reviews_by_name.values()), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
     print(f"完成，寫入 {DB_PATH}，新增/更新 {len(output)} 筆")
 
 
