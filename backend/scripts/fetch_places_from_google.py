@@ -44,20 +44,26 @@ DEFAULT_QUERIES = [
 ]
 
 CITY_HINTS = [
+    "臺北市",
     "台北市",
+    "新北市",
     "新北市",
     "基隆市",
     "桃園市",
     "新竹市",
+    "新竹市",
     "新竹縣",
     "苗栗縣",
+    "臺中市",
     "台中市",
     "彰化縣",
     "南投縣",
     "雲林縣",
     "嘉義市",
     "嘉義縣",
+    "臺南市",
     "台南市",
+    "高雄市",
     "高雄市",
     "屏東縣",
     "宜蘭縣",
@@ -224,9 +230,23 @@ def _ssl_context() -> ssl.SSLContext:
 
 
 def _extract_city(address: str) -> str:
+    if not address:
+        return ""
+    address = address.replace("臺", "台")
     for hint in CITY_HINTS:
-        if hint in address:
+        if hint in address.replace("臺", "台"):
             return hint
+    return ""
+
+
+def _extract_city_from_components(components: list[dict]) -> str:
+    # Prefer admin_area_level_1 (city/county), then locality.
+    for level in ("administrative_area_level_1", "locality"):
+        for comp in components:
+            types = comp.get("types") or []
+            if level in types:
+                name = (comp.get("long_name") or "").replace("臺", "台")
+                return name
     return ""
 
 
@@ -297,6 +317,7 @@ def _place_details(place_id: str) -> Dict[str, Any] | None:
                     "rating",
                     "user_ratings_total",
                     "types",
+                    "address_components",
                 ]
             ),
         },
@@ -376,9 +397,12 @@ def main() -> None:
             rating = details.get("rating") or item.get("rating")
             rating_total = details.get("user_ratings_total") or item.get("user_ratings_total")
             editorial = (details.get("editorial_summary") or {}).get("overview") if details else None
+            full_address = details.get("formatted_address") or address
+            components = details.get("address_components") or []
+            city = _extract_city_from_components(components) or _extract_city(full_address)
             raw_reviews = [r.get("text", "") for r in (details.get("reviews") or []) if isinstance(r, dict)]
             reviews = _clean_reviews(raw_reviews)
-            text = f"{name} {address} {editorial or ''} {' '.join(reviews)}"
+            text = f"{name} {full_address} {editorial or ''} {' '.join(reviews)}"
             tags = _extract_tags(text, types)
             category = tags[0] if tags else "other"
             output.append(
@@ -387,8 +411,8 @@ def main() -> None:
                     name=name,
                     category=category,
                     tags=tags,
-                    city=_extract_city(address),
-                    address=address,
+                    city=city,
+                    address=full_address,
                     lat=lat,
                     lng=lng,
                     description=editorial or "",
