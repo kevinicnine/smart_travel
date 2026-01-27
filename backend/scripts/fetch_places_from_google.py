@@ -190,6 +190,8 @@ class Place:
     lng: float
     description: str
     imageUrl: str
+    rating: float | None
+    userRatingsTotal: int | None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -203,6 +205,8 @@ class Place:
             "lng": self.lng,
             "description": self.description,
             "imageUrl": self.imageUrl,
+            "rating": self.rating,
+            "userRatingsTotal": self.userRatingsTotal,
         }
 
 
@@ -307,6 +311,8 @@ def main() -> None:
             lat = float(geometry.get("lat") or 0)
             lng = float(geometry.get("lng") or 0)
             types = item.get("types") or []
+            rating = item.get("rating")
+            rating_total = item.get("user_ratings_total")
             text = f"{name} {address}"
             tags = _extract_tags(text, types)
             category = tags[0] if tags else "other"
@@ -322,6 +328,8 @@ def main() -> None:
                     lng=lng,
                     description="",
                     imageUrl="",
+                    rating=float(rating) if rating is not None else None,
+                    userRatingsTotal=int(rating_total) if rating_total is not None else None,
                 )
             )
         print(f"完成查詢: {query}, 累積 {len(output)} 筆, 用量 {request_count}/{MAX_REQUESTS}")

@@ -273,10 +273,14 @@ class MySqlDataStore implements DataStore {
         lat DOUBLE,
         lng DOUBLE,
         description TEXT,
-        image_url TEXT
+        image_url TEXT,
+        rating DOUBLE,
+        user_ratings_total INT
       )
       ''',
     );
+    await _ensureColumn(conn, 'places', 'rating', 'DOUBLE');
+    await _ensureColumn(conn, 'places', 'user_ratings_total', 'INT');
     _initialized = true;
   }
 
@@ -289,7 +293,7 @@ class MySqlDataStore implements DataStore {
     );
     final users = userRows.rows.map<User>(_rowToUser).toList();
     final placeRows = await conn.execute(
-      'SELECT id, name, tags, city, address, lat, lng, description, image_url FROM places',
+      'SELECT id, name, tags, city, address, lat, lng, description, image_url, rating, user_ratings_total FROM places',
     );
     final places = placeRows.rows.map<Place>(_rowToPlace).toList();
     return BackendData(users: users, places: places);
@@ -523,8 +527,8 @@ class MySqlDataStore implements DataStore {
   ) async {
     await conn.execute(
       '''
-      INSERT INTO places (id, name, tags, city, address, lat, lng, description, image_url)
-      VALUES (:id, :name, :tags, :city, :address, :lat, :lng, :description, :image_url)
+      INSERT INTO places (id, name, tags, city, address, lat, lng, description, image_url, rating, user_ratings_total)
+      VALUES (:id, :name, :tags, :city, :address, :lat, :lng, :description, :image_url, :rating, :user_ratings_total)
       ON DUPLICATE KEY UPDATE
         name = VALUES(name),
         tags = VALUES(tags),
@@ -533,7 +537,9 @@ class MySqlDataStore implements DataStore {
         lat = VALUES(lat),
         lng = VALUES(lng),
         description = VALUES(description),
-        image_url = VALUES(image_url)
+        image_url = VALUES(image_url),
+        rating = VALUES(rating),
+        user_ratings_total = VALUES(user_ratings_total)
       ''',
       {
         'id': place.id,
@@ -545,6 +551,8 @@ class MySqlDataStore implements DataStore {
         'lng': place.lng,
         'description': place.description,
         'image_url': place.imageUrl,
+        'rating': place.rating,
+        'user_ratings_total': place.userRatingsTotal,
       },
     );
   }
@@ -564,6 +572,10 @@ class MySqlDataStore implements DataStore {
   Place _rowToPlace(ResultSetRow row) {
     final rawTags = row.colByName('tags');
     final tags = _decodeTags(rawTags);
+    final ratingValue = row.colByName('rating');
+    final rating = ratingValue is num ? ratingValue.toDouble() : null;
+    final totalValue = row.colByName('user_ratings_total');
+    final total = totalValue is num ? totalValue.toInt() : null;
     return Place(
       id: row.colByName('id') ?? '',
       name: row.colByName('name') ?? '',
@@ -574,6 +586,8 @@ class MySqlDataStore implements DataStore {
       lng: double.tryParse(row.colByName('lng') ?? '') ?? 0,
       description: row.colByName('description') ?? '',
       imageUrl: row.colByName('image_url') ?? '',
+      rating: rating,
+      userRatingsTotal: total,
     );
   }
 
@@ -641,5 +655,31 @@ class MySqlDataStore implements DataStore {
     await conn.execute(
       'CREATE UNIQUE INDEX $indexName ON $table ($column)',
     );
+  }
+
+  Future<void> _ensureColumn(
+    MySQLConnection conn,
+    String table,
+    String column,
+    String type,
+  ) async {
+    final rows = await conn.execute(
+      '''
+      SELECT COLUMN_NAME
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = :schema
+        AND TABLE_NAME = :table
+        AND COLUMN_NAME = :column
+      ''',
+      {
+        'schema': _config.database,
+        'table': table,
+        'column': column,
+      },
+    );
+    if (rows.rows.isNotEmpty) {
+      return;
+    }
+    await conn.execute('ALTER TABLE $table ADD COLUMN $column $type');
   }
 }

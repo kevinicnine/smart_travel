@@ -584,6 +584,8 @@ Place _placeFromBody(Map<String, dynamic> body, {required String fallbackId}) {
     lng: (body['lng'] as num?)?.toDouble() ?? 0,
     description: body['description'] as String? ?? '',
     imageUrl: body['imageUrl'] as String? ?? '',
+    rating: (body['rating'] as num?)?.toDouble(),
+    userRatingsTotal: (body['userRatingsTotal'] as num?)?.toInt(),
   );
 }
 

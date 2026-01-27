@@ -134,6 +134,7 @@
             <tr>
               <th>名稱</th>
               <th>標籤</th>
+              <th>評分</th>
               <th>城市</th>
               <th>地址</th>
               <th>操作</th>
@@ -194,6 +195,8 @@
         <input id="elat" placeholder="lat" />
         <input id="elng" placeholder="lng" />
         <input id="eimage" placeholder="imageUrl" />
+        <input id="erating" placeholder="rating (例如 4.5)" />
+        <input id="eratingTotal" placeholder="userRatingsTotal (例如 123)" />
         <textarea id="edesc" rows="3" placeholder="description"></textarea>
         <div class="row" style="margin-top:8px;">
           <button class="primary" type="button" onclick="loadReviews()">查看評論</button>
@@ -236,7 +239,9 @@
         (data.data?.places || []).forEach(p => {
           const tr = document.createElement('tr');
           const tags = (p.tags || []).join(', ');
-          tr.innerHTML = `<td>${p.name}</td><td>${tags}</td><td>${p.city}</td><td>${p.address}</td>
+          const rating = p.rating ? `${p.rating}★` : '-';
+          const total = p.userRatingsTotal ? `(${p.userRatingsTotal})` : '';
+          tr.innerHTML = `<td>${p.name}</td><td>${tags}</td><td>${rating} ${total}</td><td>${p.city}</td><td>${p.address}</td>
             <td><button onclick='editPlace(${JSON.stringify(p)})'>編輯</button>
             <button onclick='deletePlace("${p.id}")'>刪除</button></td>`;
           body.appendChild(tr);
@@ -257,7 +262,7 @@
       function openEditor() {
         document.getElementById('editor').classList.remove('hidden');
         document.getElementById('editorTitle').innerText = '新增景點';
-        ['eid','ename','etags','ecity','eaddress','elat','elng','eimage','edesc'].forEach(id => document.getElementById(id).value = '');
+        ['eid','ename','etags','ecity','eaddress','elat','elng','eimage','erating','eratingTotal','edesc'].forEach(id => document.getElementById(id).value = '');
         document.getElementById('reviewsPanel').classList.add('hidden');
         document.getElementById('reviewsSummary').innerText = '';
         document.getElementById('reviewsList').innerHTML = '';
@@ -274,6 +279,8 @@
         document.getElementById('elat').value = p.lat;
         document.getElementById('elng').value = p.lng;
         document.getElementById('eimage').value = p.imageUrl || '';
+        document.getElementById('erating').value = p.rating ?? '';
+        document.getElementById('eratingTotal').value = p.userRatingsTotal ?? '';
         document.getElementById('edesc').value = p.description || '';
       }
       async function loadReviews() {
@@ -314,6 +321,8 @@
           lat: Number(document.getElementById('elat').value || 0),
           lng: Number(document.getElementById('elng').value || 0),
           imageUrl: document.getElementById('eimage').value,
+          rating: document.getElementById('erating').value ? Number(document.getElementById('erating').value) : null,
+          userRatingsTotal: document.getElementById('eratingTotal').value ? Number(document.getElementById('eratingTotal').value) : null,
           description: document.getElementById('edesc').value,
         };
         const method = payload.id ? 'PUT' : 'POST';

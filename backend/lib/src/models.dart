@@ -114,6 +114,8 @@ class Place {
     required this.lng,
     required this.description,
     required this.imageUrl,
+    this.rating,
+    this.userRatingsTotal,
   });
 
   final String id;
@@ -125,6 +127,8 @@ class Place {
   final double lng;
   final String description;
   final String imageUrl;
+  final double? rating;
+  final int? userRatingsTotal;
 
   Map<String, dynamic> toJson() {
     return {
@@ -137,6 +141,8 @@ class Place {
       'lng': lng,
       'description': description,
       'imageUrl': imageUrl,
+      'rating': rating,
+      'userRatingsTotal': userRatingsTotal,
     };
   }
 
@@ -159,6 +165,8 @@ class Place {
       lng: (json['lng'] as num?)?.toDouble() ?? 0,
       description: json['description'] as String? ?? '',
       imageUrl: json['imageUrl'] as String? ?? '',
+      rating: (json['rating'] as num?)?.toDouble(),
+      userRatingsTotal: (json['userRatingsTotal'] as num?)?.toInt(),
     );
   }
 }
