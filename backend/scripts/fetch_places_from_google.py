@@ -399,6 +399,7 @@ def main() -> None:
             )
             reviews_out.append(
                 {
+                    "place_id": place_id,
                     "source_name": name,
                     "name": name,
                     "formatted_address": address,

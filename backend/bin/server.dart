@@ -212,8 +212,9 @@ Future<void> main(List<String> args) async {
       '/api/admin/place-reviews',
       (req) => _withAdmin(req, () async {
         final name = req.url.queryParameters['name']?.trim();
-        if (name == null || name.isEmpty) {
-          throw ApiException(400, '請提供景點名稱');
+        final id = req.url.queryParameters['id']?.trim();
+        if ((name == null || name.isEmpty) && (id == null || id.isEmpty)) {
+          throw ApiException(400, '請提供景點名稱或 id');
         }
         final file = File(p.join(_resolveDataDir(), 'places_with_reviews.json'));
         if (!file.existsSync()) {
@@ -223,13 +224,36 @@ Future<void> main(List<String> args) async {
         if (raw is! List) {
           throw ApiException(500, '評論資料格式錯誤');
         }
+        final normalizedName = _normalizeText(name ?? '');
+        final normalizedId = (id ?? '').trim();
         Map<String, dynamic>? match;
         for (final item in raw.whereType<Map<String, dynamic>>()) {
-          final sourceName = (item['source_name'] as String?)?.trim();
-          final itemName = (item['name'] as String?)?.trim();
-          if (sourceName == name || itemName == name) {
+          final sourceName = (item['source_name'] as String?)?.trim() ?? '';
+          final itemName = (item['name'] as String?)?.trim() ?? '';
+          final itemId = (item['place_id'] as String?)?.trim() ?? '';
+          final fallbackId = (item['id'] as String?)?.trim() ?? '';
+          if (normalizedId.isNotEmpty &&
+              (itemId == normalizedId || fallbackId == normalizedId)) {
             match = item;
             break;
+          }
+          if (name != null && name.isNotEmpty) {
+            if (sourceName == name || itemName == name) {
+              match = item;
+              break;
+            }
+            final normSource = _normalizeText(sourceName);
+            final normItem = _normalizeText(itemName);
+            if (normalizedName.isNotEmpty &&
+                (normSource == normalizedName ||
+                    normItem == normalizedName ||
+                    normSource.contains(normalizedName) ||
+                    normalizedName.contains(normSource) ||
+                    normItem.contains(normalizedName) ||
+                    normalizedName.contains(normItem))) {
+              match = item;
+              break;
+            }
           }
         }
         if (match == null) {
@@ -478,6 +502,12 @@ Future<void> main(List<String> args) async {
   final server = await shelf_io.serve(pipeline, InternetAddress.anyIPv4, port);
   server.autoCompress = true;
   _log.info('Backend API 已啟動，正在監聽 http://localhost:${server.port}');
+}
+
+String _normalizeText(String input) {
+  return input
+      .toLowerCase()
+      .replaceAll(RegExp(r'[\s\W_]+', unicode: true), '');
 }
 
 void _captureProcessLogs(_CrawlJob job, Process process) {
