@@ -572,10 +572,8 @@ class MySqlDataStore implements DataStore {
   Place _rowToPlace(ResultSetRow row) {
     final rawTags = row.colByName('tags');
     final tags = _decodeTags(rawTags);
-    final ratingValue = row.colByName('rating');
-    final rating = ratingValue is num ? ratingValue.toDouble() : null;
-    final totalValue = row.colByName('user_ratings_total');
-    final total = totalValue is num ? totalValue.toInt() : null;
+    final rating = _parseNullableDouble(row.colByName('rating'));
+    final total = _parseNullableInt(row.colByName('user_ratings_total'));
     return Place(
       id: row.colByName('id') ?? '',
       name: row.colByName('name') ?? '',
@@ -607,6 +605,18 @@ class MySqlDataStore implements DataStore {
       } catch (_) {}
     }
     return [];
+  }
+
+  double? _parseNullableDouble(dynamic value) {
+    if (value == null) return null;
+    if (value is num) return value.toDouble();
+    return double.tryParse(value.toString());
+  }
+
+  int? _parseNullableInt(dynamic value) {
+    if (value == null) return null;
+    if (value is num) return value.toInt();
+    return int.tryParse(value.toString());
   }
 
   DateTime _parseDateTime(String? value) {
