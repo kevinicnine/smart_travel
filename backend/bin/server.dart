@@ -18,6 +18,8 @@ import 'package:smart_travel_backend/src/notification_service.dart';
 
 final _log = Logger('SmartTravelBackend');
 late final bool _exposeDebugCodes;
+String? _syncSourceUrl;
+String? _syncSourceToken;
 late final String? _adminToken;
 late final String? _adminUser;
 late final String? _adminPass;
@@ -61,6 +63,8 @@ Future<void> main(List<String> args) async {
   _adminToken = Platform.environment['ADMIN_TOKEN'];
   _adminUser = Platform.environment['ADMIN_USERNAME'];
   _adminPass = Platform.environment['ADMIN_PASSWORD'];
+  _syncSourceUrl = Platform.environment['SYNC_SOURCE_URL'];
+  _syncSourceToken = Platform.environment['SYNC_SOURCE_TOKEN'];
 
   _log.info('Using data directory: $dataDir');
   _log.info(
@@ -80,6 +84,73 @@ Future<void> main(List<String> args) async {
   final router = Router()
     ..get('/admin', _adminPageHandler)
     ..get('/admin/', _adminPageHandler)
+    ..get(
+      '/api/places',
+      (req) => _json(req, (_) async {
+        final data = await store.read();
+        final query = req.url.queryParameters['q']?.trim().toLowerCase();
+        final tagsParam = req.url.queryParameters['tags']?.trim();
+        final city = req.url.queryParameters['city']?.trim();
+        final sort = req.url.queryParameters['sort']?.trim();
+        final limit = int.tryParse(req.url.queryParameters['limit'] ?? '');
+        var places = data.places;
+        if (query != null && query.isNotEmpty) {
+          places = places
+              .where(
+                (p) =>
+                    p.name.toLowerCase().contains(query) ||
+                    p.address.toLowerCase().contains(query) ||
+                    p.city.toLowerCase().contains(query),
+              )
+              .toList();
+        }
+        if (city != null && city.isNotEmpty) {
+          places =
+              places.where((p) => p.city.contains(city)).toList();
+        }
+        if (tagsParam != null && tagsParam.isNotEmpty) {
+          final tags = tagsParam
+              .split(',')
+              .map((e) => e.trim())
+              .where((e) => e.isNotEmpty)
+              .toSet();
+          if (tags.isNotEmpty) {
+            places = places
+                .where((p) => p.tags.any(tags.contains))
+                .toList();
+          }
+        }
+        if (sort == 'latest') {
+          places = List<Place>.from(places.reversed);
+        } else if (sort == 'oldest') {
+          places = List<Place>.from(places);
+        } else if (sort == 'name') {
+          places = List<Place>.from(places)
+            ..sort((a, b) => a.name.compareTo(b.name));
+        } else if (sort == 'city') {
+          places = List<Place>.from(places)
+            ..sort((a, b) {
+              final cityCmp = a.city.compareTo(b.city);
+              if (cityCmp != 0) return cityCmp;
+              return a.name.compareTo(b.name);
+            });
+        } else if (sort == 'rating') {
+          places = List<Place>.from(places)
+            ..sort((a, b) {
+              final ar = a.rating ?? 0;
+              final br = b.rating ?? 0;
+              return br.compareTo(ar);
+            });
+        }
+        if (limit != null && limit > 0 && places.length > limit) {
+          places = places.take(limit).toList();
+        }
+        return jsonResponse(
+          200,
+          successBody(data: {'places': places.map((p) => p.toJson()).toList()}),
+        );
+      }),
+    )
     ..post('/api/admin/login', (req) => _json(req, (body) async {
           final username = _asString(body, 'username');
           final password = _asString(body, 'password');
@@ -194,6 +265,55 @@ Future<void> main(List<String> args) async {
       (req) => _withAdmin(req, () async {
         final data = await store.read();
         return jsonResponse(200, data.toJson());
+      }),
+    )
+    ..post(
+      '/api/admin/sync-from-remote',
+      (req) => _withAdmin(req, () async {
+        if (_syncSourceUrl == null || _syncSourceUrl!.trim().isEmpty) {
+          throw ApiException(400, '尚未設定 SYNC_SOURCE_URL');
+        }
+        if (_syncSourceToken == null || _syncSourceToken!.trim().isEmpty) {
+          throw ApiException(400, '尚未設定 SYNC_SOURCE_TOKEN');
+        }
+        final exportUri = Uri.parse(_syncSourceUrl!).resolve(
+          '/api/admin/export',
+        );
+        final client = HttpClient();
+        try {
+          final request = await client.getUrl(exportUri);
+          request.headers.set('x-admin-token', _syncSourceToken!);
+          final response = await request.close();
+          final body = await response.transform(utf8.decoder).join();
+          if (response.statusCode >= 400) {
+            throw ApiException(
+              response.statusCode,
+              '雲端匯出失敗 (${response.statusCode})',
+            );
+          }
+          final decoded = jsonDecode(body);
+          if (decoded is! Map<String, dynamic>) {
+            throw ApiException(500, '雲端回傳格式錯誤');
+          }
+          final data = decoded['data'] is Map<String, dynamic>
+              ? decoded['data'] as Map<String, dynamic>
+              : decoded;
+          final rawPlaces = data['places'];
+          if (rawPlaces is! List) {
+            throw ApiException(500, '雲端資料缺少 places');
+          }
+          final places = rawPlaces
+              .whereType<Map<String, dynamic>>()
+              .map(Place.fromJson)
+              .toList();
+          await store.savePlaces(places);
+          return jsonResponse(
+            200,
+            successBody(message: '同步完成', data: {'count': places.length}),
+          );
+        } finally {
+          client.close(force: true);
+        }
       }),
     )
     ..get(
