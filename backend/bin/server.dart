@@ -20,6 +20,8 @@ final _log = Logger('SmartTravelBackend');
 late final bool _exposeDebugCodes;
 String? _syncSourceUrl;
 String? _syncSourceToken;
+String? _localSyncUrl;
+String? _localSyncToken;
 late final String? _adminToken;
 late final String? _adminUser;
 late final String? _adminPass;
@@ -65,6 +67,8 @@ Future<void> main(List<String> args) async {
   _adminPass = Platform.environment['ADMIN_PASSWORD'];
   _syncSourceUrl = Platform.environment['SYNC_SOURCE_URL'];
   _syncSourceToken = Platform.environment['SYNC_SOURCE_TOKEN'];
+  _localSyncUrl = Platform.environment['LOCAL_SYNC_URL'];
+  _localSyncToken = Platform.environment['LOCAL_SYNC_TOKEN'];
 
   _log.info('Using data directory: $dataDir');
   _log.info(
@@ -310,6 +314,48 @@ Future<void> main(List<String> args) async {
           return jsonResponse(
             200,
             successBody(message: '同步完成', data: {'count': places.length}),
+          );
+        } finally {
+          client.close(force: true);
+        }
+      }),
+    )
+    ..post(
+      '/api/admin/sync-to-local',
+      (req) => _withAdmin(req, () async {
+        if (_localSyncUrl == null || _localSyncUrl!.trim().isEmpty) {
+          throw ApiException(400, '尚未設定 LOCAL_SYNC_URL');
+        }
+        if (_localSyncToken == null || _localSyncToken!.trim().isEmpty) {
+          throw ApiException(400, '尚未設定 LOCAL_SYNC_TOKEN');
+        }
+        final exportUri = Uri.parse(_localSyncUrl!).resolve(
+          '/api/admin/places/import',
+        );
+        final data = await store.read();
+        final payload = jsonEncode({'places': data.places.map((p) => p.toJson()).toList()});
+        final client = HttpClient();
+        try {
+          final request = await client.postUrl(exportUri);
+          request.headers.set('Content-Type', 'application/json');
+          request.headers.set('x-admin-token', _localSyncToken!);
+          request.add(utf8.encode(payload));
+          final response = await request.close();
+          final body = await response.transform(utf8.decoder).join();
+          if (response.statusCode >= 400) {
+            throw ApiException(
+              response.statusCode,
+              '同步到本機失敗 (${response.statusCode})',
+            );
+          }
+          Map<String, dynamic>? decoded;
+          try {
+            decoded = jsonDecode(body) as Map<String, dynamic>?;
+          } catch (_) {}
+          final count = decoded?['data']?['count'];
+          return jsonResponse(
+            200,
+            successBody(message: '同步到本機完成', data: {'count': count ?? data.places.length}),
           );
         } finally {
           client.close(force: true);

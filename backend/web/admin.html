@@ -168,6 +168,7 @@
         <p class="notice">匯入格式需為 { "places": [ ... ] }</p>
         <div class="row" style="margin-top:10px;">
           <button class="primary" onclick="syncFromRemote()">一鍵同步雲端資料</button>
+          <button onclick="syncToLocal()">一鍵同步到本機</button>
         </div>
         <hr style="margin:16px 0; border:none; border-top:1px solid #eee;" />
         <h3>自動爬取</h3>
@@ -374,6 +375,15 @@
         }
         alert(`同步完成：${data.data?.count || 0} 筆`);
         loadPlaces();
+      }
+      async function syncToLocal() {
+        if (!confirm('會把雲端資料同步到本機，確定要執行？')) return;
+        const res = await fetch(`${api}/sync-to-local`, { method: 'POST', headers: headers() });
+        const data = await res.json();
+        if (!res.ok) {
+          return alert(data.message || '同步失敗');
+        }
+        alert(`已同步到本機：${data.data?.count || 0} 筆`);
       }
       let crawlTimer = null;
       async function startCrawl() {
