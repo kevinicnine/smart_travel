@@ -149,9 +149,8 @@ Future<void> main(List<String> args) async {
         if (limit != null && limit > 0 && places.length > limit) {
           places = places.take(limit).toList();
         }
-        return jsonResponse(
-          200,
-          successBody(data: {'places': places.map((p) => p.toJson()).toList()}),
+        return successBody(
+          data: {'places': places.map((p) => p.toJson()).toList()},
         );
       }),
     )
