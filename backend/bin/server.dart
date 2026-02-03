@@ -125,7 +125,9 @@ Future<void> main(List<String> args) async {
               .toSet();
           if (tags.isNotEmpty) {
             places = places
-                .where((p) => p.tags.any(tags.contains))
+                .where(
+                  (p) => p.tags.any((tag) => tags.contains(tag)),
+                )
                 .toList();
           }
         }
