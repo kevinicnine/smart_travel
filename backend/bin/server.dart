@@ -75,8 +75,13 @@ Future<void> main(List<String> args) async {
     'Admin login enabled: ${_adminUser != null && _adminPass != null && _adminToken != null}',
   );
 
+  final postgresConfig = PostgresConfig.fromEnv();
   final mysqlConfig = MySqlConfig.fromEnv();
-  final store = DataStore.create(dataDirectory: dataDir, mysql: mysqlConfig);
+  final store = DataStore.create(
+    dataDirectory: dataDir,
+    mysql: mysqlConfig,
+    postgres: postgresConfig,
+  );
   final notificationService = NotificationService();
   final authService = AuthService(
     store,

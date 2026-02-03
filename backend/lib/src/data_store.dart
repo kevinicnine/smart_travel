@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:mysql_client/mysql_client.dart';
+import 'package:postgres/postgres.dart';
 import 'package:path/path.dart' as p;
 
 import 'models.dart';
@@ -43,8 +44,67 @@ class MySqlConfig {
   }
 }
 
+class PostgresConfig {
+  PostgresConfig({
+    required this.host,
+    required this.port,
+    required this.user,
+    required this.password,
+    required this.database,
+    this.useSsl = true,
+  });
+
+  final String host;
+  final int port;
+  final String user;
+  final String password;
+  final String database;
+  final bool useSsl;
+
+  static PostgresConfig? fromEnv() {
+    final host = Platform.environment['DB_HOST'] ?? Platform.environment['PGHOST'];
+    if (host == null || host.isEmpty) {
+      return null;
+    }
+    final port = int.tryParse(
+          Platform.environment['DB_PORT'] ??
+              Platform.environment['PGPORT'] ??
+              '5432',
+        ) ??
+        5432;
+    final user =
+        Platform.environment['DB_USER'] ?? Platform.environment['PGUSER'] ?? '';
+    final password = Platform.environment['DB_PASSWORD'] ??
+        Platform.environment['PGPASSWORD'] ??
+        '';
+    final database = Platform.environment['DB_NAME'] ??
+        Platform.environment['PGDATABASE'] ??
+        '';
+    if (user.isEmpty || database.isEmpty) {
+      return null;
+    }
+    final useSsl =
+        (Platform.environment['DB_SSL'] ?? 'true').toLowerCase() != 'false';
+    return PostgresConfig(
+      host: host,
+      port: port,
+      user: user,
+      password: password,
+      database: database,
+      useSsl: useSsl,
+    );
+  }
+}
+
 abstract class DataStore {
-  factory DataStore.create({required String dataDirectory, MySqlConfig? mysql}) {
+  factory DataStore.create({
+    required String dataDirectory,
+    MySqlConfig? mysql,
+    PostgresConfig? postgres,
+  }) {
+    if (postgres != null) {
+      return PostgresDataStore(postgres);
+    }
     if (mysql != null) {
       return MySqlDataStore(mysql);
     }
@@ -68,6 +128,331 @@ abstract class DataStore {
   Future<User?> findByPhone(String phone);
   Future<User?> findByUsername(String username);
   Future<User?> findByAccount(String account);
+}
+
+class PostgresDataStore implements DataStore {
+  PostgresDataStore(this._config);
+
+  final PostgresConfig _config;
+  PostgreSQLConnection? _connection;
+  bool _initialized = false;
+
+  Future<PostgreSQLConnection> _ensureConnection() async {
+    if (_connection != null && _connection!.isClosed == false) {
+      return _connection!;
+    }
+    final conn = PostgreSQLConnection(
+      _config.host,
+      _config.port,
+      _config.database,
+      username: _config.user,
+      password: _config.password,
+      useSSL: _config.useSsl,
+    );
+    await conn.open();
+    _connection = conn;
+    return conn;
+  }
+
+  Future<void> _ensureInitialized() async {
+    if (_initialized) return;
+    final conn = await _ensureConnection();
+    await conn.query('''
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        username TEXT NOT NULL,
+        email TEXT NOT NULL,
+        phone TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL
+      );
+    ''');
+    await conn.query('''
+      CREATE TABLE IF NOT EXISTS places (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        tags TEXT[] NOT NULL,
+        city TEXT,
+        address TEXT,
+        lat DOUBLE PRECISION,
+        lng DOUBLE PRECISION,
+        description TEXT,
+        image_url TEXT,
+        rating DOUBLE PRECISION,
+        user_ratings_total INTEGER
+      );
+    ''');
+    _initialized = true;
+  }
+
+  List<String> _decodeTags(dynamic raw) {
+    if (raw is List) {
+      return raw.whereType<String>().toList();
+    }
+    return <String>[];
+  }
+
+  User _rowToUser(List<dynamic> row) {
+    return User(
+      id: row[0] as String,
+      username: row[1] as String,
+      email: (row[2] as String).toLowerCase(),
+      phone: row[3] as String,
+      passwordHash: row[4] as String,
+      createdAt: row[5] is DateTime
+          ? row[5] as DateTime
+          : DateTime.parse(row[5].toString()),
+    );
+  }
+
+  Place _rowToPlace(List<dynamic> row) {
+    final tags = _decodeTags(row[2]);
+    return Place(
+      id: row[0] as String,
+      name: row[1] as String,
+      tags: tags,
+      city: row[3] as String? ?? '',
+      address: row[4] as String? ?? '',
+      lat: (row[5] as num?)?.toDouble() ?? 0,
+      lng: (row[6] as num?)?.toDouble() ?? 0,
+      description: row[7] as String? ?? '',
+      imageUrl: row[8] as String? ?? '',
+      rating: (row[9] as num?)?.toDouble(),
+      userRatingsTotal: (row[10] as int?) ?? (row[10] as num?)?.toInt(),
+    );
+  }
+
+  @override
+  Future<BackendData> read() async {
+    await _ensureInitialized();
+    final conn = await _ensureConnection();
+    final usersRows = await conn.query(
+      'SELECT id, username, email, phone, password_hash, created_at FROM users',
+    );
+    final placesRows = await conn.query(
+      'SELECT id, name, tags, city, address, lat, lng, description, image_url, rating, user_ratings_total FROM places',
+    );
+    final users = usersRows.map(_rowToUser).toList();
+    final places = placesRows.map(_rowToPlace).toList();
+    return BackendData(users: users, places: places);
+  }
+
+  @override
+  Future<void> save(BackendData data) async {
+    await saveWithProgress(data);
+  }
+
+  @override
+  Future<void> saveWithProgress(
+    BackendData data, {
+    void Function(String message)? onProgress,
+  }) async {
+    await _ensureInitialized();
+    final conn = await _ensureConnection();
+    await conn.transaction((ctx) async {
+      await ctx.query('DELETE FROM users');
+      await ctx.query('DELETE FROM places');
+      for (final user in data.users) {
+        await ctx.query(
+          'INSERT INTO users (id, username, email, phone, password_hash, created_at) VALUES (@id, @username, @email, @phone, @password_hash, @created_at)',
+          substitutionValues: {
+            'id': user.id,
+            'username': user.username,
+            'email': user.email.toLowerCase(),
+            'phone': user.phone,
+            'password_hash': user.passwordHash,
+            'created_at': user.createdAt.toUtc(),
+          },
+        );
+      }
+      for (final place in data.places) {
+        await ctx.query(
+          'INSERT INTO places (id, name, tags, city, address, lat, lng, description, image_url, rating, user_ratings_total) '
+          'VALUES (@id, @name, @tags, @city, @address, @lat, @lng, @description, @image_url, @rating, @user_ratings_total)',
+          substitutionValues: {
+            'id': place.id,
+            'name': place.name,
+            'tags': place.tags,
+            'city': place.city,
+            'address': place.address,
+            'lat': place.lat,
+            'lng': place.lng,
+            'description': place.description,
+            'image_url': place.imageUrl,
+            'rating': place.rating,
+            'user_ratings_total': place.userRatingsTotal,
+          },
+        );
+      }
+    });
+    onProgress?.call(
+      '已寫入 Postgres（users=${data.users.length}, places=${data.places.length}）',
+    );
+  }
+
+  @override
+  Future<void> addUser(User user) async {
+    await _ensureInitialized();
+    final conn = await _ensureConnection();
+    await conn.query(
+      'INSERT INTO users (id, username, email, phone, password_hash, created_at) VALUES (@id, @username, @email, @phone, @password_hash, @created_at)',
+      substitutionValues: {
+        'id': user.id,
+        'username': user.username,
+        'email': user.email.toLowerCase(),
+        'phone': user.phone,
+        'password_hash': user.passwordHash,
+        'created_at': user.createdAt.toUtc(),
+      },
+    );
+  }
+
+  @override
+  Future<void> updateUser(User updated) async {
+    await _ensureInitialized();
+    final conn = await _ensureConnection();
+    final count = await conn.query(
+      'UPDATE users SET username=@username, email=@email, phone=@phone, password_hash=@password_hash WHERE id=@id',
+      substitutionValues: {
+        'id': updated.id,
+        'username': updated.username,
+        'email': updated.email.toLowerCase(),
+        'phone': updated.phone,
+        'password_hash': updated.passwordHash,
+      },
+    );
+    if (count.isEmpty) {
+      throw StateError('User ${updated.id} not found');
+    }
+  }
+
+  @override
+  Future<void> deleteUser(String id) async {
+    await _ensureInitialized();
+    final conn = await _ensureConnection();
+    await conn.query('DELETE FROM users WHERE id=@id', substitutionValues: {'id': id});
+  }
+
+  @override
+  Future<List<Place>> listPlaces() async {
+    final data = await read();
+    return data.places;
+  }
+
+  @override
+  Future<void> savePlaces(List<Place> places) async {
+    await _ensureInitialized();
+    final conn = await _ensureConnection();
+    await conn.transaction((ctx) async {
+      await ctx.query('DELETE FROM places');
+      for (final place in places) {
+        await ctx.query(
+          'INSERT INTO places (id, name, tags, city, address, lat, lng, description, image_url, rating, user_ratings_total) '
+          'VALUES (@id, @name, @tags, @city, @address, @lat, @lng, @description, @image_url, @rating, @user_ratings_total)',
+          substitutionValues: {
+            'id': place.id,
+            'name': place.name,
+            'tags': place.tags,
+            'city': place.city,
+            'address': place.address,
+            'lat': place.lat,
+            'lng': place.lng,
+            'description': place.description,
+            'image_url': place.imageUrl,
+            'rating': place.rating,
+            'user_ratings_total': place.userRatingsTotal,
+          },
+        );
+      }
+    });
+  }
+
+  @override
+  Future<void> upsertPlace(Place place) async {
+    await _ensureInitialized();
+    final conn = await _ensureConnection();
+    await conn.query(
+      'INSERT INTO places (id, name, tags, city, address, lat, lng, description, image_url, rating, user_ratings_total) '
+      'VALUES (@id, @name, @tags, @city, @address, @lat, @lng, @description, @image_url, @rating, @user_ratings_total) '
+      'ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, tags=EXCLUDED.tags, city=EXCLUDED.city, address=EXCLUDED.address, '
+      'lat=EXCLUDED.lat, lng=EXCLUDED.lng, description=EXCLUDED.description, image_url=EXCLUDED.image_url, '
+      'rating=EXCLUDED.rating, user_ratings_total=EXCLUDED.user_ratings_total',
+      substitutionValues: {
+        'id': place.id,
+        'name': place.name,
+        'tags': place.tags,
+        'city': place.city,
+        'address': place.address,
+        'lat': place.lat,
+        'lng': place.lng,
+        'description': place.description,
+        'image_url': place.imageUrl,
+        'rating': place.rating,
+        'user_ratings_total': place.userRatingsTotal,
+      },
+    );
+  }
+
+  @override
+  Future<void> deletePlace(String id) async {
+    await _ensureInitialized();
+    final conn = await _ensureConnection();
+    await conn.query('DELETE FROM places WHERE id=@id', substitutionValues: {'id': id});
+  }
+
+  @override
+  Future<User?> findByEmail(String email) async {
+    await _ensureInitialized();
+    final conn = await _ensureConnection();
+    final rows = await conn.query(
+      'SELECT id, username, email, phone, password_hash, created_at FROM users WHERE lower(email)=@email LIMIT 1',
+      substitutionValues: {'email': email.toLowerCase()},
+    );
+    if (rows.isEmpty) return null;
+    return _rowToUser(rows.first);
+  }
+
+  @override
+  Future<User?> findByPhone(String phone) async {
+    await _ensureInitialized();
+    final conn = await _ensureConnection();
+    final rows = await conn.query(
+      'SELECT id, username, email, phone, password_hash, created_at FROM users WHERE phone=@phone LIMIT 1',
+      substitutionValues: {'phone': phone},
+    );
+    if (rows.isEmpty) return null;
+    return _rowToUser(rows.first);
+  }
+
+  @override
+  Future<User?> findByUsername(String username) async {
+    await _ensureInitialized();
+    final conn = await _ensureConnection();
+    final rows = await conn.query(
+      'SELECT id, username, email, phone, password_hash, created_at FROM users WHERE lower(username)=@username LIMIT 1',
+      substitutionValues: {'username': username.toLowerCase()},
+    );
+    if (rows.isEmpty) return null;
+    return _rowToUser(rows.first);
+  }
+
+  @override
+  Future<User?> findByAccount(String account) async {
+    final trimmed = account.trim();
+    if (trimmed.isEmpty) {
+      return null;
+    }
+    await _ensureInitialized();
+    final conn = await _ensureConnection();
+    final lower = trimmed.toLowerCase();
+    final rows = await conn.query(
+      'SELECT id, username, email, phone, password_hash, created_at FROM users '
+      'WHERE lower(username)=@account OR lower(email)=@account LIMIT 1',
+      substitutionValues: {'account': lower},
+    );
+    if (rows.isEmpty) return null;
+    return _rowToUser(rows.first);
+  }
 }
 
 class FileDataStore implements DataStore {
