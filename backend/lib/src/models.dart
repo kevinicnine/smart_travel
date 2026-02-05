@@ -116,6 +116,8 @@ class Place {
     required this.imageUrl,
     this.rating,
     this.userRatingsTotal,
+    this.priceLevel,
+    this.priceCategory,
   });
 
   final String id;
@@ -129,6 +131,8 @@ class Place {
   final String imageUrl;
   final double? rating;
   final int? userRatingsTotal;
+  final int? priceLevel;
+  final String? priceCategory;
 
   Map<String, dynamic> toJson() {
     return {
@@ -143,6 +147,8 @@ class Place {
       'imageUrl': imageUrl,
       'rating': rating,
       'userRatingsTotal': userRatingsTotal,
+      'priceLevel': priceLevel,
+      'priceCategory': priceCategory,
     };
   }
 
@@ -167,6 +173,8 @@ class Place {
       imageUrl: json['imageUrl'] as String? ?? '',
       rating: (json['rating'] as num?)?.toDouble(),
       userRatingsTotal: (json['userRatingsTotal'] as num?)?.toInt(),
+      priceLevel: (json['priceLevel'] as num?)?.toInt(),
+      priceCategory: json['priceCategory'] as String?,
     );
   }
 }
