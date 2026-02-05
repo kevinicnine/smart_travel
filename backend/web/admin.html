@@ -169,6 +169,7 @@
         <p class="notice">匯入格式需為 { "places": [ ... ] }</p>
         <div class="row" style="margin-top:10px;">
           <button class="primary" onclick="syncFromRemote()">一鍵同步雲端資料</button>
+          <button onclick="importFromFile()">匯入雲端爬取結果</button>
           <button onclick="syncToLocal()">一鍵同步到本機</button>
         </div>
         <hr style="margin:16px 0; border:none; border-top:1px solid #eee;" />
@@ -381,8 +382,23 @@
         const file = document.getElementById('importFile').files[0];
         if (!file) return alert('請選擇檔案');
         const text = await file.text();
-        await fetch(`${api}/places/import`, { method: 'POST', headers: headers(), body: text });
-        alert('匯入完成');
+        const res = await fetch(`${api}/places/import`, { method: 'POST', headers: headers(), body: text });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          return alert(data.message || '匯入失敗');
+        }
+        alert(`匯入完成：${data.data?.count || 0} 筆`);
+        loadPlaces();
+      }
+      async function importFromFile() {
+        if (!confirm('將 /app/data/db.json 匯入資料庫，確定要執行？')) return;
+        const res = await fetch(`${api}/import-from-file`, { method: 'POST', headers: headers() });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          return alert(data.message || '匯入失敗');
+        }
+        alert(`匯入完成：${data.data?.count || 0} 筆`);
+        loadPlaces();
       }
       async function syncFromRemote() {
         if (!confirm('會以雲端資料覆蓋本機景點，確定要同步？')) return;

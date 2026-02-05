@@ -358,6 +358,32 @@ Future<void> main(List<String> args) async {
       }),
     )
     ..post(
+      '/api/admin/import-from-file',
+      (req) => _withAdmin(req, () async {
+        final file = File(p.join(_resolveDataDir(), 'db.json'));
+        if (!file.existsSync()) {
+          throw ApiException(404, '找不到 db.json，請先執行爬取');
+        }
+        final raw = jsonDecode(await file.readAsString());
+        if (raw is! Map<String, dynamic>) {
+          throw ApiException(500, 'db.json 格式錯誤');
+        }
+        final rawPlaces = raw['places'];
+        if (rawPlaces is! List) {
+          throw ApiException(500, 'db.json 缺少 places');
+        }
+        final places = rawPlaces
+            .whereType<Map<String, dynamic>>()
+            .map(Place.fromJson)
+            .toList();
+        await store.savePlaces(places);
+        return jsonResponse(
+          200,
+          successBody(message: '已匯入 db.json 到資料庫', data: {'count': places.length}),
+        );
+      }),
+    )
+    ..post(
       '/api/admin/sync-to-local',
       (req) => _withAdmin(req, () async {
         if (_localSyncUrl == null || _localSyncUrl!.trim().isEmpty) {
