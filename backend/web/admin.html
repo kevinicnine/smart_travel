@@ -135,6 +135,7 @@
               <th>名稱</th>
               <th>標籤</th>
               <th>評分</th>
+              <th>價格</th>
               <th>城市</th>
               <th>地址</th>
               <th>操作</th>
@@ -202,6 +203,8 @@
         <input id="eimage" placeholder="imageUrl" />
         <input id="erating" placeholder="rating (例如 4.5)" />
         <input id="eratingTotal" placeholder="userRatingsTotal (例如 123)" />
+        <input id="epriceLevel" placeholder="priceLevel (0-4)" />
+        <input id="epriceCategory" placeholder="priceCategory (low/mid/high)" />
         <textarea id="edesc" rows="3" placeholder="description"></textarea>
         <div class="row" style="margin-top:8px;">
           <button class="primary" type="button" onclick="loadReviews()">查看評論</button>
@@ -238,15 +241,26 @@
         const sort = document.getElementById('sort').value;
         const url = `${api}/places?q=${encodeURIComponent(q)}&category=${encodeURIComponent(category)}&sort=${encodeURIComponent(sort)}`;
         const res = await fetch(url, { headers: headers() });
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         const body = document.getElementById('placesBody');
         body.innerHTML = '';
-        (data.data?.places || []).forEach(p => {
+        if (!res.ok) {
+          const msg = data.message || data.error || '查詢失敗，請稍後再試';
+          body.innerHTML = `<tr><td colspan="7" class="muted">${msg}</td></tr>`;
+          return;
+        }
+        const places = data.data?.places || [];
+        if (!places.length) {
+          body.innerHTML = `<tr><td colspan="7" class="muted">沒有符合條件的資料</td></tr>`;
+          return;
+        }
+        places.forEach(p => {
           const tr = document.createElement('tr');
           const tags = (p.tags || []).join(', ');
           const rating = p.rating ? `${p.rating}★` : '-';
           const total = p.userRatingsTotal ? `(${p.userRatingsTotal})` : '';
-          tr.innerHTML = `<td>${p.name}</td><td>${tags}</td><td>${rating} ${total}</td><td>${p.city}</td><td>${p.address}</td>
+          const price = p.priceCategory || (p.priceLevel != null ? `L${p.priceLevel}` : '-');
+          tr.innerHTML = `<td>${p.name}</td><td>${tags}</td><td>${rating} ${total}</td><td>${price}</td><td>${p.city}</td><td>${p.address}</td>
             <td><button onclick='editPlace(${JSON.stringify(p)})'>編輯</button>
             <button onclick='deletePlace("${p.id}")'>刪除</button></td>`;
           body.appendChild(tr);
@@ -267,7 +281,7 @@
       function openEditor() {
         document.getElementById('editor').classList.remove('hidden');
         document.getElementById('editorTitle').innerText = '新增景點';
-        ['eid','ename','etags','ecity','eaddress','elat','elng','eimage','erating','eratingTotal','edesc'].forEach(id => document.getElementById(id).value = '');
+        ['eid','ename','etags','ecity','eaddress','elat','elng','eimage','erating','eratingTotal','epriceLevel','epriceCategory','edesc'].forEach(id => document.getElementById(id).value = '');
         document.getElementById('reviewsPanel').classList.add('hidden');
         document.getElementById('reviewsSummary').innerText = '';
         document.getElementById('reviewsList').innerHTML = '';
@@ -286,6 +300,8 @@
         document.getElementById('eimage').value = p.imageUrl || '';
         document.getElementById('erating').value = p.rating ?? '';
         document.getElementById('eratingTotal').value = p.userRatingsTotal ?? '';
+        document.getElementById('epriceLevel').value = p.priceLevel ?? '';
+        document.getElementById('epriceCategory').value = p.priceCategory ?? '';
         document.getElementById('edesc').value = p.description || '';
       }
       async function loadReviews() {
@@ -330,6 +346,8 @@
           imageUrl: document.getElementById('eimage').value,
           rating: document.getElementById('erating').value ? Number(document.getElementById('erating').value) : null,
           userRatingsTotal: document.getElementById('eratingTotal').value ? Number(document.getElementById('eratingTotal').value) : null,
+          priceLevel: document.getElementById('epriceLevel').value ? Number(document.getElementById('epriceLevel').value) : null,
+          priceCategory: document.getElementById('epriceCategory').value || null,
           description: document.getElementById('edesc').value,
         };
         const method = payload.id ? 'PUT' : 'POST';
@@ -387,30 +405,72 @@
       }
       let crawlTimer = null;
       async function startCrawl() {
+        const status = document.getElementById('crawlStatus');
+        const logs = document.getElementById('crawlLogs');
         const mode = document.getElementById('crawlMode').value;
-        const res = await fetch(`${api}/crawl/start`, {
-          method: 'POST',
-          headers: headers(),
-          body: JSON.stringify({ mode }),
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          return alert(data.message || '啟動失敗');
-        }
-        await refreshCrawlStatus();
-        if (!crawlTimer) {
-          crawlTimer = setInterval(refreshCrawlStatus, 2000);
+        status.textContent = '啟動中...';
+        logs.textContent = '';
+        try {
+          const res = await fetch(`${api}/crawl/start`, {
+            method: 'POST',
+            headers: headers(),
+            body: JSON.stringify({ mode }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            const msg = data.message || data.error || '啟動失敗';
+            status.textContent = msg;
+            alert(msg);
+            return;
+          }
+          await refreshCrawlStatus();
+          if (!crawlTimer) {
+            crawlTimer = setInterval(refreshCrawlStatus, 2000);
+          }
+        } catch (err) {
+          status.textContent = '啟動失敗（無法連線）';
+          alert('無法連線到後端，請確認後端已啟動');
         }
       }
       async function stopCrawl() {
-        await fetch(`${api}/crawl/stop`, { method: 'POST', headers: headers() });
-        await refreshCrawlStatus();
+        const status = document.getElementById('crawlStatus');
+        try {
+          await fetch(`${api}/crawl/stop`, { method: 'POST', headers: headers() });
+          await refreshCrawlStatus();
+        } catch (err) {
+          status.textContent = '停止失敗（無法連線）';
+          alert('無法連線到後端，請確認後端已啟動');
+        }
       }
       async function refreshCrawlStatus() {
-        const res = await fetch(`${api}/crawl/status`, { headers: headers() });
-        const data = await res.json();
+        let data = {};
+        let res;
+        try {
+          res = await fetch(`${api}/crawl/status`, { headers: headers() });
+          data = await res.json().catch(() => ({}));
+        } catch (err) {
+          const status = document.getElementById('crawlStatus');
+          const logs = document.getElementById('crawlLogs');
+          status.textContent = '無法連線到後端';
+          logs.textContent = '';
+          if (crawlTimer) {
+            clearInterval(crawlTimer);
+            crawlTimer = null;
+          }
+          return;
+        }
         const status = document.getElementById('crawlStatus');
         const logs = document.getElementById('crawlLogs');
+        if (res && !res.ok) {
+          const msg = data.message || data.error || '讀取狀態失敗';
+          status.textContent = msg;
+          logs.textContent = '';
+          if (crawlTimer) {
+            clearInterval(crawlTimer);
+            crawlTimer = null;
+          }
+          return;
+        }
         const job = data.data || {};
         if (!job.running && !job.id) {
           status.textContent = '目前沒有爬取任務。';

@@ -77,6 +77,17 @@ Future<void> main(List<String> args) async {
 
   final postgresConfig = PostgresConfig.fromEnv();
   final mysqlConfig = MySqlConfig.fromEnv();
+  if (postgresConfig != null) {
+    _log.info(
+      'Data store: Postgres host=${postgresConfig.host} db=${postgresConfig.database} ssl=${postgresConfig.useSsl}',
+    );
+  } else if (mysqlConfig != null) {
+    _log.info(
+      'Data store: MySQL host=${mysqlConfig.host}:${mysqlConfig.port} db=${mysqlConfig.database}',
+    );
+  } else {
+    _log.info('Data store: Local JSON (db.json)');
+  }
   final store = DataStore.create(
     dataDirectory: dataDir,
     mysql: mysqlConfig,
@@ -118,7 +129,8 @@ Future<void> main(List<String> args) async {
               places.where((p) => p.city.contains(city)).toList();
         }
         if (tagsParam != null && tagsParam.isNotEmpty) {
-          final tags = tagsParam
+          final tagsRaw = tagsParam.toString();
+          final tags = tagsRaw
               .split(',')
               .map((e) => e.trim())
               .where((e) => e.isNotEmpty)
@@ -184,6 +196,7 @@ Future<void> main(List<String> args) async {
         final data = await store.read();
         final query = req.url.queryParameters['q']?.trim().toLowerCase();
         final category = req.url.queryParameters['category']?.trim();
+        final tagsParam = req.url.queryParameters['tags']?.trim();
         final sort = req.url.queryParameters['sort']?.trim();
         var places = data.places;
         if (query != null && query.isNotEmpty) {
@@ -196,8 +209,19 @@ Future<void> main(List<String> args) async {
               )
               .toList();
         }
-        if (category != null && category.isNotEmpty) {
-          places = places.where((p) => p.tags.contains(category)).toList();
+        final combinedTags = [
+          if (category != null) category,
+          if (tagsParam != null) tagsParam,
+        ]
+            .join(',')
+            .split(',')
+            .map((e) => e.trim())
+            .where((e) => e.isNotEmpty)
+            .toSet();
+        if (combinedTags.isNotEmpty) {
+          places = places
+              .where((p) => p.tags.any((tag) => combinedTags.contains(tag)))
+              .toList();
         }
         if (sort == 'latest') {
           places = List<Place>.from(places.reversed);
@@ -212,6 +236,13 @@ Future<void> main(List<String> args) async {
               final cityCmp = a.city.compareTo(b.city);
               if (cityCmp != 0) return cityCmp;
               return a.name.compareTo(b.name);
+            });
+        } else if (sort == 'rating') {
+          places = List<Place>.from(places)
+            ..sort((a, b) {
+              final ar = a.rating ?? 0;
+              final br = b.rating ?? 0;
+              return br.compareTo(ar);
             });
         }
         return jsonResponse(
@@ -461,6 +492,12 @@ Future<void> main(List<String> args) async {
           'merge_ratings' => 'merge_ratings_from_reviews.py',
           _ => throw ApiException(400, '未知的爬取模式'),
         };
+        if (mode == 'reviews' || mode == 'google_places') {
+          final googleKey = Platform.environment['GOOGLE_MAPS_API_KEY'] ?? '';
+          if (googleKey.isEmpty) {
+            throw ApiException(400, '需要設定 GOOGLE_MAPS_API_KEY');
+          }
+        }
         final scriptPath = p.join(
           _resolveDataDir(),
           '..',
@@ -789,6 +826,8 @@ Place _placeFromBody(Map<String, dynamic> body, {required String fallbackId}) {
     imageUrl: body['imageUrl'] as String? ?? '',
     rating: (body['rating'] as num?)?.toDouble(),
     userRatingsTotal: (body['userRatingsTotal'] as num?)?.toInt(),
+    priceLevel: (body['priceLevel'] as num?)?.toInt(),
+    priceCategory: body['priceCategory'] as String?,
   );
 }
 
