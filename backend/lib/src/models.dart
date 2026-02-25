@@ -118,6 +118,7 @@ class Place {
     this.userRatingsTotal,
     this.priceLevel,
     this.priceCategory,
+    this.openingHours,
   });
 
   final String id;
@@ -133,6 +134,7 @@ class Place {
   final int? userRatingsTotal;
   final int? priceLevel;
   final String? priceCategory;
+  final Map<String, dynamic>? openingHours;
 
   Map<String, dynamic> toJson() {
     return {
@@ -149,6 +151,7 @@ class Place {
       'userRatingsTotal': userRatingsTotal,
       'priceLevel': priceLevel,
       'priceCategory': priceCategory,
+      'openingHours': openingHours,
     };
   }
 
@@ -175,6 +178,9 @@ class Place {
       userRatingsTotal: (json['userRatingsTotal'] as num?)?.toInt(),
       priceLevel: (json['priceLevel'] as num?)?.toInt(),
       priceCategory: json['priceCategory'] as String?,
+      openingHours: json['openingHours'] is Map
+          ? Map<String, dynamic>.from(json['openingHours'] as Map)
+          : null,
     );
   }
 }
