@@ -311,10 +311,10 @@ Future<void> main(List<String> args) async {
             .whereType<Map<String, dynamic>>()
             .map(Place.fromJson)
             .toList();
-        await store.savePlaces(places);
+        final count = await _mergePlacesToStore(store, places);
         return jsonResponse(
           200,
-          successBody(message: '已匯入景點', data: {'count': places.length}),
+          successBody(message: '已合併匯入景點', data: {'count': count}),
         );
       }),
     )
@@ -364,10 +364,10 @@ Future<void> main(List<String> args) async {
               .whereType<Map<String, dynamic>>()
               .map(Place.fromJson)
               .toList();
-          await store.savePlaces(places);
+          final count = await _mergePlacesToStore(store, places);
           return jsonResponse(
             200,
-            successBody(message: '同步完成', data: {'count': places.length}),
+            successBody(message: '同步完成（合併模式）', data: {'count': count}),
           );
         } finally {
           client.close(force: true);
@@ -393,12 +393,12 @@ Future<void> main(List<String> args) async {
             .whereType<Map<String, dynamic>>()
             .map(Place.fromJson)
             .toList();
-        await store.savePlaces(places);
+        final count = await _mergePlacesToStore(store, places);
         return jsonResponse(
           200,
           successBody(
-            message: '已匯入 db.json 到資料庫',
-            data: {'count': places.length},
+            message: '已合併匯入 db.json 到資料庫',
+            data: {'count': count},
           ),
         );
       }),
@@ -806,6 +806,13 @@ String _normalizeText(String input) {
   return input.toLowerCase().replaceAll(RegExp(r'[\s\W_]+', unicode: true), '');
 }
 
+Future<int> _mergePlacesToStore(DataStore store, List<Place> places) async {
+  for (final place in places) {
+    await store.upsertPlace(place);
+  }
+  return places.length;
+}
+
 Future<int> _importDbJsonToStore() async {
   final file = File(p.join(_dataDir, 'db.json'));
   if (!await file.exists()) {
@@ -821,8 +828,7 @@ Future<int> _importDbJsonToStore() async {
       .whereType<Map>()
       .map((item) => Place.fromJson(Map<String, dynamic>.from(item)))
       .toList();
-  await _store.savePlaces(places);
-  return places.length;
+  return _mergePlacesToStore(_store, places);
 }
 
 void _captureProcessLogs(_CrawlJob job, Process process) {
