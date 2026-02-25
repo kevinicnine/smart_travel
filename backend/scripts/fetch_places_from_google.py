@@ -536,6 +536,13 @@ def main() -> None:
     reviews_out: List[Dict[str, Any]] = []
     seen = set()
     request_count = 0
+    selected_city = (os.environ.get("GOOGLE_PLACE_CITY") or "").strip()
+    single_city_mode = bool(selected_city)
+
+    if queries:
+        print(f"本次查詢目標: {', '.join(queries)}")
+    if single_city_mode:
+        print(f"單縣市模式啟用: {selected_city}（優先抓取該縣市，暫跳過全庫補資料）")
 
     def _build_query_from_place(place: Dict[str, Any]) -> str:
         name = (place.get("name") or "").strip()
@@ -548,92 +555,95 @@ def main() -> None:
             parts.append(address)
         return " ".join([p for p in parts if p]).strip()
 
-    # Enrich existing places missing image/rating/price/city/address.
-    for place in existing_places:
-        if request_count >= MAX_REQUESTS:
-            break
-        if not _needs_enrich(place):
-            continue
-        query = _build_query_from_place(place)
-        if not query:
-            continue
-        place_id = _find_place_id(query)
-        request_count += 1
-        if not place_id:
-            continue
-        details = _place_details(place_id) or {}
-        if details:
+    if not single_city_mode:
+        # Enrich existing places missing image/rating/price/city/address.
+        # Reserve some quota for search queries so crawl doesn't end before query loop starts.
+        reserve_for_search = min(MAX_REQUESTS, max(20, len(queries) * 8))
+        for place in existing_places:
+            if request_count >= max(0, MAX_REQUESTS - reserve_for_search):
+                break
+            if not _needs_enrich(place):
+                continue
+            query = _build_query_from_place(place)
+            if not query:
+                continue
+            place_id = _find_place_id(query)
             request_count += 1
-        geometry = (details.get("geometry") or {}).get("location", {})
-        lat = float(geometry.get("lat") or 0)
-        lng = float(geometry.get("lng") or 0)
-        types = details.get("types") or []
-        rating = details.get("rating")
-        rating_total = details.get("user_ratings_total")
-        price_level = details.get("price_level")
-        editorial = (details.get("editorial_summary") or {}).get("overview") if details else None
-        full_address = details.get("formatted_address") or place.get("address") or ""
-        components = details.get("address_components") or []
-        city = _extract_city_from_components(components) or _extract_city(full_address)
-        photos = details.get("photos") or []
-        photo_ref = ""
-        if isinstance(photos, list) and photos:
-            photo_ref = photos[0].get("photo_reference", "") if isinstance(photos[0], dict) else ""
-        image_url = _photo_url(photo_ref)
-        opening_hours = _normalize_opening_hours(details.get("opening_hours"))
-        raw_reviews = [r.get("text", "") for r in (details.get("reviews") or []) if isinstance(r, dict)]
-        reviews = _clean_reviews(raw_reviews)
-        text = f"{place.get('name','')} {full_address} {editorial or ''} {' '.join(reviews)}"
-        tags = _extract_tags(text, types)
-        merged_tags = _merge_tags(_normalize_tag_list(place.get("tags")), tags)
-        price_level_value = int(price_level) if price_level is not None else None
-        price_category = _price_category(price_level_value)
+            if not place_id:
+                continue
+            details = _place_details(place_id) or {}
+            if details:
+                request_count += 1
+            geometry = (details.get("geometry") or {}).get("location", {})
+            lat = float(geometry.get("lat") or 0)
+            lng = float(geometry.get("lng") or 0)
+            types = details.get("types") or []
+            rating = details.get("rating")
+            rating_total = details.get("user_ratings_total")
+            price_level = details.get("price_level")
+            editorial = (details.get("editorial_summary") or {}).get("overview") if details else None
+            full_address = details.get("formatted_address") or place.get("address") or ""
+            components = details.get("address_components") or []
+            city = _extract_city_from_components(components) or _extract_city(full_address)
+            photos = details.get("photos") or []
+            photo_ref = ""
+            if isinstance(photos, list) and photos:
+                photo_ref = photos[0].get("photo_reference", "") if isinstance(photos[0], dict) else ""
+            image_url = _photo_url(photo_ref)
+            opening_hours = _normalize_opening_hours(details.get("opening_hours"))
+            raw_reviews = [r.get("text", "") for r in (details.get("reviews") or []) if isinstance(r, dict)]
+            reviews = _clean_reviews(raw_reviews)
+            text = f"{place.get('name','')} {full_address} {editorial or ''} {' '.join(reviews)}"
+            tags = _extract_tags(text, types)
+            merged_tags = _merge_tags(_normalize_tag_list(place.get("tags")), tags)
+            price_level_value = int(price_level) if price_level is not None else None
+            price_category = _price_category(price_level_value)
 
-        # Fill only missing fields
-        if not place.get("city") and city:
-            place["city"] = city
-        if not place.get("address") or len(str(place.get("address")).strip()) < 6:
-            if full_address:
-                place["address"] = full_address
-        if (not place.get("lat") or not place.get("lng")) and lat and lng:
-            place["lat"] = lat
-            place["lng"] = lng
-        if not place.get("imageUrl") and image_url:
-            place["imageUrl"] = image_url
-        if place.get("rating") is None and rating is not None:
-            place["rating"] = float(rating)
-        if place.get("userRatingsTotal") is None and rating_total is not None:
-            place["userRatingsTotal"] = int(rating_total)
-        if place.get("priceLevel") is None and price_level_value is not None:
-            place["priceLevel"] = price_level_value
-        if not place.get("priceCategory") and price_category:
-            place["priceCategory"] = price_category
-        if not place.get("description") and editorial:
-            place["description"] = editorial
-        if merged_tags:
-            place["tags"] = merged_tags
-            place["category"] = place.get("category") or merged_tags[0]
-        if not place.get("openingHours") and opening_hours:
-            place["openingHours"] = opening_hours
+            # Fill only missing fields
+            if not place.get("city") and city:
+                place["city"] = city
+            if not place.get("address") or len(str(place.get("address")).strip()) < 6:
+                if full_address:
+                    place["address"] = full_address
+            if (not place.get("lat") or not place.get("lng")) and lat and lng:
+                place["lat"] = lat
+                place["lng"] = lng
+            if not place.get("imageUrl") and image_url:
+                place["imageUrl"] = image_url
+            if place.get("rating") is None and rating is not None:
+                place["rating"] = float(rating)
+            if place.get("userRatingsTotal") is None and rating_total is not None:
+                place["userRatingsTotal"] = int(rating_total)
+            if place.get("priceLevel") is None and price_level_value is not None:
+                place["priceLevel"] = price_level_value
+            if not place.get("priceCategory") and price_category:
+                place["priceCategory"] = price_category
+            if not place.get("description") and editorial:
+                place["description"] = editorial
+            if merged_tags:
+                place["tags"] = merged_tags
+                place["category"] = place.get("category") or merged_tags[0]
+            if not place.get("openingHours") and opening_hours:
+                place["openingHours"] = opening_hours
 
-        if details:
-            review_item = {
-                "place_id": place_id,
-                "source_name": place.get("name"),
-                "name": place.get("name"),
-                "formatted_address": full_address,
-                "rating": rating,
-                "user_ratings_total": rating_total,
-                "price_level": price_level,
-                "types": types,
-                "editorial_summary": editorial or "",
-                "reviews": reviews,
-                "image_url": image_url,
-                "opening_hours": opening_hours,
-            }
-            reviews_out.append(review_item)
-            if place_id:
-                reviews_by_id[place_id] = review_item
+            if details:
+                review_item = {
+                    "place_id": place_id,
+                    "source_name": place.get("name"),
+                    "name": place.get("name"),
+                    "formatted_address": full_address,
+                    "rating": rating,
+                    "user_ratings_total": rating_total,
+                    "price_level": price_level,
+                    "types": types,
+                    "editorial_summary": editorial or "",
+                    "reviews": reviews,
+                    "image_url": image_url,
+                    "opening_hours": opening_hours,
+                }
+                reviews_out.append(review_item)
+                if place_id:
+                    reviews_by_id[place_id] = review_item
 
     for query in queries:
         if request_count >= MAX_REQUESTS:
