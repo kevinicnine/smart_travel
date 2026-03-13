@@ -37,20 +37,32 @@ MERGE_MODE = os.environ.get("MERGE_MODE", "merge").strip().lower()
 REVIEWS_LIMIT = 5
 MIN_REVIEW_LEN = 12
 
-DEFAULT_QUERIES = [
-    "台北 景點",
-    "台中 景點",
-    "台南 景點",
-    "高雄 景點",
-    "花蓮 景點",
-    "台東 景點",
+TAIWAN_CITIES = [
+    "臺北市",
+    "新北市",
+    "基隆市",
+    "桃園市",
+    "新竹市",
+    "新竹縣",
+    "苗栗縣",
+    "臺中市",
+    "彰化縣",
+    "南投縣",
+    "雲林縣",
+    "嘉義市",
+    "嘉義縣",
+    "臺南市",
+    "高雄市",
+    "屏東縣",
+    "宜蘭縣",
+    "花蓮縣",
+    "臺東縣",
+    "澎湖縣",
+    "金門縣",
+    "連江縣",
 ]
-CITY_QUERY_SUFFIXES = [
-    "景點",
-    "旅遊景點",
-    "觀光景點",
-    "必去景點",
-]
+
+CITY_QUERY_SUFFIXES = ["景點", "旅遊景點", "觀光景點", "必去景點"]
 
 CITY_QUERY_ALIASES = {
     "臺北市": "台北",
@@ -367,7 +379,13 @@ def _load_queries() -> List[str]:
     raw = os.environ.get("GOOGLE_PLACE_QUERIES")
     if raw:
         return _unique([q.strip() for q in raw.split(",") if q.strip()])
-    return _unique(DEFAULT_QUERIES)
+
+    # 全縣市模式：先掃一輪每個縣市「景點」，再擴展後綴，確保覆蓋面。
+    queries: List[str] = []
+    for suffix in CITY_QUERY_SUFFIXES:
+        for city_name in TAIWAN_CITIES:
+            queries.append(f"{city_name.replace('臺', '台')} {suffix}")
+    return _unique(queries)
 
 
 def _place_details(place_id: str) -> Dict[str, Any] | None:
@@ -564,6 +582,12 @@ def main() -> None:
 
     db = json.loads(DB_PATH.read_text(encoding="utf-8"))
     existing_places = db.get("places") or []
+    existing_by_id = {p.get("id"): p for p in existing_places if isinstance(p, dict) and p.get("id")}
+    existing_by_name = {
+        (p.get("name") or "").strip(): p
+        for p in existing_places
+        if isinstance(p, dict) and (p.get("name") or "").strip()
+    }
     if REVIEWS_PATH.exists():
         reviews_db = json.loads(REVIEWS_PATH.read_text(encoding="utf-8"))
         if not isinstance(reviews_db, list):
@@ -586,6 +610,7 @@ def main() -> None:
     reviews_out: List[Dict[str, Any]] = []
     seen = set()
     request_count = 0
+    skipped_complete = 0
     selected_city = (os.environ.get("GOOGLE_PLACE_CITY") or "").strip()
     single_city_mode = bool(selected_city)
 
@@ -695,28 +720,39 @@ def main() -> None:
                 if place_id:
                     reviews_by_id[place_id] = review_item
 
-    for query in queries:
+    for query_idx, query in enumerate(queries):
         if request_count >= MAX_REQUESTS:
             break
         page_no = 0
         page_token: str | None = None
         while request_count < MAX_REQUESTS and page_no < max(1, TEXTSEARCH_MAX_PAGES):
             params: Dict[str, Any]
+            token_attempts = 1
             if page_token:
-                # next_page_token needs a short delay before becoming valid
-                time.sleep(2.1)
                 params = {"pagetoken": page_token, "language": "zh-TW"}
+                token_attempts = 4
             else:
                 params = {"query": query, "language": "zh-TW"}
 
-            data = _fetch_json(
-                "https://maps.googleapis.com/maps/api/place/textsearch/json",
-                params,
-            )
-            request_count += 1
-            status = data.get("status") or "UNKNOWN"
+            data: Dict[str, Any] = {}
+            status = "UNKNOWN"
+            for attempt in range(token_attempts):
+                if page_token:
+                    # next_page_token requires a short propagation delay.
+                    time.sleep(2.0 if attempt == 0 else 1.2)
+                data = _fetch_json(
+                    "https://maps.googleapis.com/maps/api/place/textsearch/json",
+                    params,
+                )
+                request_count += 1
+                status = data.get("status") or "UNKNOWN"
+                if status == "INVALID_REQUEST" and page_token and attempt < token_attempts - 1:
+                    continue
+                break
+
             if status not in {"OK", "ZERO_RESULTS"}:
                 print(f"查詢狀態: {query} page={page_no+1} -> {status}")
+
             results = data.get("results") or []
             for item in results:
                 place_id = item.get("place_id")
@@ -728,11 +764,21 @@ def main() -> None:
                     continue
                 seen.add(place_id)
                 seen.add(name)
+
+                existing_hit = existing_by_id.get(place_id) or existing_by_name.get(name.strip())
+                if existing_hit and not _needs_enrich(existing_hit):
+                    skipped_complete += 1
+                    continue
+
                 details = {}
-                if request_count < MAX_REQUESTS:
+                # Reserve quota for the remaining queries (at least 1 call each query).
+                remaining_queries = max(0, len(queries) - query_idx - 1)
+                reserve_quota = remaining_queries
+                if request_count < MAX_REQUESTS - reserve_quota:
                     details = _place_details(place_id) or {}
                     if details:
                         request_count += 1
+
                 geometry = (details.get("geometry") or item.get("geometry") or {}).get("location", {})
                 lat = float(geometry.get("lat") or 0)
                 lng = float(geometry.get("lng") or 0)
@@ -797,11 +843,12 @@ def main() -> None:
 
             page_token = data.get("next_page_token")
             page_no += 1
-            if not page_token:
+            if not page_token or status not in {"OK", "ZERO_RESULTS"}:
                 break
+
         print(
             f"完成查詢: {query}, 分頁 {page_no}/{max(1, TEXTSEARCH_MAX_PAGES)}, "
-            f"累積 {len(output)} 筆, 用量 {request_count}/{MAX_REQUESTS}"
+            f"累積 {len(output)} 筆, 用量 {request_count}/{MAX_REQUESTS}, 跳過完整資料 {skipped_complete} 筆"
         )
         time.sleep(SLEEP_BETWEEN)
 
@@ -823,7 +870,8 @@ def main() -> None:
         )
     print(
         f"完成，寫入 {DB_PATH}，來源 {len(output)} 筆，"
-        f"新增 {merge_stats['added']}／更新 {merge_stats['updated']}／未變更 {merge_stats['unchanged']}"
+        f"新增 {merge_stats['added']}／更新 {merge_stats['updated']}／未變更 {merge_stats['unchanged']}，"
+        f"查詢中跳過完整資料 {skipped_complete} 筆"
     )
 
 
