@@ -164,9 +164,21 @@ class PostgresDataStore implements DataStore {
         email TEXT NOT NULL,
         phone TEXT NOT NULL,
         password_hash TEXT NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL
+        created_at TIMESTAMPTZ NOT NULL,
+        line_user_id TEXT,
+        line_linked_at TIMESTAMPTZ,
+        line_push_enabled BOOLEAN NOT NULL DEFAULT FALSE
       );
     ''');
+    await conn.query(
+      'ALTER TABLE users ADD COLUMN IF NOT EXISTS line_user_id TEXT',
+    );
+    await conn.query(
+      'ALTER TABLE users ADD COLUMN IF NOT EXISTS line_linked_at TIMESTAMPTZ',
+    );
+    await conn.query(
+      'ALTER TABLE users ADD COLUMN IF NOT EXISTS line_push_enabled BOOLEAN NOT NULL DEFAULT FALSE',
+    );
     await conn.query('''
       CREATE TABLE IF NOT EXISTS places (
         id TEXT PRIMARY KEY,
@@ -237,6 +249,16 @@ class PostgresDataStore implements DataStore {
       createdAt: row[5] is DateTime
           ? row[5] as DateTime
           : DateTime.parse(row[5].toString()),
+      lineUserId: row.length > 6 ? row[6] as String? : null,
+      lineLinkedAt:
+          row.length > 7
+              ? (row[7] == null
+                    ? null
+                    : row[7] is DateTime
+                    ? row[7] as DateTime
+                    : DateTime.parse(row[7].toString()))
+              : null,
+      linePushEnabled: row.length > 8 ? row[8] == true : false,
     );
   }
 
@@ -265,7 +287,7 @@ class PostgresDataStore implements DataStore {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     final usersRows = await conn.query(
-      'SELECT id, username, email, phone, password_hash, created_at FROM users',
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users',
     );
     final placesRows = await conn.query(
       'SELECT id, name, tags, city, address, lat, lng, description, image_url, rating, user_ratings_total, price_level, price_category, opening_hours_json FROM places',
@@ -292,7 +314,7 @@ class PostgresDataStore implements DataStore {
       await ctx.query('DELETE FROM places');
       for (final user in data.users) {
         await ctx.query(
-          'INSERT INTO users (id, username, email, phone, password_hash, created_at) VALUES (@id, @username, @email, @phone, @password_hash, @created_at)',
+          'INSERT INTO users (id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled) VALUES (@id, @username, @email, @phone, @password_hash, @created_at, @line_user_id, @line_linked_at, @line_push_enabled)',
           substitutionValues: {
             'id': user.id,
             'username': user.username,
@@ -300,6 +322,9 @@ class PostgresDataStore implements DataStore {
             'phone': user.phone,
             'password_hash': user.passwordHash,
             'created_at': user.createdAt.toUtc(),
+            'line_user_id': user.lineUserId,
+            'line_linked_at': user.lineLinkedAt?.toUtc(),
+            'line_push_enabled': user.linePushEnabled,
           },
         );
       }
@@ -336,7 +361,7 @@ class PostgresDataStore implements DataStore {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     await conn.query(
-      'INSERT INTO users (id, username, email, phone, password_hash, created_at) VALUES (@id, @username, @email, @phone, @password_hash, @created_at)',
+      'INSERT INTO users (id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled) VALUES (@id, @username, @email, @phone, @password_hash, @created_at, @line_user_id, @line_linked_at, @line_push_enabled)',
       substitutionValues: {
         'id': user.id,
         'username': user.username,
@@ -344,6 +369,9 @@ class PostgresDataStore implements DataStore {
         'phone': user.phone,
         'password_hash': user.passwordHash,
         'created_at': user.createdAt.toUtc(),
+        'line_user_id': user.lineUserId,
+        'line_linked_at': user.lineLinkedAt?.toUtc(),
+        'line_push_enabled': user.linePushEnabled,
       },
     );
   }
@@ -353,13 +381,16 @@ class PostgresDataStore implements DataStore {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     final count = await conn.query(
-      'UPDATE users SET username=@username, email=@email, phone=@phone, password_hash=@password_hash WHERE id=@id',
+      'UPDATE users SET username=@username, email=@email, phone=@phone, password_hash=@password_hash, line_user_id=@line_user_id, line_linked_at=@line_linked_at, line_push_enabled=@line_push_enabled WHERE id=@id',
       substitutionValues: {
         'id': updated.id,
         'username': updated.username,
         'email': updated.email.toLowerCase(),
         'phone': updated.phone,
         'password_hash': updated.passwordHash,
+        'line_user_id': updated.lineUserId,
+        'line_linked_at': updated.lineLinkedAt?.toUtc(),
+        'line_push_enabled': updated.linePushEnabled,
       },
     );
     if (count.isEmpty) {
@@ -453,7 +484,7 @@ class PostgresDataStore implements DataStore {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     final rows = await conn.query(
-      'SELECT id, username, email, phone, password_hash, created_at FROM users WHERE lower(email)=@email LIMIT 1',
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users WHERE lower(email)=@email LIMIT 1',
       substitutionValues: {'email': email.toLowerCase()},
     );
     if (rows.isEmpty) return null;
@@ -465,7 +496,7 @@ class PostgresDataStore implements DataStore {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     final rows = await conn.query(
-      'SELECT id, username, email, phone, password_hash, created_at FROM users WHERE phone=@phone LIMIT 1',
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users WHERE phone=@phone LIMIT 1',
       substitutionValues: {'phone': phone},
     );
     if (rows.isEmpty) return null;
@@ -477,7 +508,7 @@ class PostgresDataStore implements DataStore {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     final rows = await conn.query(
-      'SELECT id, username, email, phone, password_hash, created_at FROM users WHERE lower(username)=@username LIMIT 1',
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users WHERE lower(username)=@username LIMIT 1',
       substitutionValues: {'username': username.toLowerCase()},
     );
     if (rows.isEmpty) return null;
@@ -494,7 +525,7 @@ class PostgresDataStore implements DataStore {
     final conn = await _ensureConnection();
     final lower = trimmed.toLowerCase();
     final rows = await conn.query(
-      'SELECT id, username, email, phone, password_hash, created_at FROM users '
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users '
       'WHERE lower(username)=@account OR lower(email)=@account LIMIT 1',
       substitutionValues: {'account': lower},
     );
@@ -688,13 +719,19 @@ class MySqlDataStore implements DataStore {
         email VARCHAR(255) NOT NULL,
         phone VARCHAR(32) NOT NULL,
         password_hash VARCHAR(255) NOT NULL,
-        created_at DATETIME NOT NULL
+        created_at DATETIME NOT NULL,
+        line_user_id VARCHAR(128) NULL,
+        line_linked_at DATETIME NULL,
+        line_push_enabled TINYINT(1) NOT NULL DEFAULT 0
       )
       ''',
     );
     await _ensureIndex(conn, 'users', 'idx_users_username', 'username');
     await _ensureIndex(conn, 'users', 'idx_users_email', 'email');
     await _ensureIndex(conn, 'users', 'idx_users_phone', 'phone');
+    await _ensureColumn(conn, 'users', 'line_user_id', 'VARCHAR(128) NULL');
+    await _ensureColumn(conn, 'users', 'line_linked_at', 'DATETIME NULL');
+    await _ensureColumn(conn, 'users', 'line_push_enabled', 'TINYINT(1) NOT NULL DEFAULT 0');
     await conn.execute(
       '''
       CREATE TABLE IF NOT EXISTS places (
@@ -728,7 +765,7 @@ class MySqlDataStore implements DataStore {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     final userRows = await conn.execute(
-      'SELECT id, username, email, phone, password_hash, created_at FROM users',
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users',
     );
     final users = userRows.rows.map<User>(_rowToUser).toList();
     final placeRows = await conn.execute(
@@ -807,7 +844,7 @@ class MySqlDataStore implements DataStore {
     await conn.execute(
       '''
       UPDATE users
-      SET username = :username, email = :email, phone = :phone, password_hash = :password_hash
+      SET username = :username, email = :email, phone = :phone, password_hash = :password_hash, line_user_id = :line_user_id, line_linked_at = :line_linked_at, line_push_enabled = :line_push_enabled
       WHERE id = :id
       ''',
       {
@@ -815,6 +852,9 @@ class MySqlDataStore implements DataStore {
         'email': updated.email,
         'phone': updated.phone,
         'password_hash': updated.passwordHash,
+        'line_user_id': updated.lineUserId,
+        'line_linked_at': updated.lineLinkedAt == null ? null : _formatDateTime(updated.lineLinkedAt!),
+        'line_push_enabled': updated.linePushEnabled ? 1 : 0,
         'id': updated.id,
       },
     );
@@ -879,7 +919,7 @@ class MySqlDataStore implements DataStore {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     final rows = await conn.execute(
-      'SELECT id, username, email, phone, password_hash, created_at FROM users WHERE LOWER(email) = :email LIMIT 1',
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users WHERE LOWER(email) = :email LIMIT 1',
       {'email': email.toLowerCase()},
     );
     if (rows.rows.isEmpty) {
@@ -893,7 +933,7 @@ class MySqlDataStore implements DataStore {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     final rows = await conn.execute(
-      'SELECT id, username, email, phone, password_hash, created_at FROM users WHERE phone = :phone LIMIT 1',
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users WHERE phone = :phone LIMIT 1',
       {'phone': phone},
     );
     if (rows.rows.isEmpty) {
@@ -907,7 +947,7 @@ class MySqlDataStore implements DataStore {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     final rows = await conn.execute(
-      'SELECT id, username, email, phone, password_hash, created_at FROM users WHERE LOWER(username) = :username LIMIT 1',
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users WHERE LOWER(username) = :username LIMIT 1',
       {'username': username.toLowerCase()},
     );
     if (rows.rows.isEmpty) {
@@ -927,7 +967,7 @@ class MySqlDataStore implements DataStore {
     final conn = await _ensureConnection();
     final rows = await conn.execute(
       '''
-      SELECT id, username, email, phone, password_hash, created_at
+      SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled
       FROM users
       WHERE LOWER(username) = :account OR LOWER(email) = :account
       LIMIT 1
@@ -946,8 +986,8 @@ class MySqlDataStore implements DataStore {
   ) async {
     await conn.execute(
       '''
-      INSERT INTO users (id, username, email, phone, password_hash, created_at)
-      VALUES (:id, :username, :email, :phone, :password_hash, :created_at)
+      INSERT INTO users (id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled)
+      VALUES (:id, :username, :email, :phone, :password_hash, :created_at, :line_user_id, :line_linked_at, :line_push_enabled)
       ''',
       {
         'id': user.id,
@@ -956,6 +996,9 @@ class MySqlDataStore implements DataStore {
         'phone': user.phone,
         'password_hash': user.passwordHash,
         'created_at': _formatDateTime(user.createdAt),
+        'line_user_id': user.lineUserId,
+        'line_linked_at': user.lineLinkedAt == null ? null : _formatDateTime(user.lineLinkedAt!),
+        'line_push_enabled': user.linePushEnabled ? 1 : 0,
       },
     );
   }
@@ -1013,6 +1056,11 @@ class MySqlDataStore implements DataStore {
       phone: row.colByName('phone') ?? '',
       passwordHash: row.colByName('password_hash') ?? '',
       createdAt: _parseDateTime(createdAt),
+      lineUserId: row.colByName('line_user_id'),
+      lineLinkedAt: row.colByName('line_linked_at') == null
+          ? null
+          : _parseDateTime(row.colByName('line_linked_at')),
+      linePushEnabled: (row.colByName('line_push_enabled') ?? '0') == '1',
     );
   }
 

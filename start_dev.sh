@@ -13,6 +13,10 @@ set -euo pipefail
 #   ADMIN_TOKEN=your-admin-token
 #   ADMIN_USERNAME=admin
 #   ADMIN_PASSWORD=admin123
+#   OPENAI_API_KEY=sk-...
+#   OPENAI_MODEL=gpt-4o-mini
+#   USE_RENDER=true
+#   RENDER_API_BASE=https://smart-travel-6zsf.onrender.com
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 if [[ -f "$ROOT/.env.local" ]]; then
@@ -30,25 +34,44 @@ export SENDGRID_FROM_NAME
 export TWILIO_ACCOUNT_SID
 export TWILIO_AUTH_TOKEN
 export TWILIO_FROM_NUMBER
+export LINE_CHANNEL_SECRET
+export LINE_CHANNEL_ACCESS_TOKEN
+export LINE_ADD_FRIEND_URL
 export ADMIN_TOKEN
 export ADMIN_USERNAME
 export ADMIN_PASSWORD
+export OPENAI_API_KEY
+export OPENAI_MODEL
+export OPENAI_BASE_URL
+export FLUTTER_DEVICE
 
 BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
+FLUTTER_DEVICE="${FLUTTER_DEVICE:-iPhone 16e}"
+USE_RENDER="${USE_RENDER:-true}"
+RENDER_API_BASE="${RENDER_API_BASE:-https://smart-travel-6zsf.onrender.com}"
 
-echo "Starting backend on port ${PORT}..."
-cd "$ROOT/backend"
-dart run bin/server.dart > "$ROOT/backend.log" 2>&1 &
-BACKEND_PID=$!
-echo "Backend started (PID=${BACKEND_PID}), logs: $ROOT/backend.log"
+if [[ "${USE_RENDER}" != "true" ]]; then
+  echo "Starting backend on port ${PORT}..."
+  cd "$ROOT/backend"
+  dart run bin/server.dart > "$ROOT/backend.log" 2>&1 &
+  BACKEND_PID=$!
+  echo "Backend started (PID=${BACKEND_PID}), logs: $ROOT/backend.log"
 
-cleanup() {
-  echo "Stopping backend (PID=${BACKEND_PID})..."
-  kill "${BACKEND_PID}" 2>/dev/null || true
-}
-trap cleanup EXIT
+  cleanup() {
+    echo "Stopping backend (PID=${BACKEND_PID})..."
+    kill "${BACKEND_PID}" 2>/dev/null || true
+  }
+  trap cleanup EXIT
+else
+  echo "Using Render backend: ${RENDER_API_BASE}"
+fi
 
 cd "$ROOT"
+API_BASE="http://${BACKEND_HOST}:${PORT}"
+if [[ "${USE_RENDER}" == "true" ]]; then
+  API_BASE="${RENDER_API_BASE}"
+fi
 flutter run \
-  --dart-define=SMART_TRAVEL_API_BASE="http://${BACKEND_HOST}:${PORT}" \
+  -d "${FLUTTER_DEVICE}" \
+  --dart-define=SMART_TRAVEL_API_BASE="${API_BASE}" \
   --dart-define=GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-}"

@@ -27,6 +27,8 @@ class NotificationService {
   String? get _twilioSid => Platform.environment['TWILIO_ACCOUNT_SID'];
   String? get _twilioToken => Platform.environment['TWILIO_AUTH_TOKEN'];
   String? get _twilioFrom => Platform.environment['TWILIO_FROM_NUMBER'];
+  String? get _lineChannelToken =>
+      Platform.environment['LINE_CHANNEL_ACCESS_TOKEN'];
 
   bool get _emailEnabled =>
       _sendgridKey != null && _sendgridFromEmail != null && _sendgridFromEmail!.isNotEmpty;
@@ -35,6 +37,8 @@ class NotificationService {
       _twilioToken != null &&
       _twilioFrom != null &&
       _twilioFrom!.isNotEmpty;
+  bool get _lineEnabled =>
+      _lineChannelToken != null && _lineChannelToken!.trim().isNotEmpty;
 
   Future<void> sendEmailVerification({
     required String to,
@@ -100,6 +104,65 @@ class NotificationService {
         'Twilio SMS send failed (${response.statusCode}): ${response.body}',
       );
       throw ApiException(500, '寄送簡訊驗證碼失敗，請稍後再試。');
+    }
+  }
+
+  Future<void> sendLinePush({
+    required String to,
+    required String text,
+  }) async {
+    if (!_lineEnabled) {
+      _log.info(
+        'Skipping LINE push because LINE channel token is missing (to=$to)',
+      );
+      return;
+    }
+    final response = await _client.post(
+      Uri.https('api.line.me', '/v2/bot/message/push'),
+      headers: {
+        'Authorization': 'Bearer ${_lineChannelToken!}',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'to': to,
+        'messages': [
+          {'type': 'text', 'text': text},
+        ],
+      }),
+    );
+    if (response.statusCode >= 400) {
+      _log.severe(
+        'LINE push failed (${response.statusCode}): ${response.body}',
+      );
+      throw ApiException(500, 'LINE 推播失敗，請稍後再試。');
+    }
+  }
+
+  Future<void> replyLineText({
+    required String replyToken,
+    required String text,
+  }) async {
+    if (!_lineEnabled) {
+      _log.info('Skipping LINE reply because LINE channel token is missing');
+      return;
+    }
+    final response = await _client.post(
+      Uri.https('api.line.me', '/v2/bot/message/reply'),
+      headers: {
+        'Authorization': 'Bearer ${_lineChannelToken!}',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'replyToken': replyToken,
+        'messages': [
+          {'type': 'text', 'text': text},
+        ],
+      }),
+    );
+    if (response.statusCode >= 400) {
+      _log.severe(
+        'LINE reply failed (${response.statusCode}): ${response.body}',
+      );
     }
   }
 

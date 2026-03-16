@@ -71,10 +71,6 @@ class _LoginPageState extends State<LoginPage> {
       return;
     }
 
-    if ((UserState.displayName ?? '').isEmpty) {
-      UserState.updateName(accountController.text);
-    }
-
     setState(() {
       _isLoggingIn = true;
     });
@@ -84,10 +80,12 @@ class _LoginPageState extends State<LoginPage> {
         account: account,
         password: password,
       );
-      final name = user['username']?.toString();
-      if (name != null && name.isNotEmpty) {
-        UserState.updateName(name);
-      }
+      await UserState.updateUser(
+        id: user['id']?.toString(),
+        name: user['username']?.toString() ?? account,
+        linked: user['lineLinked'] == true,
+        pushEnabled: user['linePushEnabled'] == true,
+      );
       if (!mounted) return;
       Navigator.push(
         context,

@@ -64,6 +64,26 @@ class BackendApi {
     return _extractUser(response);
   }
 
+  Future<Map<String, dynamic>> createLineLinkCode({
+    required String userId,
+  }) async {
+    final response = await _post('/api/line/link-code', {'userId': userId});
+    return _extractData(response);
+  }
+
+  Future<Map<String, dynamic>> fetchLineLinkStatus({
+    required String userId,
+  }) async {
+    final response = await _post('/api/line/link-status', {'userId': userId});
+    return _extractData(response);
+  }
+
+  Future<void> sendLinePushTest({
+    required String userId,
+  }) async {
+    await _post('/api/line/push-test', {'userId': userId});
+  }
+
   Future<void> submitInterests(List<String> interestIds) async {
     await _post('/api/travel/preferences', {'interests': interestIds});
   }
@@ -75,6 +95,11 @@ class BackendApi {
     String? location,
     int? people,
     int? budget,
+    Map<String, dynamic>? backpackerAnswers,
+    String? dayStartTime,
+    String? dayEndTime,
+    int? extraSpots,
+    List<String>? wishlistPlaces,
   }) async {
     final payload = <String, dynamic>{'interests': interestIds};
     if (startDate != null) {
@@ -92,9 +117,106 @@ class BackendApi {
     if (budget != null) {
       payload['budget'] = budget;
     }
+    if (backpackerAnswers != null && backpackerAnswers.isNotEmpty) {
+      payload['backpackerAnswers'] = backpackerAnswers;
+    }
+    if (dayStartTime != null && dayStartTime.trim().isNotEmpty) {
+      payload['dayStartTime'] = dayStartTime.trim();
+    }
+    if (dayEndTime != null && dayEndTime.trim().isNotEmpty) {
+      payload['dayEndTime'] = dayEndTime.trim();
+    }
+    if (extraSpots != null && extraSpots > 0) {
+      payload['extraSpots'] = extraSpots;
+    }
+    if (wishlistPlaces != null && wishlistPlaces.isNotEmpty) {
+      payload['wishlistPlaces'] = wishlistPlaces
+          .where((e) => e.trim().isNotEmpty)
+          .map((e) => e.trim())
+          .toList();
+    }
 
-    final response = await _post('/api/travel/plans', payload);
+    final response = await _post(
+      '/api/travel/plans',
+      payload,
+      timeout: const Duration(seconds: 60),
+      timeoutMessage: '行程生成較久，請稍候再試（可能正在查交通/天氣/GPT）。',
+    );
     return _extractData(response);
+  }
+
+  Future<Map<String, dynamic>> explainItineraryStop({
+    required Map<String, dynamic> payload,
+  }) async {
+    final response = await _post(
+      '/api/travel/stop-explanation',
+      payload,
+      timeout: const Duration(seconds: 20),
+      timeoutMessage: '景點說明生成較久，請稍候再試。',
+    );
+    return _extractData(response);
+  }
+
+  Future<List<Map<String, dynamic>>> fetchPlaces({
+    List<String>? tags,
+    String? query,
+    String? city,
+    String? sort,
+    int? limit,
+  }) async {
+    final params = <String, String>{};
+    if (tags != null && tags.isNotEmpty) {
+      params['tags'] = tags.join(',');
+    }
+    if (query != null && query.trim().isNotEmpty) {
+      params['q'] = query.trim();
+    }
+    if (city != null && city.trim().isNotEmpty) {
+      params['city'] = city.trim();
+    }
+    if (sort != null && sort.trim().isNotEmpty) {
+      params['sort'] = sort.trim();
+    }
+    if (limit != null && limit > 0) {
+      params['limit'] = '$limit';
+    }
+    final uri = Uri.parse(
+      '$baseUrl/api/places',
+    ).replace(queryParameters: params);
+    http.Response response;
+    try {
+      response = await http.get(uri).timeout(const Duration(seconds: 10));
+    } on TimeoutException catch (error) {
+      throw ApiClientException('連線逾時，請檢查網路後再試。', cause: error);
+    } on Exception catch (error) {
+      throw ApiClientException('無法連線到伺服器，請稍後再試。', cause: error);
+    }
+
+    Map<String, dynamic> decoded;
+    try {
+      decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    } on Exception {
+      throw ApiClientException('伺服器回應格式不正確 (HTTP ${response.statusCode}).');
+    }
+    final success = decoded['success'] == true && response.statusCode < 400;
+    if (!success) {
+      final message =
+          decoded['message']?.toString() ??
+          '伺服器發生錯誤 (HTTP ${response.statusCode})';
+      throw ApiClientException(
+        message,
+        statusCode: response.statusCode,
+        details: decoded['details'] as Map<String, dynamic>?,
+      );
+    }
+    final data = decoded['data'];
+    if (data is Map<String, dynamic>) {
+      final places = data['places'];
+      if (places is List) {
+        return places.whereType<Map<String, dynamic>>().toList();
+      }
+    }
+    return <Map<String, dynamic>>[];
   }
 
   Future<Map<String, dynamic>> sendPasswordResetCode({
@@ -136,8 +258,10 @@ class BackendApi {
 
   Future<Map<String, dynamic>> _post(
     String path,
-    Map<String, dynamic> body,
-  ) async {
+    Map<String, dynamic> body, {
+    Duration timeout = const Duration(seconds: 10),
+    String timeoutMessage = '連線逾時，請檢查網路後再試。',
+  }) async {
     final uri = Uri.parse('$baseUrl$path');
     http.Response response;
     try {
@@ -147,9 +271,9 @@ class BackendApi {
             headers: const {'Content-Type': 'application/json'},
             body: jsonEncode(body),
           )
-          .timeout(const Duration(seconds: 10));
+          .timeout(timeout);
     } on TimeoutException catch (error) {
-      throw ApiClientException('連線逾時，請檢查網路後再試。', cause: error);
+      throw ApiClientException(timeoutMessage, cause: error);
     } on Exception catch (error) {
       throw ApiClientException('無法連線到伺服器，請稍後再試。', cause: error);
     }

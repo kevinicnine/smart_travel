@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+const Object _noUserChange = Object();
+
 class User {
   User({
     required this.id,
@@ -8,6 +10,9 @@ class User {
     required this.phone,
     required this.passwordHash,
     required this.createdAt,
+    this.lineUserId,
+    this.lineLinkedAt,
+    this.linePushEnabled = false,
   });
 
   final String id;
@@ -16,12 +21,18 @@ class User {
   final String phone;
   final String passwordHash;
   final DateTime createdAt;
+  final String? lineUserId;
+  final DateTime? lineLinkedAt;
+  final bool linePushEnabled;
 
   User copyWith({
     String? username,
     String? email,
     String? phone,
     String? passwordHash,
+    Object? lineUserId = _noUserChange,
+    Object? lineLinkedAt = _noUserChange,
+    bool? linePushEnabled,
   }) {
     return User(
       id: id,
@@ -30,6 +41,13 @@ class User {
       phone: phone ?? this.phone,
       passwordHash: passwordHash ?? this.passwordHash,
       createdAt: createdAt,
+      lineUserId: identical(lineUserId, _noUserChange)
+          ? this.lineUserId
+          : lineUserId as String?,
+      lineLinkedAt: identical(lineLinkedAt, _noUserChange)
+          ? this.lineLinkedAt
+          : lineLinkedAt as DateTime?,
+      linePushEnabled: linePushEnabled ?? this.linePushEnabled,
     );
   }
 
@@ -41,6 +59,9 @@ class User {
       'phone': phone,
       'passwordHash': passwordHash,
       'createdAt': createdAt.toIso8601String(),
+      'lineUserId': lineUserId,
+      'lineLinkedAt': lineLinkedAt?.toIso8601String(),
+      'linePushEnabled': linePushEnabled,
     };
   }
 
@@ -51,6 +72,9 @@ class User {
       'email': email,
       'phone': phone,
       'createdAt': createdAt.toIso8601String(),
+      'lineLinked': lineUserId != null && lineUserId!.isNotEmpty,
+      'lineLinkedAt': lineLinkedAt?.toIso8601String(),
+      'linePushEnabled': linePushEnabled,
     };
   }
 
@@ -62,6 +86,11 @@ class User {
       phone: json['phone'] as String,
       passwordHash: json['passwordHash'] as String,
       createdAt: DateTime.parse(json['createdAt'] as String),
+      lineUserId: json['lineUserId'] as String?,
+      lineLinkedAt: json['lineLinkedAt'] == null
+          ? null
+          : DateTime.parse(json['lineLinkedAt'] as String),
+      linePushEnabled: json['linePushEnabled'] == true,
     );
   }
 }

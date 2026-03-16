@@ -67,11 +67,16 @@ class _RegisterPageState extends State<RegisterPage> {
         phone: '',
         password: pass,
       );
-      final name = user['username']?.toString() ?? username;
-      UserState.updateName(name);
+      final displayName = user['username']?.toString() ?? username;
+      await UserState.updateUser(
+        id: user['id']?.toString(),
+        name: displayName,
+        linked: user['lineLinked'] == true,
+        pushEnabled: user['linePushEnabled'] == true,
+      );
       _showMessage('註冊成功！');
       if (!mounted) return;
-      Navigator.pop(context, name);
+      Navigator.pop(context, displayName);
     } on ApiClientException catch (error) {
       _showMessage(error.message);
     } finally {

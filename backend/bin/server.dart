@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:crypto/crypto.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
 import 'package:shelf/shelf.dart';
@@ -25,12 +26,16 @@ String? _localSyncToken;
 String? _openAiApiKey;
 String? _openAiBaseUrl;
 String? _openAiModel;
+String? _lineChannelSecret;
+String? _lineAddFriendUrl;
 late final String? _adminToken;
 late final String? _adminUser;
 late final String? _adminPass;
 late final String _dataDir;
 late final DataStore _store;
+late final NotificationService _notificationService;
 _CrawlJob? _crawlJob;
+final Map<String, _LineLinkCode> _lineLinkCodes = {};
 
 class _CrawlJob {
   _CrawlJob({
@@ -71,6 +76,30 @@ class _CrawlJob {
   };
 }
 
+class _LineLinkCode {
+  _LineLinkCode({
+    required this.code,
+    required this.userId,
+    required this.createdAt,
+    required this.expiresAt,
+  });
+
+  final String code;
+  final String userId;
+  final DateTime createdAt;
+  final DateTime expiresAt;
+
+  bool get expired => DateTime.now().isAfter(expiresAt);
+
+  Map<String, dynamic> toJson({String? addFriendUrl}) => {
+    'code': code,
+    'createdAt': createdAt.toIso8601String(),
+    'expiresAt': expiresAt.toIso8601String(),
+    if (addFriendUrl != null && addFriendUrl.isNotEmpty)
+      'addFriendUrl': addFriendUrl,
+  };
+}
+
 Future<void> main(List<String> args) async {
   _configureLogging();
 
@@ -87,6 +116,8 @@ Future<void> main(List<String> args) async {
   _openAiApiKey = Platform.environment['OPENAI_API_KEY'];
   _openAiBaseUrl = Platform.environment['OPENAI_BASE_URL'];
   _openAiModel = Platform.environment['OPENAI_MODEL'] ?? 'gpt-4o-mini';
+  _lineChannelSecret = Platform.environment['LINE_CHANNEL_SECRET'];
+  _lineAddFriendUrl = Platform.environment['LINE_ADD_FRIEND_URL'];
 
   _log.info('Using data directory: $_dataDir');
   _log.info(
@@ -116,6 +147,7 @@ Future<void> main(List<String> args) async {
   );
   _store = store;
   final notificationService = NotificationService();
+  _notificationService = notificationService;
   final authService = AuthService(
     store,
     notificationService: notificationService,
@@ -610,6 +642,76 @@ Future<void> main(List<String> args) async {
     )
     ..get('/health', _healthHandler)
     ..post(
+      '/api/line/link-code',
+      (req) => _json(req, (body) async {
+        final userId = _asString(body, 'userId').trim();
+        if (userId.isEmpty) {
+          throw ApiException(400, '缺少使用者 id');
+        }
+        final user = await _findUserById(userId);
+        if (user == null) {
+          throw ApiException(404, '找不到使用者');
+        }
+        _cleanupExpiredLineCodes();
+        final existing = _lineLinkCodes.values
+            .where((entry) => entry.userId == user.id && !entry.expired)
+            .toList();
+        final code = existing.isNotEmpty ? existing.first : _issueLineLinkCode(user.id);
+        return successBody(
+          message: 'LINE 綁定碼已建立',
+          data: {
+            'userId': user.id,
+            'linked': user.lineUserId != null && user.lineUserId!.isNotEmpty,
+            'binding': code.toJson(addFriendUrl: _lineAddFriendUrl),
+          },
+        );
+      }),
+    )
+    ..post(
+      '/api/line/link-status',
+      (req) => _json(req, (body) async {
+        final userId = _asString(body, 'userId').trim();
+        if (userId.isEmpty) {
+          throw ApiException(400, '缺少使用者 id');
+        }
+        final user = await _findUserById(userId);
+        if (user == null) {
+          throw ApiException(404, '找不到使用者');
+        }
+        return successBody(
+          data: {
+            'userId': user.id,
+            'linked': user.lineUserId != null && user.lineUserId!.isNotEmpty,
+            'linePushEnabled': user.linePushEnabled,
+            'lineLinkedAt': user.lineLinkedAt?.toIso8601String(),
+          },
+        );
+      }),
+    )
+    ..post(
+      '/api/line/push-test',
+      (req) => _json(req, (body) async {
+        final userId = _asString(body, 'userId').trim();
+        if (userId.isEmpty) {
+          throw ApiException(400, '缺少使用者 id');
+        }
+        final user = await _findUserById(userId);
+        if (user == null) {
+          throw ApiException(404, '找不到使用者');
+        }
+        final lineUserId = user.lineUserId;
+        if (lineUserId == null || lineUserId.isEmpty) {
+          throw ApiException(400, '尚未綁定 LINE');
+        }
+        await _notificationService.sendLinePush(
+          to: lineUserId,
+          text: 'Smart Travel 測試推播成功。之後你會在這裡收到行程提醒。',
+        );
+        return successBody(message: '已送出 LINE 測試推播');
+      }),
+    )
+    ..post('/api/line/webhook', _lineWebhookHandler)
+    ..post(
       '/api/auth/send-email-code',
       (req) => _json(req, (body) async {
         final result = await authService.sendEmailCode(
@@ -946,6 +1048,177 @@ Future<Response> _adminPageHandler(Request request) async {
     html,
     headers: {'Content-Type': 'text/html; charset=utf-8'},
   );
+}
+
+Future<User?> _findUserById(String userId) async {
+  final data = await _store.read();
+  for (final user in data.users) {
+    if (user.id == userId) {
+      return user;
+    }
+  }
+  return null;
+}
+
+void _cleanupExpiredLineCodes() {
+  final expiredKeys = _lineLinkCodes.entries
+      .where((entry) => entry.value.expired)
+      .map((entry) => entry.key)
+      .toList();
+  for (final key in expiredKeys) {
+    _lineLinkCodes.remove(key);
+  }
+}
+
+_LineLinkCode _issueLineLinkCode(String userId) {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  final random = Random.secure();
+  String nextCode() =>
+      List.generate(6, (_) => chars[random.nextInt(chars.length)]).join();
+  var code = nextCode();
+  while (_lineLinkCodes.containsKey(code)) {
+    code = nextCode();
+  }
+  final entry = _LineLinkCode(
+    code: code,
+    userId: userId,
+    createdAt: DateTime.now(),
+    expiresAt: DateTime.now().add(const Duration(minutes: 10)),
+  );
+  _lineLinkCodes[code] = entry;
+  return entry;
+}
+
+bool _verifyLineSignature(String body, String signature) {
+  final secret = _lineChannelSecret;
+  if (secret == null || secret.isEmpty) {
+    return false;
+  }
+  final mac = Hmac(sha256, utf8.encode(secret));
+  final digest = mac.convert(utf8.encode(body));
+  final expected = base64Encode(digest.bytes);
+  return expected == signature;
+}
+
+Future<Response> _lineWebhookHandler(Request request) async {
+  return _handle(() async {
+    final rawBody = await request.readAsString();
+    final signature = request.headers['x-line-signature'] ?? '';
+    if (!_verifyLineSignature(rawBody, signature)) {
+      return jsonResponse(401, errorBody('LINE webhook 驗證失敗'));
+    }
+    final decoded = jsonDecode(rawBody);
+    if (decoded is! Map<String, dynamic>) {
+      return jsonResponse(400, errorBody('LINE webhook 格式錯誤'));
+    }
+    final events = (decoded['events'] as List?) ?? const [];
+    for (final rawEvent in events) {
+      if (rawEvent is! Map) continue;
+      final event = Map<String, dynamic>.from(rawEvent);
+      await _handleLineEvent(event);
+    }
+    return jsonResponse(200, successBody(message: 'ok'));
+  });
+}
+
+Future<void> _handleLineEvent(Map<String, dynamic> event) async {
+  final eventType = event['type']?.toString();
+  final replyToken = event['replyToken']?.toString();
+  final source = event['source'];
+  final lineUserId = source is Map ? source['userId']?.toString() : null;
+  if (lineUserId == null || lineUserId.isEmpty) {
+    return;
+  }
+  if (eventType == 'follow') {
+    if (replyToken != null && replyToken.isNotEmpty) {
+      await _notificationService.replyLineText(
+        replyToken: replyToken,
+        text: '歡迎加入 Smart Travel。請回到 App 帳戶頁，點選「LINE 通知綁定」取得綁定碼，再把綁定碼傳給我。',
+      );
+    }
+    return;
+  }
+  if (eventType != 'message') {
+    return;
+  }
+  final message = event['message'];
+  if (message is! Map) {
+    return;
+  }
+  if (message['type']?.toString() != 'text') {
+    if (replyToken != null && replyToken.isNotEmpty) {
+      await _notificationService.replyLineText(
+        replyToken: replyToken,
+        text: '目前只支援文字綁定碼，請把 App 內顯示的綁定碼直接傳給我。',
+      );
+    }
+    return;
+  }
+  final text = message['text']?.toString().trim().toUpperCase() ?? '';
+  _cleanupExpiredLineCodes();
+  final binding = _lineLinkCodes[text];
+  if (binding == null) {
+    if (replyToken != null && replyToken.isNotEmpty) {
+      await _notificationService.replyLineText(
+        replyToken: replyToken,
+        text: '找不到這組綁定碼。請回到 App 重新產生新的 LINE 綁定碼後再試。',
+      );
+    }
+    return;
+  }
+  if (binding.expired) {
+    _lineLinkCodes.remove(text);
+    if (replyToken != null && replyToken.isNotEmpty) {
+      await _notificationService.replyLineText(
+        replyToken: replyToken,
+        text: '這組綁定碼已過期，請回到 App 重新產生新的綁定碼。',
+      );
+    }
+    return;
+  }
+  final data = await _store.read();
+  User? target;
+  for (final user in data.users) {
+    if (user.id == binding.userId) {
+      target = user;
+      break;
+    }
+  }
+  if (target == null) {
+    _lineLinkCodes.remove(text);
+    if (replyToken != null && replyToken.isNotEmpty) {
+      await _notificationService.replyLineText(
+        replyToken: replyToken,
+        text: '綁定失敗：找不到對應使用者，請回到 App 重新登入再試。',
+      );
+    }
+    return;
+  }
+  for (final user in data.users) {
+    if (user.id != target.id && user.lineUserId == lineUserId) {
+      await _store.updateUser(
+        user.copyWith(
+          lineUserId: null,
+          lineLinkedAt: null,
+          linePushEnabled: false,
+        ),
+      );
+    }
+  }
+  await _store.updateUser(
+    target.copyWith(
+      lineUserId: lineUserId,
+      lineLinkedAt: DateTime.now(),
+      linePushEnabled: true,
+    ),
+  );
+  _lineLinkCodes.remove(text);
+  if (replyToken != null && replyToken.isNotEmpty) {
+    await _notificationService.replyLineText(
+      replyToken: replyToken,
+      text: 'LINE 綁定成功。之後你會在這裡收到 Smart Travel 的行程提醒與通知。',
+    );
+  }
 }
 
 Place _placeFromBody(Map<String, dynamic> body, {required String fallbackId}) {
