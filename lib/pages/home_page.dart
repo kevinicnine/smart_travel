@@ -4,10 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import '../data/interest_data.dart';
 import '../services/backend_api.dart';
 import '../state/user_state.dart';
 import 'account_page.dart';
+import 'itinerary_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({
@@ -30,13 +30,12 @@ class _HomePageState extends State<HomePage> {
 
   late final TextEditingController _startController;
   late final TextEditingController _endController;
-  late final TextEditingController _locationController;
-  late final TextEditingController _peopleController;
-  late final TextEditingController _budgetController;
 
   DateTime? _startDate;
   DateTime? _endDate;
-  late final List<InterestItem> _recommended;
+  String? _selectedCity;
+  String? _selectedTownship;
+  int? _selectedBudgetTier;
   int _currentNavIndex = 0;
   bool _generatingPlan = false;
   final BackendApi _api = BackendApi.instance;
@@ -47,42 +46,65 @@ class _HomePageState extends State<HomePage> {
   GoogleMapController? _googleMapController;
   Set<Marker> _mapMarkers = <Marker>{};
   bool _isSearching = false;
+  bool _isLoadingPlaces = false;
   final List<_Place> _favorites = [];
+  final List<_SavedTrip> _savedTrips = [];
   static const _favoritesStorageKey = 'favorites_places';
+  static const _tripsStorageKey = 'saved_itineraries_v1';
 
   @override
   void initState() {
     super.initState();
     _startController = TextEditingController();
     _endController = TextEditingController();
-    _locationController = TextEditingController();
-    _peopleController = TextEditingController();
-    _budgetController = TextEditingController();
-    _recommended = _buildRecommendations();
-    _places = List<_Place>.from(_buildPlaces());
-    _mapCenter = _places.first.position;
+    _places = <_Place>[];
+    _mapCenter = const LatLng(25.033968, 121.564468);
     _rebuildMarkers();
     _loadFavorites();
+    _loadSavedTrips();
+    _loadPlacesFromBackend();
   }
 
   @override
   void dispose() {
     _startController.dispose();
     _endController.dispose();
-    _locationController.dispose();
-    _peopleController.dispose();
-    _budgetController.dispose();
     _mapSearchController.dispose();
     super.dispose();
   }
 
-  List<_Place> _buildPlaces() {
-    return const [
-      _Place('台北 101', LatLng(25.033968, 121.564468), '地標 / 觀景台'),
-      _Place('中正紀念堂', LatLng(25.034201, 121.521777), '文化地標'),
-      _Place('士林夜市', LatLng(25.08806, 121.525), '美食夜市'),
-      _Place('西門町', LatLng(25.042233, 121.508802), '逛街 / 美食'),
-    ];
+  Future<void> _loadPlacesFromBackend() async {
+    if (_isLoadingPlaces) return;
+    setState(() {
+      _isLoadingPlaces = true;
+    });
+    try {
+      var raw = await _api.fetchPlaces(
+        tags: widget.selectedInterestIds,
+        sort: 'rating',
+        limit: 200,
+      );
+      if (raw.isEmpty && widget.selectedInterestIds.isNotEmpty) {
+        raw = await _api.fetchPlaces(sort: 'rating', limit: 200);
+      }
+      final places = raw.map(_Place.fromBackend).toList();
+      if (places.isNotEmpty) {
+        setState(() {
+          _places = places;
+          _syncPlannerSelections(places);
+          _mapCenter = places.first.position;
+          _rebuildMarkers();
+        });
+      }
+    } on ApiClientException catch (error) {
+      _showMessage(error.message);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingPlaces = false;
+        });
+      }
+    }
   }
 
   void _rebuildMarkers() {
@@ -100,7 +122,7 @@ class _HomePageState extends State<HomePage> {
 
   void _addOrReplacePlace(_Place place) {
     setState(() {
-      _places.removeWhere((p) => p.name == place.name);
+      _places.removeWhere((p) => p.id == place.id || p.name == place.name);
       _places = [place, ..._places];
       _rebuildMarkers();
     });
@@ -126,27 +148,58 @@ class _HomePageState extends State<HomePage> {
     await prefs.setStringList(_favoritesStorageKey, data);
   }
 
-  List<InterestItem> _buildRecommendations() {
-    final unique = <InterestItem>[];
-    final seen = <String>{};
+  Future<void> _loadSavedTrips() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getStringList(_tripsStorageKey) ?? [];
+    final decoded =
+        saved
+            .map((e) => jsonDecode(e) as Map<String, dynamic>)
+            .map(_SavedTrip.fromJson)
+            .toList()
+          ..sort(_compareTripsByDate);
+    if (!mounted) return;
+    setState(() {
+      _savedTrips
+        ..clear()
+        ..addAll(decoded);
+    });
+  }
 
-    for (final id in widget.selectedInterestIds) {
-      final item = interestItemsById[id];
-      if (item != null && seen.add(item.id)) {
-        unique.add(item);
-      }
-    }
+  Future<void> _persistSavedTrips() async {
+    final prefs = await SharedPreferences.getInstance();
+    final data = _savedTrips.map((t) => jsonEncode(t.toJson())).toList();
+    await prefs.setStringList(_tripsStorageKey, data);
+  }
 
-    if (unique.isNotEmpty) {
-      return unique;
-    }
+  Future<void> _saveGeneratedTrip(Map<String, dynamic> plan) async {
+    final trip = _SavedTrip.fromPlan(plan);
+    setState(() {
+      _savedTrips.removeWhere((t) => t.id == trip.id);
+      _savedTrips.add(trip);
+      _savedTrips.sort(_compareTripsByDate);
+    });
+    await _persistSavedTrips();
+  }
 
-    // 沒有選擇 → 用預設前幾個
-    final fallback = <InterestItem>[];
-    for (final category in interestCategories) {
-      fallback.addAll(category.items);
+  Future<void> _deleteSavedTrip(String tripId) async {
+    setState(() {
+      _savedTrips.removeWhere((trip) => trip.id == tripId);
+    });
+    await _persistSavedTrips();
+    if (!mounted) return;
+    _showMessage('已刪除旅程');
+  }
+
+  int _compareTripsByDate(_SavedTrip a, _SavedTrip b) {
+    if (a.startDate != null && b.startDate != null) {
+      final cmp = a.startDate!.compareTo(b.startDate!);
+      if (cmp != 0) return cmp;
+    } else if (a.startDate != null) {
+      return -1;
+    } else if (b.startDate != null) {
+      return 1;
     }
-    return fallback.take(6).toList();
+    return b.savedAt.compareTo(a.savedAt);
   }
 
   Future<void> _pickDate({required bool isStart}) async {
@@ -195,24 +248,34 @@ class _HomePageState extends State<HomePage> {
       _showMessage('結束日期必須在開始日期之後');
       return;
     }
+    if (_selectedCity == null || _selectedCity!.isEmpty) {
+      _showMessage('請先選擇城市');
+      return;
+    }
 
     setState(() {
       _generatingPlan = true;
     });
 
     try {
+      final location = _selectedTownship == null || _selectedTownship!.isEmpty
+          ? _selectedCity
+          : '${_selectedCity!} ${_selectedTownship!}';
       final plan = await _api.generateItinerary(
         interestIds: widget.selectedInterestIds,
+        userId: UserState.userId,
         startDate: _startDate,
         endDate: _endDate,
-        location: _locationController.text.trim().isEmpty
-            ? null
-            : _locationController.text.trim(),
-        people: int.tryParse(_peopleController.text),
-        budget: int.tryParse(_budgetController.text),
+        location: location,
+        budget: _budgetToValue(_selectedBudgetTier),
       );
+      await _saveGeneratedTrip(plan);
       if (!mounted) return;
-      _showPlanDialog(plan);
+      _showMessage('行程已儲存到「旅程」');
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => ItineraryPage(plan: plan)),
+      );
     } on ApiClientException catch (error) {
       _showMessage(error.message);
     } finally {
@@ -233,6 +296,8 @@ class _HomePageState extends State<HomePage> {
           ? _buildMapPage()
           : _currentNavIndex == 2
           ? SafeArea(child: _buildFavoritesPage())
+          : _currentNavIndex == 3
+          ? SafeArea(child: _buildTripsPage())
           : SafeArea(
               child: LayoutBuilder(
                 builder: (context, constraints) {
@@ -246,14 +311,14 @@ class _HomePageState extends State<HomePage> {
                       Padding(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 24,
-                          vertical: 16,
+                          vertical: 12,
                         ),
                         child: Align(
                           alignment: Alignment.centerLeft,
                           child: Text(
                             'Hi! $hiName',
                             style: TextStyle(
-                              fontSize: 34,
+                              fontSize: 30,
                               fontWeight: FontWeight.w800,
                               color: Colors.black.withOpacity(0.9),
                             ),
@@ -267,34 +332,35 @@ class _HomePageState extends State<HomePage> {
                           child: _buildPlannerCard(),
                         ),
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 12),
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 24),
                         child: Align(
                           alignment: Alignment.centerLeft,
                           child: Text(
-                            '猜你喜歡',
+                            '推薦景點',
                             style: TextStyle(
-                              fontSize: 22,
+                              fontSize: 21,
                               fontWeight: FontWeight.w700,
                               color: Colors.black.withOpacity(0.85),
                             ),
                           ),
                         ),
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 8),
                       _buildRecommendationStrip(fullWidth),
                       const SizedBox(height: 10),
                     ],
                   );
 
-                  if (constraints.maxHeight < 640) {
-                    return SingleChildScrollView(child: content);
-                  }
-
-                  return SizedBox(
-                    height: constraints.maxHeight,
-                    child: content,
+                  return SingleChildScrollView(
+                    physics: const BouncingScrollPhysics(),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        minHeight: constraints.maxHeight,
+                      ),
+                      child: content,
+                    ),
                   );
                 },
               ),
@@ -322,7 +388,7 @@ class _HomePageState extends State<HomePage> {
           BottomNavigationBarItem(icon: Icon(Icons.home_filled), label: '首頁'),
           BottomNavigationBarItem(icon: Icon(Icons.map), label: '地圖'),
           BottomNavigationBarItem(icon: Icon(Icons.favorite), label: '收藏'),
-          BottomNavigationBarItem(icon: Icon(Icons.history), label: '歷史'),
+          BottomNavigationBarItem(icon: Icon(Icons.route_rounded), label: '旅程'),
           BottomNavigationBarItem(icon: Icon(Icons.person), label: '帳戶'),
         ],
       ),
@@ -359,6 +425,15 @@ class _HomePageState extends State<HomePage> {
                   decoration: InputDecoration(
                     prefixIcon: const Icon(Icons.search, color: Colors.black87),
                     suffixIcon: _isSearching
+                        ? const Padding(
+                            padding: EdgeInsets.all(10),
+                            child: SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          )
+                        : _isLoadingPlaces
                         ? const Padding(
                             padding: EdgeInsets.all(10),
                             child: SizedBox(
@@ -434,9 +509,46 @@ class _HomePageState extends State<HomePage> {
                         fontWeight: FontWeight.w700,
                       ),
                     ),
+                    if (place.rating != null || place.userRatingsTotal != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Row(
+                          children: [
+                            if (place.rating != null)
+                              Text(
+                                place.rating!.toStringAsFixed(1),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            if (place.rating != null)
+                              const Padding(
+                                padding: EdgeInsets.only(left: 4),
+                                child: Icon(
+                                  Icons.star,
+                                  size: 14,
+                                  color: Color(0xFF5A4E7C),
+                                ),
+                              ),
+                            if (place.userRatingsTotal != null)
+                              Padding(
+                                padding: const EdgeInsets.only(left: 4),
+                                child: Text(
+                                  '(${place.userRatingsTotal})',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.black54,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
                     const SizedBox(height: 4),
                     Text(
-                      place.description,
+                      place.description.trim().isNotEmpty
+                          ? place.description
+                          : place.address,
                       style: const TextStyle(color: Colors.black54),
                     ),
                   ],
@@ -461,12 +573,137 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  Widget _buildTripsPage() {
+    if (_savedTrips.isEmpty) {
+      return Center(
+        child: Text(
+          '目前沒有旅程，先到首頁設計一段行程吧！',
+          style: TextStyle(color: Colors.black.withOpacity(0.65)),
+        ),
+      );
+    }
+
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+      itemCount: _savedTrips.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (context, index) {
+        final trip = _savedTrips[index];
+        return Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.06),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF1EBFA),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(
+                  Icons.route_rounded,
+                  color: Color(0xFF6C6296),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ItineraryPage(plan: trip.plan),
+                      ),
+                    );
+                  },
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        trip.title,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        trip.dateRangeText,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.black54,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${trip.daysCount} 天 · ${trip.stopsCount} 個景點',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.black54,
+                        ),
+                      ),
+                      if (trip.tagsPreview.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: trip.tagsPreview
+                              .map(
+                                (tag) => Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 3,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFEDE7F6),
+                                    borderRadius: BorderRadius.circular(999),
+                                  ),
+                                  child: Text(
+                                    tag,
+                                    style: const TextStyle(fontSize: 11),
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.delete_outline),
+                tooltip: '刪除旅程',
+                onPressed: () => _deleteSavedTrip(trip.id),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildPlannerCard() {
+    final cityOptions = _cityOptions();
+    final townshipOptions = _townshipOptions();
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(24, 24, 24, 28),
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 22),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(20),
         gradient: const LinearGradient(
           colors: [Color(0xFFFFC369), Color(0xFFF7A7AF), Color(0xFF7EAFFF)],
           stops: [0.05, 0.45, 0.95],
@@ -476,8 +713,8 @@ class _HomePageState extends State<HomePage> {
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.15),
-            blurRadius: 24,
-            offset: const Offset(0, 10),
+            blurRadius: 16,
+            offset: const Offset(0, 8),
           ),
         ],
       ),
@@ -487,13 +724,13 @@ class _HomePageState extends State<HomePage> {
           const Text(
             '準備好設計\n專屬於你的旅程了嗎？',
             style: TextStyle(
-              fontSize: 22,
+              fontSize: 20,
               fontWeight: FontWeight.w700,
               color: Colors.white,
-              height: 1.4,
+              height: 1.3,
             ),
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 12),
           Row(
             children: [
               Expanded(
@@ -513,43 +750,43 @@ class _HomePageState extends State<HomePage> {
               ),
             ],
           ),
+          const SizedBox(height: 8),
+          _buildDropdownField(
+            hint: '選擇城市（必選）',
+            value: _selectedCity,
+            options: cityOptions,
+            onChanged: (value) {
+              setState(() {
+                _selectedCity = value;
+                _selectedTownship = null;
+              });
+            },
+          ),
           const SizedBox(height: 10),
-          _buildInputField(
-            hint: '地點',
-            controller: _locationController,
-            prefixIcon: Icons.search,
+          _buildDropdownField(
+            hint: '選擇鄉鎮（選填）',
+            value: _selectedTownship,
+            options: townshipOptions,
+            enabled: _selectedCity != null,
+            onChanged: (value) {
+              setState(() {
+                _selectedTownship = value;
+              });
+            },
           ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: _buildInputField(
-                  hint: '人數',
-                  controller: _peopleController,
-                  keyboardType: TextInputType.number,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _buildInputField(
-                  hint: '預算',
-                  controller: _budgetController,
-                  keyboardType: TextInputType.number,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 10),
+          _buildBudgetSelector(),
+          const SizedBox(height: 14),
           SizedBox(
             width: double.infinity,
-            height: 56,
+            height: 52,
             child: ElevatedButton(
               onPressed: _generatingPlan ? null : () => _startDesign(),
               style: ElevatedButton.styleFrom(
                 elevation: 0,
                 backgroundColor: Colors.white.withOpacity(0.9),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(22),
+                  borderRadius: BorderRadius.circular(18),
                 ),
               ),
               child: _generatingPlan
@@ -561,7 +798,7 @@ class _HomePageState extends State<HomePage> {
                   : Text(
                       '開始設計！',
                       style: TextStyle(
-                        fontSize: 20,
+                        fontSize: 19,
                         fontWeight: FontWeight.w700,
                         color: Colors.black.withOpacity(0.8),
                       ),
@@ -594,69 +831,325 @@ class _HomePageState extends State<HomePage> {
             : Icon(prefixIcon, color: Colors.black.withOpacity(0.6)),
         contentPadding: const EdgeInsets.symmetric(
           horizontal: 16,
-          vertical: 14,
+          vertical: 12,
         ),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(17),
           borderSide: BorderSide.none,
         ),
       ),
     );
   }
 
-  Widget _buildRecommendationStrip(double width) {
-    if (_recommended.isEmpty) {
-      return const Text('目前沒有推薦，先去選擇一些興趣吧！');
+  Widget _buildDropdownField({
+    required String hint,
+    required String? value,
+    required List<String> options,
+    required ValueChanged<String?> onChanged,
+    bool enabled = true,
+  }) {
+    final hasValue = value != null && options.contains(value);
+    return DropdownButtonFormField<String>(
+      value: hasValue ? value : null,
+      isExpanded: true,
+      menuMaxHeight: 280,
+      iconEnabledColor: Colors.black.withOpacity(0.7),
+      decoration: InputDecoration(
+        filled: true,
+        fillColor: enabled ? Colors.white : Colors.white.withOpacity(0.65),
+        hintText: hint,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 12,
+        ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(17),
+          borderSide: BorderSide.none,
+        ),
+      ),
+      items: options
+          .map(
+            (city) => DropdownMenuItem<String>(
+              value: city,
+              child: Text(city, overflow: TextOverflow.ellipsis),
+            ),
+          )
+          .toList(),
+      onChanged: enabled ? onChanged : null,
+    );
+  }
+
+  Widget _buildBudgetSelector() {
+    return Row(
+      children: [
+        Expanded(child: _buildBudgetButton(label: '\$', tier: 1)),
+        const SizedBox(width: 8),
+        Expanded(child: _buildBudgetButton(label: '\$\$', tier: 2)),
+        const SizedBox(width: 8),
+        Expanded(child: _buildBudgetButton(label: '\$\$\$', tier: 3)),
+      ],
+    );
+  }
+
+  Widget _buildBudgetButton({required String label, required int tier}) {
+    final selected = _selectedBudgetTier == tier;
+    return SizedBox(
+      height: 44,
+      child: ElevatedButton(
+        onPressed: () {
+          setState(() {
+            _selectedBudgetTier = tier;
+          });
+        },
+        style: ElevatedButton.styleFrom(
+          elevation: 0,
+          backgroundColor: selected
+              ? const Color(0xFF5D73B9)
+              : Colors.white.withOpacity(0.92),
+          foregroundColor: selected
+              ? Colors.white
+              : Colors.black.withOpacity(0.75),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700),
+        ),
+      ),
+    );
+  }
+
+  List<String> _cityOptions() {
+    final values =
+        _places
+            .map((p) => p.city.trim())
+            .where((city) => city.isNotEmpty)
+            .toSet()
+            .toList()
+          ..sort();
+    return values;
+  }
+
+  List<String> _townshipOptions() {
+    final city = _selectedCity;
+    if (city == null || city.isEmpty) {
+      return const [];
     }
+    final values =
+        _places
+            .where((p) => p.city == city)
+            .map(_extractTownship)
+            .where((township) => township.isNotEmpty)
+            .toSet()
+            .toList()
+          ..sort();
+    return values;
+  }
+
+  String _extractTownship(_Place place) {
+    final address = place.address.trim();
+    if (address.isEmpty) return '';
+    final pattern = RegExp(r'([\u4e00-\u9fff]{1,6}[鄉鎮市區])');
+    final matches = pattern
+        .allMatches(address)
+        .map((m) => m.group(1) ?? '')
+        .where((part) => part.isNotEmpty)
+        .toList();
+    if (matches.isEmpty) return '';
+    if (matches.length == 1) return matches.first;
+    if (matches.first == place.city) {
+      return matches[1];
+    }
+    return matches.first;
+  }
+
+  void _syncPlannerSelections(List<_Place> places) {
+    final cities = places
+        .map((p) => p.city.trim())
+        .where((city) => city.isNotEmpty)
+        .toSet();
+    if (_selectedCity != null && !cities.contains(_selectedCity)) {
+      _selectedCity = null;
+      _selectedTownship = null;
+      return;
+    }
+    if (_selectedCity != null && _selectedTownship != null) {
+      final townships = places
+          .where((p) => p.city == _selectedCity)
+          .map(_extractTownship)
+          .where((township) => township.isNotEmpty)
+          .toSet();
+      if (!townships.contains(_selectedTownship)) {
+        _selectedTownship = null;
+      }
+    }
+  }
+
+  int? _budgetToValue(int? tier) {
+    switch (tier) {
+      case 1:
+        return 1000;
+      case 2:
+        return 2500;
+      case 3:
+        return 5000;
+      default:
+        return null;
+    }
+  }
+
+  Widget _buildRecommendationStrip(double width) {
+    if (_isLoadingPlaces && _places.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 24),
+        child: Text('載入推薦景點中...'),
+      );
+    }
+    final preferredTags = widget.selectedInterestIds.toSet();
+    final base = preferredTags.isEmpty
+        ? _places
+        : _places.where((p) => p.tags.any(preferredTags.contains)).toList();
+    final recommended = List<_Place>.from(base)
+      ..sort((a, b) {
+        final ar = a.rating ?? 0;
+        final br = b.rating ?? 0;
+        if (ar != br) return br.compareTo(ar);
+        return a.name.compareTo(b.name);
+      });
+
+    if (recommended.isEmpty) {
+      return const Text('目前沒有推薦景點，請先在後台匯入資料。');
+    }
+
+    final items = recommended.take(10).toList();
 
     return SizedBox(
       width: width,
-      height: 155,
-      child: ListView.builder(
+      height: 182,
+      child: ListView.separated(
         padding: const EdgeInsets.symmetric(horizontal: 24),
         scrollDirection: Axis.horizontal,
         physics: const BouncingScrollPhysics(),
-        itemCount: _recommended.length * 10,
+        itemCount: items.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 14),
         itemBuilder: (context, index) {
-          final item = _recommended[index % _recommended.length];
-          return Container(
-            width: 118,
-            margin: EdgeInsets.only(
-              right: index == _recommended.length * 10 - 1 ? 0 : 14,
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(20),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.08),
-                  blurRadius: 10,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                ClipOval(
-                  child: Image.asset(
-                    item.imagePath,
-                    width: 84,
-                    height: 84,
-                    fit: BoxFit.cover,
+          final place = items[index];
+          return GestureDetector(
+            onTap: () => _openPlaceFromRecommendation(place),
+            child: Container(
+              width: 174,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.08),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
                   ),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  item.label,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: place.imageUrl.isNotEmpty
+                        ? Image.network(
+                            place.imageUrl,
+                            height: 68,
+                            width: double.infinity,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => Container(
+                              height: 68,
+                              color: const Color(0xFFF1ECE6),
+                              alignment: Alignment.center,
+                              child: const Icon(
+                                Icons.landscape,
+                                color: Colors.black38,
+                                size: 18,
+                              ),
+                            ),
+                          )
+                        : Container(
+                            height: 68,
+                            color: const Color(0xFFF1ECE6),
+                            alignment: Alignment.center,
+                            child: const Icon(
+                              Icons.landscape,
+                              color: Colors.black38,
+                              size: 18,
+                            ),
+                          ),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 6),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          place.name,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            height: 1.1,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        if (place.rating != null ||
+                            place.userRatingsTotal != null)
+                          Row(
+                            children: [
+                              if (place.rating != null)
+                                Text(
+                                  place.rating!.toStringAsFixed(1),
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              if (place.rating != null)
+                                const Padding(
+                                  padding: EdgeInsets.only(left: 4),
+                                  child: Icon(
+                                    Icons.star,
+                                    size: 12,
+                                    color: Color(0xFF5A4E7C),
+                                  ),
+                                ),
+                              if (place.userRatingsTotal != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 4),
+                                  child: Text(
+                                    '(${place.userRatingsTotal})',
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      color: Colors.black54,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        const Spacer(),
+                        Text(
+                          place.city.isNotEmpty ? place.city : ' ',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: Colors.black54,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           );
         },
@@ -664,54 +1157,13 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  void _showPlanDialog(Map<String, dynamic> plan) {
-    final encoder = const JsonEncoder.withIndent('  ');
-    final prettyPlan = plan.isEmpty ? '尚未取得建議內容' : encoder.convert(plan);
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (context) {
-        final maxHeight = MediaQuery.of(context).size.height * 0.6;
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(24, 24, 24, 34),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'AI 行程建議',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.black.withOpacity(0.85),
-                ),
-              ),
-              const SizedBox(height: 16),
-              ConstrainedBox(
-                constraints: BoxConstraints(maxHeight: maxHeight),
-                child: SingleChildScrollView(
-                  child: SelectableText(
-                    prettyPlan,
-                    style: const TextStyle(fontSize: 14, height: 1.5),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('關閉'),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
+  void _openPlaceFromRecommendation(_Place place) {
+    setState(() {
+      _currentNavIndex = 1;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _selectPlace(place, moveCamera: true);
+    });
   }
 
   void _showMessage(String text) {
@@ -739,6 +1191,27 @@ class _HomePageState extends State<HomePage> {
   Future<void> _onMapSearch(String query) async {
     final trimmed = query.trim();
     if (trimmed.isEmpty) return;
+
+    final localHit = _places.firstWhere(
+      (p) =>
+          p.name.contains(trimmed) ||
+          p.address.contains(trimmed) ||
+          p.city.contains(trimmed),
+      orElse: () => const _Place(
+        id: '',
+        name: '',
+        position: LatLng(0, 0),
+        description: '',
+        address: '',
+        imageUrl: '',
+        city: '',
+        tags: const [],
+      ),
+    );
+    if (localHit.id.isNotEmpty) {
+      _selectPlace(localHit, moveCamera: true);
+      return;
+    }
     if (_googleMapsApiKey.isEmpty) {
       _showMessage(
         '缺少 Google Maps API 金鑰，請先在 dart-define 設定 GOOGLE_MAPS_API_KEY',
@@ -794,12 +1267,17 @@ class _HomePageState extends State<HomePage> {
         return;
       }
       final place = _Place(
-        candidate['name'] as String? ?? trimmed,
-        LatLng(
+        id: 'google:${candidate['place_id'] ?? trimmed}',
+        name: candidate['name'] as String? ?? trimmed,
+        position: LatLng(
           (location['lat'] as num).toDouble(),
           (location['lng'] as num).toDouble(),
         ),
-        candidate['formatted_address'] as String? ?? 'Google Maps',
+        description: candidate['formatted_address'] as String? ?? 'Google Maps',
+        address: candidate['formatted_address'] as String? ?? '',
+        imageUrl: '',
+        city: '',
+        tags: const [],
       );
       _addOrReplacePlace(place);
       _selectPlace(place, moveCamera: true);
@@ -832,15 +1310,13 @@ class _HomePageState extends State<HomePage> {
   }
 
   bool _isFavorite(_Place place) {
-    return _favorites.any(
-      (p) => p.name == place.name && p.position == place.position,
-    );
+    return _favorites.any((p) => p.id == place.id);
   }
 
   void _toggleFavorite(_Place place) {
     var removed = false;
     _favorites.removeWhere((p) {
-      final hit = p.name == place.name && p.position == place.position;
+      final hit = p.id == place.id;
       if (hit) removed = true;
       return hit;
     });
@@ -905,9 +1381,34 @@ class _HomePageState extends State<HomePage> {
               ),
             ],
           ),
-          const SizedBox(height: 2),
+          if (place.rating != null || place.userRatingsTotal != null) ...[
+            const SizedBox(height: 2),
+            Row(
+              children: [
+                if (place.rating != null)
+                  Text(
+                    place.rating!.toStringAsFixed(1),
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                if (place.rating != null) ...[
+                  const SizedBox(width: 4),
+                  const Icon(Icons.star, size: 16, color: Color(0xFF5A4E7C)),
+                ],
+                if (place.userRatingsTotal != null) ...[
+                  const SizedBox(width: 6),
+                  Text(
+                    '(${place.userRatingsTotal})',
+                    style: const TextStyle(color: Colors.black54),
+                  ),
+                ],
+              ],
+            ),
+          ],
+          const SizedBox(height: 6),
           Text(
-            place.description,
+            place.description.trim().isNotEmpty
+                ? place.description
+                : place.address,
             style: const TextStyle(color: Colors.black54),
           ),
         ],
@@ -917,23 +1418,231 @@ class _HomePageState extends State<HomePage> {
 }
 
 class _Place {
+  final String id;
   final String name;
   final LatLng position;
   final String description;
-  const _Place(this.name, this.position, this.description);
+  final String address;
+  final String imageUrl;
+  final String city;
+  final List<String> tags;
+  final double? rating;
+  final int? userRatingsTotal;
+
+  const _Place({
+    required this.id,
+    required this.name,
+    required this.position,
+    required this.description,
+    required this.address,
+    required this.imageUrl,
+    required this.city,
+    required this.tags,
+    this.rating,
+    this.userRatingsTotal,
+  });
 
   Map<String, dynamic> toJson() => {
+    'id': id,
     'name': name,
     'lat': position.latitude,
     'lng': position.longitude,
     'description': description,
+    'address': address,
+    'imageUrl': imageUrl,
+    'city': city,
+    'tags': tags,
+    'rating': rating,
+    'userRatingsTotal': userRatingsTotal,
   };
 
   factory _Place.fromJson(Map<String, dynamic> json) {
     return _Place(
-      json['name'] as String? ?? '',
-      LatLng((json['lat'] as num).toDouble(), (json['lng'] as num).toDouble()),
-      json['description'] as String? ?? '',
+      id: json['id'] as String? ?? (json['name'] as String? ?? ''),
+      name: json['name'] as String? ?? '',
+      position: LatLng(
+        (json['lat'] as num).toDouble(),
+        (json['lng'] as num).toDouble(),
+      ),
+      description: json['description'] as String? ?? '',
+      address: json['address'] as String? ?? '',
+      imageUrl: json['imageUrl'] as String? ?? '',
+      city: _normalizeTaiwanAdminText(json['city'] as String? ?? ''),
+      tags: (json['tags'] as List?)?.whereType<String>().toList() ?? const [],
+      rating: (json['rating'] as num?)?.toDouble(),
+      userRatingsTotal: (json['userRatingsTotal'] as num?)?.toInt(),
     );
+  }
+
+  factory _Place.fromBackend(Map<String, dynamic> json) {
+    return _Place(
+      id: json['id'] as String? ?? '',
+      name: json['name'] as String? ?? '',
+      position: LatLng(
+        (json['lat'] as num?)?.toDouble() ?? 0,
+        (json['lng'] as num?)?.toDouble() ?? 0,
+      ),
+      description: json['description'] as String? ?? '',
+      address: json['address'] as String? ?? '',
+      imageUrl: json['imageUrl'] as String? ?? '',
+      city: _normalizeTaiwanAdminText(json['city'] as String? ?? ''),
+      tags: (json['tags'] as List?)?.whereType<String>().toList() ?? const [],
+      rating: (json['rating'] as num?)?.toDouble(),
+      userRatingsTotal: (json['userRatingsTotal'] as num?)?.toInt(),
+    );
+  }
+}
+
+String _normalizeTaiwanAdminText(String input) {
+  if (input.isEmpty) return input;
+  const exactMap = <String, String>{
+    '云林县': '雲林縣',
+    '连江县': '連江縣',
+    '台东县': '台東縣',
+    '台东縣': '台東縣',
+    '花莲县': '花蓮縣',
+    '宜兰县': '宜蘭縣',
+    '台中市': '臺中市',
+    '台南市': '臺南市',
+    '台北市': '臺北市',
+    '台東縣': '臺東縣',
+  };
+  final trimmed = input.trim();
+  if (exactMap.containsKey(trimmed)) {
+    return exactMap[trimmed]!;
+  }
+
+  // Fallback: convert common simplified chars seen in Taiwan admin names.
+  const charMap = <String, String>{
+    '云': '雲',
+    '县': '縣',
+    '东': '東',
+    '兰': '蘭',
+    '连': '連',
+    '台': '臺',
+  };
+  final sb = StringBuffer();
+  for (final rune in trimmed.runes) {
+    final ch = String.fromCharCode(rune);
+    sb.write(charMap[ch] ?? ch);
+  }
+  return sb.toString();
+}
+
+class _SavedTrip {
+  const _SavedTrip({
+    required this.id,
+    required this.savedAt,
+    required this.plan,
+    required this.title,
+    required this.startDate,
+    required this.endDate,
+    required this.daysCount,
+    required this.stopsCount,
+    required this.tagsPreview,
+  });
+
+  final String id;
+  final DateTime savedAt;
+  final Map<String, dynamic> plan;
+  final String title;
+  final DateTime? startDate;
+  final DateTime? endDate;
+  final int daysCount;
+  final int stopsCount;
+  final List<String> tagsPreview;
+
+  String get dateRangeText {
+    final start = startDate;
+    final end = endDate;
+    if (start == null && end == null) return '未提供日期';
+    if (start != null && end != null) {
+      return '${_fmtDate(start)} ~ ${_fmtDate(end)}';
+    }
+    return _fmtDate(start ?? end!);
+  }
+
+  factory _SavedTrip.fromPlan(Map<String, dynamic> plan) {
+    final meta = plan['meta'] is Map<String, dynamic>
+        ? plan['meta'] as Map<String, dynamic>
+        : <String, dynamic>{};
+    final days = (plan['days'] as List?)?.whereType<Map>().toList() ?? const [];
+
+    DateTime? startDate;
+    DateTime? endDate;
+    var stopsCount = 0;
+    for (final day in days) {
+      final date = DateTime.tryParse(day['date']?.toString() ?? '');
+      startDate ??= date;
+      if (date != null) endDate = date;
+      final items = day['items'];
+      if (items is List) stopsCount += items.length;
+    }
+
+    final tagsPreview =
+        (meta['tags'] as List?)
+            ?.map((e) => e.toString())
+            .where((e) => e.isNotEmpty)
+            .take(4)
+            .toList() ??
+        const <String>[];
+    final location = meta['location']?.toString().trim();
+    final title = (location != null && location.isNotEmpty)
+        ? location
+        : '旅程 ${startDate != null ? _fmtDate(startDate) : ''}'.trim();
+
+    final generatedAt = DateTime.tryParse(
+      meta['generatedAt']?.toString() ?? '',
+    );
+    final keyBase =
+        '${meta['generatedAt'] ?? DateTime.now().toIso8601String()}|${location ?? ''}|$stopsCount';
+    return _SavedTrip(
+      id: base64Url.encode(utf8.encode(keyBase)),
+      savedAt: generatedAt ?? DateTime.now(),
+      plan: jsonDecode(jsonEncode(plan)) as Map<String, dynamic>,
+      title: title.isEmpty ? '未命名旅程' : title,
+      startDate: startDate,
+      endDate: endDate,
+      daysCount: days.length,
+      stopsCount: stopsCount,
+      tagsPreview: tagsPreview,
+    );
+  }
+
+  factory _SavedTrip.fromJson(Map<String, dynamic> json) {
+    final rawPlan = json['plan'] as Map<String, dynamic>? ?? const {};
+    return _SavedTrip(
+      id: json['id']?.toString() ?? '',
+      savedAt:
+          DateTime.tryParse(json['savedAt']?.toString() ?? '') ??
+          DateTime.now(),
+      plan: Map<String, dynamic>.from(rawPlan),
+      title: json['title']?.toString() ?? '未命名旅程',
+      startDate: DateTime.tryParse(json['startDate']?.toString() ?? ''),
+      endDate: DateTime.tryParse(json['endDate']?.toString() ?? ''),
+      daysCount: (json['daysCount'] as num?)?.toInt() ?? 0,
+      stopsCount: (json['stopsCount'] as num?)?.toInt() ?? 0,
+      tagsPreview:
+          (json['tagsPreview'] as List?)?.map((e) => e.toString()).toList() ??
+          const [],
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'savedAt': savedAt.toIso8601String(),
+    'plan': plan,
+    'title': title,
+    'startDate': startDate?.toIso8601String(),
+    'endDate': endDate?.toIso8601String(),
+    'daysCount': daysCount,
+    'stopsCount': stopsCount,
+    'tagsPreview': tagsPreview,
+  };
+
+  static String _fmtDate(DateTime value) {
+    final mm = value.month.toString().padLeft(2, '0');
+    final dd = value.day.toString().padLeft(2, '0');
+    return '${value.year}-$mm-$dd';
   }
 }

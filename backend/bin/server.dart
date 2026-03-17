@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -832,6 +833,7 @@ Future<void> main(List<String> args) async {
     ..post(
       '/api/travel/plans',
       (req) => _json(req, (body) async {
+        final userId = _asString(body, 'userId').trim();
         final interests =
             (body['interests'] as List?)?.whereType<String>().toList() ??
             const [];
@@ -873,6 +875,9 @@ Future<void> main(List<String> args) async {
           extraSpots: extraSpots,
           wishlistPlaces: wishlistPlaces,
         );
+        if (userId.isNotEmpty) {
+          unawaited(_sendLineItineraryGeneratedNotification(userId: userId, plan: plan));
+        }
         return successBody(message: '行程已生成', data: plan);
       }),
     )
@@ -1052,6 +1057,77 @@ Future<Response> _adminPageHandler(Request request) async {
 
 Future<User?> _findUserById(String userId) async {
   return _store.findUserById(userId);
+}
+
+Future<void> _sendLineItineraryGeneratedNotification({
+  required String userId,
+  required Map<String, dynamic> plan,
+}) async {
+  try {
+    final user = await _store.findUserById(userId);
+    final lineUserId = user?.lineUserId?.trim();
+    if (lineUserId == null || lineUserId.isEmpty) {
+      return;
+    }
+    final message = _buildLineItinerarySummary(plan);
+    await _notificationService.sendLinePush(to: lineUserId, text: message);
+    _log.info('LINE 行程推播已送出：user=$userId lineUserId=$lineUserId');
+  } catch (error, stack) {
+    _log.warning('LINE 行程推播失敗：user=$userId error=$error');
+    _log.fine(stack.toString());
+  }
+}
+
+String _buildLineItinerarySummary(Map<String, dynamic> plan) {
+  final meta = plan['meta'];
+  final days = plan['days'];
+  final insight = plan['insight'];
+
+  final metaMap = meta is Map ? Map<String, dynamic>.from(meta) : const <String, dynamic>{};
+  final dayList = days is List
+      ? days.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList()
+      : const <Map<String, dynamic>>[];
+  final insightMap = insight is Map
+      ? Map<String, dynamic>.from(insight)
+      : const <String, dynamic>{};
+
+  final location = metaMap['location']?.toString().trim();
+  final startDate = metaMap['startDate']?.toString();
+  final dayCount = dayList.length;
+  final stopCount = dayList.fold<int>(0, (sum, day) {
+    final items = day['items'];
+    if (items is List) return sum + items.length;
+    return sum;
+  });
+
+  String? firstStop;
+  String? firstTime;
+  if (dayList.isNotEmpty) {
+    final firstDayItems = dayList.first['items'];
+    if (firstDayItems is List && firstDayItems.isNotEmpty) {
+      final firstItem = firstDayItems.first;
+      if (firstItem is Map) {
+        firstTime = firstItem['time']?.toString();
+        final place = firstItem['place'];
+        if (place is Map) {
+          firstStop = place['name']?.toString();
+        }
+      }
+    }
+  }
+
+  final summary = insightMap['summary']?.toString().trim();
+  final lines = <String>[
+    'Smart Travel 已為你安排新行程${location != null && location.isNotEmpty ? '：$location' : ''}',
+    if (startDate != null && startDate.isNotEmpty)
+      '日期：${startDate.substring(0, 10)} 起，共 $dayCount 天',
+    '景點數：$stopCount',
+    if (firstStop != null && firstStop.isNotEmpty)
+      '第一站：${firstTime != null && firstTime!.isNotEmpty ? '$firstTime ' : ''}$firstStop',
+    if (summary != null && summary.isNotEmpty) summary,
+    '打開 App 可查看完整行程與地圖路線。',
+  ];
+  return lines.join('\n');
 }
 
 void _cleanupExpiredLineCodes() {

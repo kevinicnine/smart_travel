@@ -90,6 +90,7 @@ class BackendApi {
 
   Future<Map<String, dynamic>> generateItinerary({
     required List<String> interestIds,
+    String? userId,
     DateTime? startDate,
     DateTime? endDate,
     String? location,
@@ -102,6 +103,9 @@ class BackendApi {
     List<String>? wishlistPlaces,
   }) async {
     final payload = <String, dynamic>{'interests': interestIds};
+    if (userId != null && userId.trim().isNotEmpty) {
+      payload['userId'] = userId.trim();
+    }
     if (startDate != null) {
       payload['startDate'] = startDate.toIso8601String();
     }
@@ -185,9 +189,9 @@ class BackendApi {
     ).replace(queryParameters: params);
     http.Response response;
     try {
-      response = await http.get(uri).timeout(const Duration(seconds: 10));
+      response = await http.get(uri).timeout(const Duration(seconds: 20));
     } on TimeoutException catch (error) {
-      throw ApiClientException('連線逾時，請檢查網路後再試。', cause: error);
+      throw ApiClientException('伺服器回應較慢，請稍候再試。', cause: error);
     } on Exception catch (error) {
       throw ApiClientException('無法連線到伺服器，請稍後再試。', cause: error);
     }
@@ -259,8 +263,8 @@ class BackendApi {
   Future<Map<String, dynamic>> _post(
     String path,
     Map<String, dynamic> body, {
-    Duration timeout = const Duration(seconds: 10),
-    String timeoutMessage = '連線逾時，請檢查網路後再試。',
+    Duration timeout = const Duration(seconds: 20),
+    String timeoutMessage = '伺服器回應較慢，請稍候再試。',
   }) async {
     final uri = Uri.parse('$baseUrl$path');
     http.Response response;
