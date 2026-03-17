@@ -1190,35 +1190,43 @@ Future<void> _handleLineEvent(Map<String, dynamic> event) async {
     }
     return;
   }
-  final existingLinkedUser = await _store.findByLineUserId(lineUserId);
-  if (existingLinkedUser != null && existingLinkedUser.id != target.id) {
-    await _store.updateUser(
-      existingLinkedUser.copyWith(
-        lineUserId: null,
-        lineLinkedAt: null,
-        linePushEnabled: false,
-      ),
-    );
-  }
-  await _store.updateUser(
-    target.copyWith(
-      lineUserId: lineUserId,
-      lineLinkedAt: DateTime.now(),
-      linePushEnabled: true,
-    ),
-  );
-  _lineLinkCodes.remove(text);
-  _log.info('LINE 綁定成功：user=${target.id} username=${target.username} lineUserId=$lineUserId code=$text');
   if (replyToken != null && replyToken.isNotEmpty) {
     await _notificationService.replyLineText(
       replyToken: replyToken,
-      text: 'LINE 綁定成功。之後你會在這裡收到 Smart Travel 的行程提醒與通知。',
+      text: '已收到綁定碼，正在為你完成 LINE 綁定，請稍候。',
     );
   }
-  await _notificationService.sendLinePush(
-    to: lineUserId,
-    text: 'Smart Travel 已成功綁定這個 LINE 帳號。回到 App 按「重新整理」即可看到最新狀態。',
-  );
+  try {
+    final existingLinkedUser = await _store.findByLineUserId(lineUserId);
+    if (existingLinkedUser != null && existingLinkedUser.id != target.id) {
+      await _store.updateUser(
+        existingLinkedUser.copyWith(
+          lineUserId: null,
+          lineLinkedAt: null,
+          linePushEnabled: false,
+        ),
+      );
+    }
+    await _store.updateUser(
+      target.copyWith(
+        lineUserId: lineUserId,
+        lineLinkedAt: DateTime.now(),
+        linePushEnabled: true,
+      ),
+    );
+    _lineLinkCodes.remove(text);
+    _log.info('LINE 綁定成功：user=${target.id} username=${target.username} lineUserId=$lineUserId code=$text');
+    await _notificationService.sendLinePush(
+      to: lineUserId,
+      text: 'LINE 綁定成功。之後你會在這裡收到 Smart Travel 的行程提醒與通知。回到 App 按「重新整理」即可看到最新狀態。',
+    );
+  } catch (error, stack) {
+    _log.severe('LINE 綁定處理失敗：code=$text user=${target.id} lineUserId=$lineUserId', error, stack);
+    await _notificationService.sendLinePush(
+      to: lineUserId,
+      text: 'LINE 綁定處理失敗，請回到 App 重新產生綁定碼後再試一次。',
+    );
+  }
 }
 
 Place _placeFromBody(Map<String, dynamic> body, {required String fallbackId}) {
