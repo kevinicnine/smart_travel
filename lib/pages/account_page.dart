@@ -117,8 +117,8 @@ class _AccountPageState extends State<AccountPage> {
         unselectedItemColor: Colors.black54,
         type: BottomNavigationBarType.fixed,
         onTap: (index) {
-          if (index == 0) {
-            Navigator.pop(context);
+          if (index != 4) {
+            Navigator.pop(context, index);
           }
         },
         items: const [

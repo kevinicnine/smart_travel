@@ -372,8 +372,13 @@ class _HomePageState extends State<HomePage> {
             Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const AccountPage()),
-            ).then((_) {
-              setState(() {});
+            ).then((result) {
+              if (!mounted) return;
+              setState(() {
+                if (result is int && result >= 0 && result <= 3) {
+                  _currentNavIndex = result;
+                }
+              });
             });
             return;
           }
