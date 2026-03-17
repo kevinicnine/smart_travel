@@ -47,6 +47,7 @@ class _HomePageState extends State<HomePage> {
   Set<Marker> _mapMarkers = <Marker>{};
   bool _isSearching = false;
   bool _isLoadingPlaces = false;
+  bool _showOnlySelectedMarker = false;
   final List<_Place> _favorites = [];
   final List<_SavedTrip> _savedTrips = [];
   static const _favoritesStorageKey = 'favorites_places';
@@ -108,16 +109,41 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _rebuildMarkers() {
-    _mapMarkers = _places
+    final markerPlaces = _showOnlySelectedMarker && _selectedPlace != null
+        ? <_Place>[_selectedPlace!]
+        : _places;
+    _mapMarkers = markerPlaces
         .map(
-          (p) => Marker(
-            markerId: MarkerId(p.name),
+          (p) {
+            final isSelected = _isSamePlace(_selectedPlace, p);
+            return Marker(
+            markerId: MarkerId(_markerIdForPlace(p)),
             position: p.position,
             infoWindow: InfoWindow(title: p.name, snippet: p.description),
             onTap: () => _selectPlace(p),
-          ),
+            icon: BitmapDescriptor.defaultMarkerWithHue(
+              isSelected ? BitmapDescriptor.hueAzure : BitmapDescriptor.hueRed,
+            ),
+            zIndexInt: isSelected ? 10 : 0,
+          );
+          },
         )
         .toSet();
+  }
+
+  String _markerIdForPlace(_Place place) {
+    final id = place.id.trim();
+    return id.isNotEmpty ? id : place.name;
+  }
+
+  bool _isSamePlace(_Place? a, _Place b) {
+    if (a == null) return false;
+    final aId = a.id.trim();
+    final bId = b.id.trim();
+    if (aId.isNotEmpty && bId.isNotEmpty) {
+      return aId == bId;
+    }
+    return a.name == b.name;
   }
 
   void _addOrReplacePlace(_Place place) {
@@ -383,6 +409,10 @@ class _HomePageState extends State<HomePage> {
             return;
           }
           setState(() {
+            if (value == 1) {
+              _showOnlySelectedMarker = false;
+              _rebuildMarkers();
+            }
             _currentNavIndex = value;
           });
         },
@@ -1164,6 +1194,10 @@ class _HomePageState extends State<HomePage> {
 
   void _openPlaceFromRecommendation(_Place place) {
     setState(() {
+      _selectedPlace = place;
+      _mapCenter = place.position;
+      _showOnlySelectedMarker = true;
+      _rebuildMarkers();
       _currentNavIndex = 1;
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1308,10 +1342,13 @@ class _HomePageState extends State<HomePage> {
     if (moveCamera) {
       _googleMapController?.animateCamera(
         CameraUpdate.newCameraPosition(
-          CameraPosition(target: place.position, zoom: 15),
+          CameraPosition(target: place.position, zoom: 16.8),
         ),
       );
     }
+    _googleMapController?.showMarkerInfoWindow(
+      MarkerId(_markerIdForPlace(place)),
+    );
   }
 
   bool _isFavorite(_Place place) {
