@@ -152,8 +152,12 @@ class _AccountPageState extends State<AccountPage> {
     var pushEnabled = UserState.linePushEnabled;
     var loading = true;
     String? error;
+    var initialized = false;
+    var requestInFlight = false;
 
     Future<void> loadStatus(StateSetter setModalState) async {
+      if (requestInFlight) return;
+      requestInFlight = true;
       setModalState(() {
         loading = true;
         error = null;
@@ -174,6 +178,7 @@ class _AccountPageState extends State<AccountPage> {
       } on ApiClientException catch (e) {
         error = e.message;
       } finally {
+        requestInFlight = false;
         setModalState(() {
           loading = false;
         });
@@ -186,7 +191,8 @@ class _AccountPageState extends State<AccountPage> {
       builder: (dialogContext) {
         return StatefulBuilder(
           builder: (context, setModalState) {
-            if (loading && binding == null && error == null) {
+            if (!initialized) {
+              initialized = true;
               Future.microtask(() => loadStatus(setModalState));
             }
             return AlertDialog(
