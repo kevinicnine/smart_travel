@@ -126,6 +126,8 @@ abstract class DataStore {
   Future<void> deletePlace(String id);
   Future<User?> findByEmail(String email);
   Future<User?> findByPhone(String phone);
+  Future<User?> findUserById(String id);
+  Future<User?> findByLineUserId(String lineUserId);
   Future<User?> findByUsername(String username);
   Future<User?> findByAccount(String account);
 }
@@ -504,6 +506,30 @@ class PostgresDataStore implements DataStore {
   }
 
   @override
+  Future<User?> findUserById(String id) async {
+    await _ensureInitialized();
+    final conn = await _ensureConnection();
+    final rows = await conn.query(
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users WHERE id=@id LIMIT 1',
+      substitutionValues: {'id': id},
+    );
+    if (rows.isEmpty) return null;
+    return _rowToUser(rows.first);
+  }
+
+  @override
+  Future<User?> findByLineUserId(String lineUserId) async {
+    await _ensureInitialized();
+    final conn = await _ensureConnection();
+    final rows = await conn.query(
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users WHERE line_user_id=@line_user_id LIMIT 1',
+      substitutionValues: {'line_user_id': lineUserId},
+    );
+    if (rows.isEmpty) return null;
+    return _rowToUser(rows.first);
+  }
+
+  @override
   Future<User?> findByUsername(String username) async {
     await _ensureInitialized();
     final conn = await _ensureConnection();
@@ -650,6 +676,18 @@ class FileDataStore implements DataStore {
   Future<User?> findByPhone(String phone) async {
     final data = await read();
     return _find(data.users, (u) => u.phone == phone);
+  }
+
+  @override
+  Future<User?> findUserById(String id) async {
+    final data = await read();
+    return _find(data.users, (u) => u.id == id);
+  }
+
+  @override
+  Future<User?> findByLineUserId(String lineUserId) async {
+    final data = await read();
+    return _find(data.users, (u) => u.lineUserId == lineUserId);
   }
 
   @override
@@ -935,6 +973,34 @@ class MySqlDataStore implements DataStore {
     final rows = await conn.execute(
       'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users WHERE phone = :phone LIMIT 1',
       {'phone': phone},
+    );
+    if (rows.rows.isEmpty) {
+      return null;
+    }
+    return _rowToUser(rows.rows.first);
+  }
+
+  @override
+  Future<User?> findUserById(String id) async {
+    await _ensureInitialized();
+    final conn = await _ensureConnection();
+    final rows = await conn.execute(
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users WHERE id = :id LIMIT 1',
+      {'id': id},
+    );
+    if (rows.rows.isEmpty) {
+      return null;
+    }
+    return _rowToUser(rows.rows.first);
+  }
+
+  @override
+  Future<User?> findByLineUserId(String lineUserId) async {
+    await _ensureInitialized();
+    final conn = await _ensureConnection();
+    final rows = await conn.execute(
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users WHERE line_user_id = :line_user_id LIMIT 1',
+      {'line_user_id': lineUserId},
     );
     if (rows.rows.isEmpty) {
       return null;

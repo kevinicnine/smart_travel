@@ -1051,13 +1051,7 @@ Future<Response> _adminPageHandler(Request request) async {
 }
 
 Future<User?> _findUserById(String userId) async {
-  final data = await _store.read();
-  for (final user in data.users) {
-    if (user.id == userId) {
-      return user;
-    }
-  }
-  return null;
+  return _store.findUserById(userId);
 }
 
 void _cleanupExpiredLineCodes() {
@@ -1176,14 +1170,7 @@ Future<void> _handleLineEvent(Map<String, dynamic> event) async {
     }
     return;
   }
-  final data = await _store.read();
-  User? target;
-  for (final user in data.users) {
-    if (user.id == binding.userId) {
-      target = user;
-      break;
-    }
-  }
+  final target = await _store.findUserById(binding.userId);
   if (target == null) {
     _lineLinkCodes.remove(text);
     if (replyToken != null && replyToken.isNotEmpty) {
@@ -1194,16 +1181,15 @@ Future<void> _handleLineEvent(Map<String, dynamic> event) async {
     }
     return;
   }
-  for (final user in data.users) {
-    if (user.id != target.id && user.lineUserId == lineUserId) {
-      await _store.updateUser(
-        user.copyWith(
-          lineUserId: null,
-          lineLinkedAt: null,
-          linePushEnabled: false,
-        ),
-      );
-    }
+  final existingLinkedUser = await _store.findByLineUserId(lineUserId);
+  if (existingLinkedUser != null && existingLinkedUser.id != target.id) {
+    await _store.updateUser(
+      existingLinkedUser.copyWith(
+        lineUserId: null,
+        lineLinkedAt: null,
+        linePushEnabled: false,
+      ),
+    );
   }
   await _store.updateUser(
     target.copyWith(
