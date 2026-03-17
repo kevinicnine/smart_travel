@@ -1099,13 +1099,16 @@ Future<Response> _lineWebhookHandler(Request request) async {
     final rawBody = await request.readAsString();
     final signature = request.headers['x-line-signature'] ?? '';
     if (!_verifyLineSignature(rawBody, signature)) {
+      _log.warning('LINE webhook 驗證失敗');
       return jsonResponse(401, errorBody('LINE webhook 驗證失敗'));
     }
     final decoded = jsonDecode(rawBody);
     if (decoded is! Map<String, dynamic>) {
+      _log.warning('LINE webhook 格式錯誤: $decoded');
       return jsonResponse(400, errorBody('LINE webhook 格式錯誤'));
     }
     final events = (decoded['events'] as List?) ?? const [];
+    _log.info('LINE webhook 收到 ${events.length} 筆事件');
     for (final rawEvent in events) {
       if (rawEvent is! Map) continue;
       final event = Map<String, dynamic>.from(rawEvent);
@@ -1120,7 +1123,9 @@ Future<void> _handleLineEvent(Map<String, dynamic> event) async {
   final replyToken = event['replyToken']?.toString();
   final source = event['source'];
   final lineUserId = source is Map ? source['userId']?.toString() : null;
+  _log.info('LINE event type=$eventType user=$lineUserId');
   if (lineUserId == null || lineUserId.isEmpty) {
+    _log.warning('LINE event 缺少 userId: $event');
     return;
   }
   if (eventType == 'follow') {
@@ -1149,9 +1154,11 @@ Future<void> _handleLineEvent(Map<String, dynamic> event) async {
     return;
   }
   final text = message['text']?.toString().trim().toUpperCase() ?? '';
+  _log.info('LINE 文字訊息: "$text" from $lineUserId');
   _cleanupExpiredLineCodes();
   final binding = _lineLinkCodes[text];
   if (binding == null) {
+    _log.info('LINE 綁定碼不存在: code=$text');
     if (replyToken != null && replyToken.isNotEmpty) {
       await _notificationService.replyLineText(
         replyToken: replyToken,
@@ -1162,6 +1169,7 @@ Future<void> _handleLineEvent(Map<String, dynamic> event) async {
   }
   if (binding.expired) {
     _lineLinkCodes.remove(text);
+    _log.info('LINE 綁定碼已過期: code=$text user=${binding.userId}');
     if (replyToken != null && replyToken.isNotEmpty) {
       await _notificationService.replyLineText(
         replyToken: replyToken,
@@ -1173,6 +1181,7 @@ Future<void> _handleLineEvent(Map<String, dynamic> event) async {
   final target = await _store.findUserById(binding.userId);
   if (target == null) {
     _lineLinkCodes.remove(text);
+    _log.warning('LINE 綁定失敗：找不到使用者 id=${binding.userId} code=$text');
     if (replyToken != null && replyToken.isNotEmpty) {
       await _notificationService.replyLineText(
         replyToken: replyToken,
@@ -1199,12 +1208,17 @@ Future<void> _handleLineEvent(Map<String, dynamic> event) async {
     ),
   );
   _lineLinkCodes.remove(text);
+  _log.info('LINE 綁定成功：user=${target.id} username=${target.username} lineUserId=$lineUserId code=$text');
   if (replyToken != null && replyToken.isNotEmpty) {
     await _notificationService.replyLineText(
       replyToken: replyToken,
       text: 'LINE 綁定成功。之後你會在這裡收到 Smart Travel 的行程提醒與通知。',
     );
   }
+  await _notificationService.sendLinePush(
+    to: lineUserId,
+    text: 'Smart Travel 已成功綁定這個 LINE 帳號。回到 App 按「重新整理」即可看到最新狀態。',
+  );
 }
 
 Place _placeFromBody(Map<String, dynamic> body, {required String fallbackId}) {
