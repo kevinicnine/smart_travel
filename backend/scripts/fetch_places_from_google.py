@@ -553,6 +553,12 @@ def _needs_enrich(place: Dict[str, Any]) -> bool:
     return False
 
 
+def _has_metadata(place: Dict[str, Any]) -> bool:
+    return bool((place.get("source") or "").strip()) and bool(
+        (place.get("updatedAt") or "").strip()
+    )
+
+
 def _find_place_id(query: str) -> str | None:
     data = _fetch_json(
         "https://maps.googleapis.com/maps/api/place/findplacefromtext/json",
@@ -751,7 +757,7 @@ def main() -> None:
             if not place.get("openingHours") and opening_hours:
                 place["openingHours"] = opening_hours
                 changed = True
-            if changed:
+            if changed or not _has_metadata(place):
                 _stamp_metadata(place)
 
             if details:
@@ -820,6 +826,8 @@ def main() -> None:
 
                 existing_hit = existing_by_id.get(place_id) or existing_by_name.get(name.strip())
                 if existing_hit and not _needs_enrich(existing_hit):
+                    if not _has_metadata(existing_hit):
+                        _stamp_metadata(existing_hit)
                     skipped_complete += 1
                     continue
 
@@ -906,6 +914,12 @@ def main() -> None:
             f"累積 {len(output)} 筆, 用量 {request_count}/{MAX_REQUESTS}, 跳過完整資料 {skipped_complete} 筆"
         )
         time.sleep(SLEEP_BETWEEN)
+
+    # Backfill metadata for older complete records so admin sorting/source badges
+    # become meaningful after one rerun, even when no new Google fields were needed.
+    for place in existing_places:
+        if isinstance(place, dict) and not _has_metadata(place):
+            _stamp_metadata(place, source=str(place.get("source") or "google_places"))
 
     merged_places, merge_stats = _merge_places(existing_places, output)
     db["places"] = merged_places
