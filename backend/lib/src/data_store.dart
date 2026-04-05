@@ -196,7 +196,9 @@ class PostgresDataStore implements DataStore {
         user_ratings_total INTEGER,
         price_level INTEGER,
         price_category TEXT,
-        opening_hours_json TEXT
+        opening_hours_json TEXT,
+        source TEXT,
+        updated_at TIMESTAMPTZ
       );
     ''');
     await conn.query(
@@ -207,6 +209,12 @@ class PostgresDataStore implements DataStore {
     );
     await conn.query(
       'ALTER TABLE places ADD COLUMN IF NOT EXISTS opening_hours_json TEXT',
+    );
+    await conn.query(
+      'ALTER TABLE places ADD COLUMN IF NOT EXISTS source TEXT',
+    );
+    await conn.query(
+      'ALTER TABLE places ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ',
     );
     _initialized = true;
   }
@@ -281,6 +289,14 @@ class PostgresDataStore implements DataStore {
       priceLevel: (row[11] as int?) ?? (row[11] as num?)?.toInt(),
       priceCategory: row[12] as String?,
       openingHours: _decodeOpeningHours(row.length > 13 ? row[13] : null),
+      source: row.length > 14 ? row[14] as String? : null,
+      updatedAt: row.length > 15
+          ? (row[15] == null
+                ? null
+                : row[15] is DateTime
+                ? row[15] as DateTime
+                : DateTime.parse(row[15].toString()))
+          : null,
     );
   }
 
@@ -292,7 +308,7 @@ class PostgresDataStore implements DataStore {
       'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users',
     );
     final placesRows = await conn.query(
-      'SELECT id, name, tags, city, address, lat, lng, description, image_url, rating, user_ratings_total, price_level, price_category, opening_hours_json FROM places',
+      'SELECT id, name, tags, city, address, lat, lng, description, image_url, rating, user_ratings_total, price_level, price_category, opening_hours_json, source, updated_at FROM places',
     );
     final users = usersRows.map(_rowToUser).toList();
     final places = placesRows.map(_rowToPlace).toList();
@@ -332,8 +348,8 @@ class PostgresDataStore implements DataStore {
       }
       for (final place in data.places) {
         await ctx.query(
-          'INSERT INTO places (id, name, tags, city, address, lat, lng, description, image_url, rating, user_ratings_total, price_level, price_category, opening_hours_json) '
-          'VALUES (@id, @name, @tags, @city, @address, @lat, @lng, @description, @image_url, @rating, @user_ratings_total, @price_level, @price_category, @opening_hours_json)',
+          'INSERT INTO places (id, name, tags, city, address, lat, lng, description, image_url, rating, user_ratings_total, price_level, price_category, opening_hours_json, source, updated_at) '
+          'VALUES (@id, @name, @tags, @city, @address, @lat, @lng, @description, @image_url, @rating, @user_ratings_total, @price_level, @price_category, @opening_hours_json, @source, @updated_at)',
           substitutionValues: {
             'id': place.id,
             'name': place.name,
@@ -349,6 +365,8 @@ class PostgresDataStore implements DataStore {
             'price_level': place.priceLevel,
             'price_category': place.priceCategory,
             'opening_hours_json': _encodeOpeningHours(place.openingHours),
+            'source': place.source,
+            'updated_at': place.updatedAt?.toUtc(),
           },
         );
       }
@@ -421,8 +439,8 @@ class PostgresDataStore implements DataStore {
       await ctx.query('DELETE FROM places');
       for (final place in places) {
         await ctx.query(
-          'INSERT INTO places (id, name, tags, city, address, lat, lng, description, image_url, rating, user_ratings_total, price_level, price_category, opening_hours_json) '
-          'VALUES (@id, @name, @tags, @city, @address, @lat, @lng, @description, @image_url, @rating, @user_ratings_total, @price_level, @price_category, @opening_hours_json)',
+          'INSERT INTO places (id, name, tags, city, address, lat, lng, description, image_url, rating, user_ratings_total, price_level, price_category, opening_hours_json, source, updated_at) '
+          'VALUES (@id, @name, @tags, @city, @address, @lat, @lng, @description, @image_url, @rating, @user_ratings_total, @price_level, @price_category, @opening_hours_json, @source, @updated_at)',
           substitutionValues: {
             'id': place.id,
             'name': place.name,
@@ -438,6 +456,8 @@ class PostgresDataStore implements DataStore {
             'price_level': place.priceLevel,
             'price_category': place.priceCategory,
             'opening_hours_json': _encodeOpeningHours(place.openingHours),
+            'source': place.source,
+            'updated_at': place.updatedAt?.toUtc(),
           },
         );
       }
@@ -449,12 +469,13 @@ class PostgresDataStore implements DataStore {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     await conn.query(
-      'INSERT INTO places (id, name, tags, city, address, lat, lng, description, image_url, rating, user_ratings_total, price_level, price_category, opening_hours_json) '
-      'VALUES (@id, @name, @tags, @city, @address, @lat, @lng, @description, @image_url, @rating, @user_ratings_total, @price_level, @price_category, @opening_hours_json) '
+      'INSERT INTO places (id, name, tags, city, address, lat, lng, description, image_url, rating, user_ratings_total, price_level, price_category, opening_hours_json, source, updated_at) '
+      'VALUES (@id, @name, @tags, @city, @address, @lat, @lng, @description, @image_url, @rating, @user_ratings_total, @price_level, @price_category, @opening_hours_json, @source, @updated_at) '
       'ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, tags=EXCLUDED.tags, city=EXCLUDED.city, address=EXCLUDED.address, '
       'lat=EXCLUDED.lat, lng=EXCLUDED.lng, description=EXCLUDED.description, image_url=EXCLUDED.image_url, '
       'rating=EXCLUDED.rating, user_ratings_total=EXCLUDED.user_ratings_total, '
-      'price_level=EXCLUDED.price_level, price_category=EXCLUDED.price_category, opening_hours_json=EXCLUDED.opening_hours_json',
+      'price_level=EXCLUDED.price_level, price_category=EXCLUDED.price_category, opening_hours_json=EXCLUDED.opening_hours_json, '
+      'source=EXCLUDED.source, updated_at=EXCLUDED.updated_at',
       substitutionValues: {
         'id': place.id,
         'name': place.name,
@@ -470,6 +491,8 @@ class PostgresDataStore implements DataStore {
         'price_level': place.priceLevel,
         'price_category': place.priceCategory,
         'opening_hours_json': _encodeOpeningHours(place.openingHours),
+        'source': place.source,
+        'updated_at': place.updatedAt?.toUtc(),
       },
     );
   }
@@ -786,7 +809,9 @@ class MySqlDataStore implements DataStore {
         user_ratings_total INT,
         price_level INT,
         price_category VARCHAR(32),
-        opening_hours_json TEXT
+        opening_hours_json TEXT,
+        source VARCHAR(64),
+        updated_at DATETIME NULL
       )
       ''',
     );
@@ -795,6 +820,8 @@ class MySqlDataStore implements DataStore {
     await _ensureColumn(conn, 'places', 'price_level', 'INT');
     await _ensureColumn(conn, 'places', 'price_category', 'VARCHAR(32)');
     await _ensureColumn(conn, 'places', 'opening_hours_json', 'TEXT');
+    await _ensureColumn(conn, 'places', 'source', 'VARCHAR(64)');
+    await _ensureColumn(conn, 'places', 'updated_at', 'DATETIME NULL');
     _initialized = true;
   }
 
@@ -807,7 +834,7 @@ class MySqlDataStore implements DataStore {
     );
     final users = userRows.rows.map<User>(_rowToUser).toList();
     final placeRows = await conn.execute(
-      'SELECT id, name, tags, city, address, lat, lng, description, image_url, rating, user_ratings_total, price_level, price_category, opening_hours_json FROM places',
+      'SELECT id, name, tags, city, address, lat, lng, description, image_url, rating, user_ratings_total, price_level, price_category, opening_hours_json, source, updated_at FROM places',
     );
     final places = placeRows.rows.map<Place>(_rowToPlace).toList();
     return BackendData(users: users, places: places);
@@ -913,7 +940,7 @@ class MySqlDataStore implements DataStore {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     final rows = await conn.execute(
-      'SELECT id, name, tags, city, address, lat, lng, description, image_url, rating, user_ratings_total, price_level, price_category, opening_hours_json FROM places',
+      'SELECT id, name, tags, city, address, lat, lng, description, image_url, rating, user_ratings_total, price_level, price_category, opening_hours_json, source, updated_at FROM places',
     );
     return rows.rows.map<Place>(_rowToPlace).toList();
   }
@@ -1075,8 +1102,8 @@ class MySqlDataStore implements DataStore {
   ) async {
     await conn.execute(
       '''
-      INSERT INTO places (id, name, tags, city, address, lat, lng, description, image_url, rating, user_ratings_total, price_level, price_category, opening_hours_json)
-      VALUES (:id, :name, :tags, :city, :address, :lat, :lng, :description, :image_url, :rating, :user_ratings_total, :price_level, :price_category, :opening_hours_json)
+      INSERT INTO places (id, name, tags, city, address, lat, lng, description, image_url, rating, user_ratings_total, price_level, price_category, opening_hours_json, source, updated_at)
+      VALUES (:id, :name, :tags, :city, :address, :lat, :lng, :description, :image_url, :rating, :user_ratings_total, :price_level, :price_category, :opening_hours_json, :source, :updated_at)
       ON DUPLICATE KEY UPDATE
         name = VALUES(name),
         tags = VALUES(tags),
@@ -1090,7 +1117,9 @@ class MySqlDataStore implements DataStore {
         user_ratings_total = VALUES(user_ratings_total),
         price_level = VALUES(price_level),
         price_category = VALUES(price_category),
-        opening_hours_json = VALUES(opening_hours_json)
+        opening_hours_json = VALUES(opening_hours_json),
+        source = VALUES(source),
+        updated_at = VALUES(updated_at)
       ''',
       {
         'id': place.id,
@@ -1109,6 +1138,8 @@ class MySqlDataStore implements DataStore {
         'opening_hours_json': place.openingHours == null
             ? null
             : jsonEncode(place.openingHours),
+        'source': place.source,
+        'updated_at': place.updatedAt == null ? null : _formatDateTime(place.updatedAt!),
       },
     );
   }
@@ -1151,6 +1182,10 @@ class MySqlDataStore implements DataStore {
       priceLevel: priceLevel,
       priceCategory: row.colByName('price_category'),
       openingHours: _decodeOpeningHours(row.colByName('opening_hours_json')),
+      source: row.colByName('source'),
+      updatedAt: row.colByName('updated_at') == null
+          ? null
+          : _parseDateTime(row.colByName('updated_at')),
     );
   }
 

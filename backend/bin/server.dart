@@ -196,9 +196,9 @@ Future<void> main(List<String> args) async {
           }
         }
         if (sort == 'latest') {
-          places = List<Place>.from(places.reversed);
+          places = _sortPlacesByLatest(places);
         } else if (sort == 'oldest') {
-          places = List<Place>.from(places);
+          places = _sortPlacesByOldest(places);
         } else if (sort == 'name') {
           places = List<Place>.from(places)
             ..sort((a, b) => a.name.compareTo(b.name));
@@ -274,9 +274,9 @@ Future<void> main(List<String> args) async {
               .toList();
         }
         if (sort == 'latest') {
-          places = List<Place>.from(places.reversed);
+          places = _sortPlacesByLatest(places);
         } else if (sort == 'oldest') {
-          places = List<Place>.from(places);
+          places = _sortPlacesByOldest(places);
         } else if (sort == 'name') {
           places = List<Place>.from(places)
             ..sort((a, b) => a.name.compareTo(b.name));
@@ -1337,6 +1337,7 @@ Place _placeFromBody(Map<String, dynamic> body, {required String fallbackId}) {
   if (tags.isEmpty && fallbackCategory != null && fallbackCategory.isNotEmpty) {
     tags.add(fallbackCategory);
   }
+  final parsedUpdatedAt = _parseDateTimeValue(body['updatedAt']);
   return Place(
     id: body['id'] as String? ?? fallbackId,
     name: body['name'] as String? ?? '',
@@ -1354,7 +1355,51 @@ Place _placeFromBody(Map<String, dynamic> body, {required String fallbackId}) {
     openingHours: body['openingHours'] is Map
         ? Map<String, dynamic>.from(body['openingHours'] as Map)
         : null,
+    source: body['source'] as String? ?? 'admin',
+    updatedAt: parsedUpdatedAt ?? DateTime.now().toUtc(),
   );
+}
+
+List<Place> _sortPlacesByLatest(List<Place> places) {
+  return List<Place>.from(places)
+    ..sort((a, b) {
+      final aTime = a.updatedAt;
+      final bTime = b.updatedAt;
+      if (aTime != null && bTime != null) {
+        final cmp = bTime.compareTo(aTime);
+        if (cmp != 0) return cmp;
+      } else if (bTime != null) {
+        return 1;
+      } else if (aTime != null) {
+        return -1;
+      }
+      return a.name.compareTo(b.name);
+    });
+}
+
+List<Place> _sortPlacesByOldest(List<Place> places) {
+  return List<Place>.from(places)
+    ..sort((a, b) {
+      final aTime = a.updatedAt;
+      final bTime = b.updatedAt;
+      if (aTime != null && bTime != null) {
+        final cmp = aTime.compareTo(bTime);
+        if (cmp != 0) return cmp;
+      } else if (aTime != null) {
+        return -1;
+      } else if (bTime != null) {
+        return 1;
+      }
+      return a.name.compareTo(b.name);
+    });
+}
+
+DateTime? _parseDateTimeValue(dynamic raw) {
+  if (raw == null) return null;
+  if (raw is DateTime) return raw.toUtc();
+  final text = raw.toString().trim();
+  if (text.isEmpty) return null;
+  return DateTime.tryParse(text)?.toUtc();
 }
 
 DateTime? _parseDate(String? raw) {

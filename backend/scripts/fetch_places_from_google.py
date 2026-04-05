@@ -23,6 +23,7 @@ import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Iterable, Tuple
 
@@ -268,6 +269,8 @@ class Place:
     priceLevel: int | None
     priceCategory: str | None
     openingHours: Dict[str, Any] | None
+    source: str | None = None
+    updatedAt: str | None = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -286,7 +289,18 @@ class Place:
             "priceLevel": self.priceLevel,
             "priceCategory": self.priceCategory,
             "openingHours": self.openingHours,
+            "source": self.source,
+            "updatedAt": self.updatedAt,
         }
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _stamp_metadata(place: Dict[str, Any], *, source: str = "google_places") -> None:
+    place["source"] = source
+    place["updatedAt"] = _utc_now_iso()
 
 
 def _ssl_context() -> ssl.SSLContext:
@@ -695,33 +709,50 @@ def main() -> None:
             merged_tags = _merge_tags(_normalize_tag_list(place.get("tags")), tags)
             price_level_value = int(price_level) if price_level is not None else None
             price_category = _price_category(price_level_value)
+            changed = False
 
             # Fill only missing fields
             if not place.get("city") and city:
                 place["city"] = city
+                changed = True
             if not place.get("address") or len(str(place.get("address")).strip()) < 6:
                 if full_address:
                     place["address"] = full_address
+                    changed = True
             if (not place.get("lat") or not place.get("lng")) and lat and lng:
                 place["lat"] = lat
                 place["lng"] = lng
+                changed = True
             if not place.get("imageUrl") and image_url:
                 place["imageUrl"] = image_url
+                changed = True
             if place.get("rating") is None and rating is not None:
                 place["rating"] = float(rating)
+                changed = True
             if place.get("userRatingsTotal") is None and rating_total is not None:
                 place["userRatingsTotal"] = int(rating_total)
+                changed = True
             if place.get("priceLevel") is None and price_level_value is not None:
                 place["priceLevel"] = price_level_value
+                changed = True
             if not place.get("priceCategory") and price_category:
                 place["priceCategory"] = price_category
+                changed = True
             if not place.get("description") and editorial:
                 place["description"] = editorial
+                changed = True
             if merged_tags:
-                place["tags"] = merged_tags
-                place["category"] = place.get("category") or merged_tags[0]
+                if _normalize_tag_list(place.get("tags")) != merged_tags:
+                    place["tags"] = merged_tags
+                    changed = True
+                if not place.get("category") and merged_tags[0]:
+                    place["category"] = merged_tags[0]
+                    changed = True
             if not place.get("openingHours") and opening_hours:
                 place["openingHours"] = opening_hours
+                changed = True
+            if changed:
+                _stamp_metadata(place)
 
             if details:
                 review_item = {
@@ -842,6 +873,8 @@ def main() -> None:
                         priceLevel=price_level_value,
                         priceCategory=price_category,
                         openingHours=opening_hours,
+                        source="google_places",
+                        updatedAt=_utc_now_iso(),
                     )
                 )
                 reviews_out.append(

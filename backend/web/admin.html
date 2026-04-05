@@ -91,6 +91,35 @@
         align-items: center;
       }
       .notice { margin-top: 8px; color: var(--muted); font-size: 12px; }
+      .stack {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .meta {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      .badge.google { background: #eef4ff; color: #3d5caa; }
+      .badge.admin { background: #f4f0ff; color: #6951ba; }
+      .badge.recent { background: #ecf9ee; color: #207245; }
+      .badge.warn { background: #fff4e5; color: #9b5b00; }
+      .badge.ok { background: #edf8f1; color: #1a7f4b; }
+      .missing-list {
+        font-size: 12px;
+        color: var(--muted);
+        line-height: 1.4;
+      }
     </style>
   </head>
   <body>
@@ -133,6 +162,8 @@
           <thead>
             <tr>
               <th>名稱</th>
+              <th>來源 / 更新</th>
+              <th>完整度</th>
               <th>標籤</th>
               <th>評分</th>
               <th>價格</th>
@@ -317,6 +348,68 @@
           return '';
         }
       }
+      function formatSource(source) {
+        const value = String(source || '').trim();
+        if (!value) return '未知來源';
+        if (value === 'google_places') return 'Google 爬蟲';
+        if (value === 'admin') return '後台手動';
+        return value;
+      }
+      function formatUpdatedAt(updatedAt) {
+        if (!updatedAt) return '未記錄';
+        const date = new Date(updatedAt);
+        if (Number.isNaN(date.getTime())) return '未記錄';
+        return date.toLocaleString('zh-TW', {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+      }
+      function isRecentUpdate(updatedAt) {
+        if (!updatedAt) return false;
+        const time = new Date(updatedAt).getTime();
+        if (!Number.isFinite(time)) return false;
+        return Date.now() - time <= 24 * 60 * 60 * 1000;
+      }
+      function computeCompleteness(place) {
+        const checks = [
+          ['圖片', !!place.imageUrl],
+          ['評分', place.rating != null],
+          ['評論數', place.userRatingsTotal != null],
+          ['價格', place.priceLevel != null || !!place.priceCategory],
+          ['營業時間', !!place.openingHours],
+          ['城市', !!place.city],
+          ['地址', !!place.address],
+          ['座標', !!place.lat && !!place.lng],
+        ];
+        const missing = checks.filter(([, ok]) => !ok).map(([label]) => label);
+        return {
+          score: checks.length - missing.length,
+          total: checks.length,
+          missing,
+        };
+      }
+      function renderSourceMeta(place) {
+        const source = formatSource(place.source);
+        const updated = formatUpdatedAt(place.updatedAt);
+        const sourceClass = place.source === 'google_places' ? 'google' : (place.source === 'admin' ? 'admin' : '');
+        const chips = [`<span class="badge ${sourceClass}">${source}</span>`];
+        if (isRecentUpdate(place.updatedAt)) {
+          chips.push('<span class="badge recent">剛更新</span>');
+        }
+        return `<div class="stack">${chips.join('')}<span class="meta">${updated}</span></div>`;
+      }
+      function renderCompleteness(place) {
+        const info = computeCompleteness(place);
+        const stateClass = info.missing.length ? 'warn' : 'ok';
+        const stateLabel = info.missing.length ? '待補資料' : '完整';
+        const missingText = info.missing.length
+          ? `<div class="missing-list">缺：${info.missing.join('、')}</div>`
+          : `<div class="missing-list">圖片、評分、價格、營業時間皆完整</div>`;
+        return `<div class="stack"><span class="badge ${stateClass}">${info.score}/${info.total} ${stateLabel}</span>${missingText}</div>`;
+      }
       function showTab(name) {
         for (const sec of ['places','users','import']) {
           document.getElementById(sec).classList.toggle('hidden', sec !== name);
@@ -334,12 +427,12 @@
         body.innerHTML = '';
         if (!res.ok) {
           const msg = data.message || data.error || '查詢失敗，請稍後再試';
-          body.innerHTML = `<tr><td colspan="8" class="muted">${msg}</td></tr>`;
+          body.innerHTML = `<tr><td colspan="10" class="muted">${msg}</td></tr>`;
           return;
         }
         const places = data.data?.places || [];
         if (!places.length) {
-          body.innerHTML = `<tr><td colspan="8" class="muted">沒有符合條件的資料</td></tr>`;
+          body.innerHTML = `<tr><td colspan="10" class="muted">沒有符合條件的資料</td></tr>`;
           return;
         }
         places.forEach(p => {
@@ -349,7 +442,7 @@
           const total = p.userRatingsTotal ? `(${p.userRatingsTotal})` : '';
           const price = p.priceCategory || (p.priceLevel != null ? `L${p.priceLevel}` : '-');
           const openingHours = summarizeOpeningHours(p.openingHours);
-          tr.innerHTML = `<td>${p.name}</td><td>${tags}</td><td>${rating} ${total}</td><td>${price}</td><td>${openingHours}</td><td>${p.city}</td><td>${p.address}</td>
+          tr.innerHTML = `<td>${p.name}</td><td>${renderSourceMeta(p)}</td><td>${renderCompleteness(p)}</td><td>${tags}</td><td>${rating} ${total}</td><td>${price}</td><td>${openingHours}</td><td>${p.city}</td><td>${p.address}</td>
             <td><button onclick='editPlace(${JSON.stringify(p)})'>編輯</button>
             <button onclick='deletePlace("${p.id}")'>刪除</button></td>`;
           body.appendChild(tr);

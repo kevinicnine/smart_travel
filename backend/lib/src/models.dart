@@ -148,6 +148,8 @@ class Place {
     this.priceLevel,
     this.priceCategory,
     this.openingHours,
+    this.source,
+    this.updatedAt,
   });
 
   final String id;
@@ -164,6 +166,8 @@ class Place {
   final int? priceLevel;
   final String? priceCategory;
   final Map<String, dynamic>? openingHours;
+  final String? source;
+  final DateTime? updatedAt;
 
   Map<String, dynamic> toJson() {
     return {
@@ -181,6 +185,8 @@ class Place {
       'priceLevel': priceLevel,
       'priceCategory': priceCategory,
       'openingHours': openingHours,
+      'source': source,
+      'updatedAt': updatedAt?.toUtc().toIso8601String(),
     };
   }
 
@@ -210,6 +216,10 @@ class Place {
       openingHours: json['openingHours'] is Map
           ? Map<String, dynamic>.from(json['openingHours'] as Map)
           : null,
+      source: json['source'] as String?,
+      updatedAt: json['updatedAt'] == null
+          ? null
+          : DateTime.tryParse(json['updatedAt'] as String),
     );
   }
 }
