@@ -10,6 +10,7 @@ Optional env:
   GOOGLE_PLACE_CITY="宜蘭縣"  # 只抓單一縣市（優先於 GOOGLE_PLACE_QUERIES）
   MAX_REQUESTS=100
   TEXTSEARCH_MAX_PAGES=2
+  GOOGLE_QUERY_SCOPE=standard|expanded
   MERGE_MODE=merge|replace
 """
 from __future__ import annotations
@@ -32,6 +33,7 @@ API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY")
 
 MAX_REQUESTS = int(os.environ.get("MAX_REQUESTS", "100"))
 TEXTSEARCH_MAX_PAGES = int(os.environ.get("TEXTSEARCH_MAX_PAGES", "2"))
+QUERY_SCOPE = os.environ.get("GOOGLE_QUERY_SCOPE", "standard").strip().lower()
 SLEEP_BETWEEN = 0.2
 MERGE_MODE = os.environ.get("MERGE_MODE", "merge").strip().lower()
 REVIEWS_LIMIT = 5
@@ -62,7 +64,18 @@ TAIWAN_CITIES = [
     "連江縣",
 ]
 
-CITY_QUERY_SUFFIXES = ["景點", "旅遊景點", "觀光景點", "必去景點"]
+STANDARD_CITY_QUERY_SUFFIXES = ["景點", "旅遊景點", "觀光景點", "必去景點"]
+
+EXPANDED_CITY_QUERY_SUFFIXES = [
+    *STANDARD_CITY_QUERY_SUFFIXES,
+    "親子景點",
+    "自然景點",
+    "秘境",
+    "博物館",
+    "老街",
+    "步道",
+    "公園",
+]
 
 CITY_QUERY_ALIASES = {
     "臺北市": "台北",
@@ -371,18 +384,23 @@ def _load_queries() -> List[str]:
             out.append(value)
         return out
 
+    suffixes = (
+        EXPANDED_CITY_QUERY_SUFFIXES
+        if QUERY_SCOPE == "expanded"
+        else STANDARD_CITY_QUERY_SUFFIXES
+    )
     city = (os.environ.get("GOOGLE_PLACE_CITY") or "").strip()
     if city:
         normalized = city.replace("臺", "台")
         keyword = CITY_QUERY_ALIASES.get(city) or CITY_QUERY_ALIASES.get(normalized) or normalized
-        return _unique([f"{keyword} {suffix}" for suffix in CITY_QUERY_SUFFIXES])
+        return _unique([f"{keyword} {suffix}" for suffix in suffixes])
     raw = os.environ.get("GOOGLE_PLACE_QUERIES")
     if raw:
         return _unique([q.strip() for q in raw.split(",") if q.strip()])
 
     # 全縣市模式：先掃一輪每個縣市「景點」，再擴展後綴，確保覆蓋面。
     queries: List[str] = []
-    for suffix in CITY_QUERY_SUFFIXES:
+    for suffix in suffixes:
         for city_name in TAIWAN_CITIES:
             queries.append(f"{city_name.replace('臺', '台')} {suffix}")
     return _unique(queries)
@@ -614,6 +632,10 @@ def main() -> None:
     selected_city = (os.environ.get("GOOGLE_PLACE_CITY") or "").strip()
     single_city_mode = bool(selected_city)
 
+    print(
+        f"抓取設定: scope={QUERY_SCOPE}, max_requests={MAX_REQUESTS}, "
+        f"textsearch_pages={TEXTSEARCH_MAX_PAGES}"
+    )
     if queries:
         print(f"本次查詢目標: {', '.join(queries)}")
     if single_city_mode:

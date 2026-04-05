@@ -211,7 +211,34 @@
           <button class="primary" onclick="startCrawl()">開始爬取</button>
           <button onclick="stopCrawl()">停止</button>
         </div>
-        <div class="notice">Google 抓景點可選單一縣市；抓評論需要設定 GOOGLE_MAPS_API_KEY。</div>
+        <div id="crawlGoogleOptions" class="row hidden" style="margin-top:8px;">
+          <label style="display:flex; flex-direction:column; gap:4px; color:var(--muted); font-size:12px;">
+            查詢範圍
+            <select id="crawlQueryScope">
+              <option value="standard" selected>標準</option>
+              <option value="expanded">擴充（更多景點）</option>
+            </select>
+          </label>
+          <label style="display:flex; flex-direction:column; gap:4px; color:var(--muted); font-size:12px;">
+            最大用量
+            <select id="crawlMaxRequests">
+              <option value="100" selected>100</option>
+              <option value="150">150</option>
+              <option value="200">200</option>
+              <option value="300">300</option>
+              <option value="500">500</option>
+            </select>
+          </label>
+          <label style="display:flex; flex-direction:column; gap:4px; color:var(--muted); font-size:12px;">
+            每查詢頁數
+            <select id="crawlMaxPages">
+              <option value="2" selected>2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+            </select>
+          </label>
+        </div>
+        <div class="notice">Google 抓景點可選單一縣市，並可調高用量與頁數；抓評論需要設定 GOOGLE_MAPS_API_KEY。</div>
         <div id="crawlStatus" class="notice"></div>
         <pre id="crawlLogs" style="background:#111; color:#eaeaea; padding:12px; border-radius:10px; max-height:200px; overflow:auto; font-size:12px;"></pre>
       </section>
@@ -498,13 +525,22 @@
         const logs = document.getElementById('crawlLogs');
         const mode = document.getElementById('crawlMode').value;
         const city = document.getElementById('crawlCity').value;
+        const maxRequests = parseInt(document.getElementById('crawlMaxRequests').value, 10);
+        const maxPages = parseInt(document.getElementById('crawlMaxPages').value, 10);
+        const queryScope = document.getElementById('crawlQueryScope').value;
         status.textContent = '啟動中...';
         logs.textContent = '';
         try {
           const res = await fetch(`${api}/crawl/start`, {
             method: 'POST',
             headers: headers(),
-            body: JSON.stringify({ mode, city }),
+            body: JSON.stringify({
+              mode,
+              city,
+              maxRequests: mode === 'google_places' ? maxRequests : null,
+              maxPages: mode === 'google_places' ? maxPages : null,
+              queryScope: mode === 'google_places' ? queryScope : '',
+            }),
           });
           const data = await res.json().catch(() => ({}));
           if (!res.ok) {
@@ -525,7 +561,9 @@
       function onCrawlModeChange() {
         const mode = document.getElementById('crawlMode').value;
         const citySelect = document.getElementById('crawlCity');
+        const googleOptions = document.getElementById('crawlGoogleOptions');
         citySelect.classList.toggle('hidden', mode !== 'google_places');
+        googleOptions.classList.toggle('hidden', mode !== 'google_places');
       }
       async function stopCrawl() {
         const status = document.getElementById('crawlStatus');

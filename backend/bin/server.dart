@@ -566,6 +566,9 @@ Future<void> main(List<String> args) async {
         final body = await parseJsonBody(req);
         final mode = _asString(body, 'mode');
         final crawlCity = _asString(body, 'city').trim();
+        final maxRequests = _asInt(body, 'maxRequests');
+        final maxPages = _asInt(body, 'maxPages');
+        final queryScope = _asString(body, 'queryScope').trim().toLowerCase();
         if (_crawlJob != null && _crawlJob!.running) {
           throw ApiException(409, '已有爬取進行中');
         }
@@ -597,6 +600,15 @@ Future<void> main(List<String> args) async {
             'PYTHONIOENCODING': 'utf-8',
             if (mode == 'google_places' && crawlCity.isNotEmpty)
               'GOOGLE_PLACE_CITY': crawlCity,
+            if (mode == 'google_places' &&
+                maxRequests != null &&
+                maxRequests > 0)
+              'MAX_REQUESTS': maxRequests.clamp(50, 1000).toString(),
+            if (mode == 'google_places' && maxPages != null && maxPages > 0)
+              'TEXTSEARCH_MAX_PAGES': maxPages.clamp(1, 5).toString(),
+            if (mode == 'google_places' &&
+                (queryScope == 'standard' || queryScope == 'expanded'))
+              'GOOGLE_QUERY_SCOPE': queryScope,
           },
         );
         final job = _CrawlJob(
@@ -839,6 +851,13 @@ Future<void> main(List<String> args) async {
             const [];
         final startDate = _parseDate(body['startDate']?.toString());
         final endDate = _parseDate(body['endDate']?.toString());
+        final originCity = body['originCity']?.toString().trim();
+        final destinationCities =
+            (body['destinationCities'] as List?)
+                ?.map((e) => e.toString().trim())
+                .where((e) => e.isNotEmpty)
+                .toList() ??
+            const <String>[];
         final location = body['location']?.toString().trim();
         final people = _asInt(body, 'people');
         final budget = _asInt(body, 'budget');
@@ -862,6 +881,10 @@ Future<void> main(List<String> args) async {
           interests: interests,
           startDate: startDate,
           endDate: endDate,
+          originCity: (originCity == null || originCity.isEmpty)
+              ? null
+              : originCity,
+          destinationCities: destinationCities,
           location: (location == null || location.isEmpty) ? null : location,
           people: people,
           budget: budget,
@@ -1123,7 +1146,7 @@ String _buildLineItinerarySummary(Map<String, dynamic> plan) {
       '日期：${startDate.substring(0, 10)} 起，共 $dayCount 天',
     '景點數：$stopCount',
     if (firstStop != null && firstStop.isNotEmpty)
-      '第一站：${firstTime != null && firstTime!.isNotEmpty ? '$firstTime ' : ''}$firstStop',
+      '第一站：${firstTime != null && firstTime.isNotEmpty ? '$firstTime ' : ''}$firstStop',
     if (summary != null && summary.isNotEmpty) summary,
     '打開 App 可查看完整行程與地圖路線。',
   ];
@@ -1349,6 +1372,8 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
   required List<String> interests,
   DateTime? startDate,
   DateTime? endDate,
+  String? originCity,
+  List<String> destinationCities = const [],
   String? location,
   int? people,
   int? budget,
@@ -1359,6 +1384,13 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
   List<String> wishlistPlaces = const [],
 }) async {
   final places = await _store.listPlaces();
+  final normalizedOriginCity = originCity == null
+      ? null
+      : _normalizeLocationText(originCity);
+  final normalizedDestinationCities = destinationCities
+      .map(_normalizeLocationText)
+      .where((city) => city.isNotEmpty)
+      .toList();
   final normalizedLocation = location == null
       ? null
       : _normalizeLocationText(location);
@@ -1373,6 +1405,11 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
   }
 
   bool matchesCityScope(Place place) {
+    if (normalizedDestinationCities.isNotEmpty) {
+      return normalizedDestinationCities.any(
+        (city) => containsLoc(place.city, city) || containsLoc(place.address, city),
+      );
+    }
     final city = locationParts.$1;
     if (city == null || city.isEmpty) {
       return true;
@@ -1381,6 +1418,9 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
   }
 
   bool matchesTownshipScope(Place place) {
+    if (normalizedDestinationCities.isNotEmpty) {
+      return true;
+    }
     final township = locationParts.$2;
     if (township == null || township.isEmpty) {
       return true;
@@ -1452,6 +1492,10 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
   candidates.sort(
     (a, b) => (baseScores[b.id] ?? 0).compareTo(baseScores[a.id] ?? 0),
   );
+  final originAnchor = _resolveOriginAnchor(
+    places: places,
+    originCity: normalizedOriginCity,
+  );
 
   final totalDays = _calculateDays(startDate, endDate);
   final basePerDay = totalDays <= 2 ? 4 : 3;
@@ -1475,6 +1519,7 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
   for (var dayIndex = 0; dayIndex < totalDays; dayIndex++) {
     final dayDate = (startDate ?? DateTime.now()).add(Duration(days: dayIndex));
     final items = <Map<String, dynamic>>[];
+    Map<String, dynamic>? dayOriginTransit;
     if (remaining.isNotEmpty) {
       final adjustedScores = <String, double>{};
       for (final place in remaining) {
@@ -1514,12 +1559,30 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
         dayPicked = [remaining.first];
       }
 
-      var ordered = _orderPlacesByRoute(dayPicked, scores: adjustedScores);
+      final dayStartAnchor = dayIndex == 0 ? originAnchor : null;
+      var ordered = _orderPlacesByRoute(
+        dayPicked,
+        scores: adjustedScores,
+        startAnchor: dayStartAnchor,
+      );
+      var routeBudget = dailyMinutesBudget;
+      if (dayStartAnchor != null && ordered.isNotEmpty) {
+        routeBudget = max(
+          120,
+          dailyMinutesBudget -
+              _estimateTransitMinutesFromAnchor(
+                dayStartAnchor,
+                ordered.first,
+                weights,
+              ),
+        );
+      }
       ordered = _trimRouteToBudget(
         ordered,
         scores: adjustedScores,
-        dailyMinutesBudget: dailyMinutesBudget,
+        dailyMinutesBudget: routeBudget,
         weights: weights,
+        startAnchor: dayStartAnchor,
       );
       ordered = _orderPlacesByTimeAwareRoute(
         ordered,
@@ -1528,9 +1591,24 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
         dayStartMinute: preferredStartMinute,
         dayEndMinute: preferredEndMinute,
         dayDate: dayDate,
+        startAnchor: dayStartAnchor,
       );
 
       var currentMinute = preferredStartMinute;
+      Map<String, dynamic>? originTransit;
+      if (dayIndex == 0 && dayStartAnchor != null && ordered.isNotEmpty) {
+        originTransit = await _buildOriginTransitSegment(
+          originAnchor: dayStartAnchor,
+          originLabel: originCity ?? '出發地',
+          to: ordered.first,
+          dayDate: dayDate,
+          departureMinute: preferredStartMinute,
+          weights: weights,
+        );
+        final originMinutes = originTransit['minutes'] as int? ?? 0;
+        currentMinute = preferredStartMinute + originMinutes;
+        dayOriginTransit = originTransit;
+      }
       for (var i = 0; i < ordered.length; i++) {
         final place = ordered[i];
         items.add({
@@ -1567,14 +1645,18 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
     days.add({
       'day': dayIndex + 1,
       'date': dayDate.toIso8601String().substring(0, 10),
+      if (dayOriginTransit != null) 'originTransit': dayOriginTransit,
       'items': items,
     });
   }
 
   await _attachWeatherToDays(days);
   final insight = await _buildItineraryInsight(
+    allPlaces: places,
     days: days,
     interests: interests,
+    originCity: originCity,
+    destinationCities: destinationCities,
     location: location,
     budget: budget,
     people: people,
@@ -1585,6 +1667,8 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
     'meta': {
       'days': totalDays,
       'location': location,
+      'originCity': originCity,
+      'destinationCities': destinationCities,
       'locationMatched': candidates.isNotEmpty,
       'locationCity': locationParts.$1,
       'locationTownship': locationParts.$2,
@@ -1720,6 +1804,7 @@ List<Place> _selectDayPlacesByBackpacker({
 List<Place> _orderPlacesByRoute(
   List<Place> places, {
   required Map<String, double> scores,
+  (double lat, double lng)? startAnchor,
 }) {
   if (places.length <= 2) {
     return List<Place>.from(places);
@@ -1727,6 +1812,15 @@ List<Place> _orderPlacesByRoute(
 
   final remaining = List<Place>.from(places)
     ..sort((a, b) => (scores[b.id] ?? 0).compareTo(scores[a.id] ?? 0));
+  if (startAnchor != null) {
+    remaining.sort((a, b) {
+      final da = _distanceKm(startAnchor.$1, startAnchor.$2, a.lat, a.lng);
+      final db = _distanceKm(startAnchor.$1, startAnchor.$2, b.lat, b.lng);
+      final wa = da - (scores[a.id] ?? 0) * 0.16;
+      final wb = db - (scores[b.id] ?? 0) * 0.16;
+      return wa.compareTo(wb);
+    });
+  }
   final route = <Place>[remaining.removeAt(0)];
 
   while (remaining.isNotEmpty) {
@@ -1749,6 +1843,7 @@ List<Place> _trimRouteToBudget(
   required Map<String, double> scores,
   required int dailyMinutesBudget,
   required _PlannerWeights weights,
+  (double lat, double lng)? startAnchor,
 }) {
   var output = List<Place>.from(route);
   while (output.length > 1 &&
@@ -1768,7 +1863,11 @@ List<Place> _trimRouteToBudget(
       }
     }
     output.removeAt(removeIdx);
-    output = _orderPlacesByRoute(output, scores: scores);
+    output = _orderPlacesByRoute(
+      output,
+      scores: scores,
+      startAnchor: startAnchor,
+    );
   }
   return output;
 }
@@ -1780,6 +1879,7 @@ List<Place> _orderPlacesByTimeAwareRoute(
   required int dayStartMinute,
   required int dayEndMinute,
   required DateTime dayDate,
+  (double lat, double lng)? startAnchor,
 }) {
   if (places.length <= 1) return List<Place>.from(places);
 
@@ -1798,6 +1898,7 @@ List<Place> _orderPlacesByTimeAwareRoute(
         weights: weights,
         dayEndMinute: dayEndMinute,
         dayDate: dayDate,
+        startAnchor: startAnchor,
       );
       final cb = _timeAwareSelectionCost(
         candidate: b,
@@ -1807,6 +1908,7 @@ List<Place> _orderPlacesByTimeAwareRoute(
         weights: weights,
         dayEndMinute: dayEndMinute,
         dayDate: dayDate,
+        startAnchor: startAnchor,
       );
       return ca.compareTo(cb);
     });
@@ -1835,13 +1937,23 @@ double _timeAwareSelectionCost({
   required _PlannerWeights weights,
   required int dayEndMinute,
   required DateTime dayDate,
+  (double lat, double lng)? startAnchor,
 }) {
-  final distanceKm = previous == null
-      ? 0.0
-      : _distanceKm(previous.lat, previous.lng, candidate.lat, candidate.lng);
-  final travelMinutes = previous == null
-      ? 0
-      : _estimateTransitMinutes(previous, candidate, weights);
+  final distanceKm = previous != null
+      ? _distanceKm(previous.lat, previous.lng, candidate.lat, candidate.lng)
+      : startAnchor != null
+      ? _distanceKm(
+          startAnchor.$1,
+          startAnchor.$2,
+          candidate.lat,
+          candidate.lng,
+        )
+      : 0.0;
+  final travelMinutes = previous != null
+      ? _estimateTransitMinutes(previous, candidate, weights)
+      : startAnchor != null
+      ? max(8, (distanceKm / 35.0 * 60.0).round())
+      : 0;
   final arrivalMinute = currentMinute + travelMinutes;
   final stayMinutes = _estimateStayMinutes(candidate);
   final window = _suggestedVisitWindow(candidate, dayDate: dayDate);
@@ -1889,6 +2001,35 @@ double _timeAwareSelectionCost({
       timePreferencePenalty +
       tagPenalty -
       scoreBonus;
+}
+
+(double lat, double lng)? _resolveCityAnchor({
+  required List<Place> places,
+  required String? city,
+}) {
+  if (city == null || city.isEmpty) {
+    return null;
+  }
+  final cityPlaces = places.where((place) {
+    final placeCity = _normalizeLocationText(place.city);
+    final address = _normalizeLocationText(place.address);
+    return placeCity.contains(city) || address.contains(city);
+  }).toList();
+  if (cityPlaces.isEmpty) {
+    return null;
+  }
+  final lat = cityPlaces.map((place) => place.lat).reduce((a, b) => a + b) /
+      cityPlaces.length;
+  final lng = cityPlaces.map((place) => place.lng).reduce((a, b) => a + b) /
+      cityPlaces.length;
+  return (lat, lng);
+}
+
+(double lat, double lng)? _resolveOriginAnchor({
+  required List<Place> places,
+  required String? originCity,
+}) {
+  return _resolveCityAnchor(places: places, city: originCity);
 }
 
 (int, int, int) _suggestedVisitWindow(Place place, {DateTime? dayDate}) {
@@ -2186,6 +2327,25 @@ String _minutesToHm(int totalMinutes) {
   return '$h:$m';
 }
 
+int _estimateTransitMinutesFromAnchor(
+  (double lat, double lng) fromAnchor,
+  Place to,
+  _PlannerWeights weights,
+) {
+  final pseudoOrigin = Place(
+    id: '_origin_anchor_',
+    name: '出發地',
+    tags: const [],
+    city: '',
+    address: '',
+    lat: fromAnchor.$1,
+    lng: fromAnchor.$2,
+    description: '',
+    imageUrl: '',
+  );
+  return _estimateTransitMinutes(pseudoOrigin, to, weights);
+}
+
 int _clampInt(int value, int minValue, int maxValue) {
   return value.clamp(minValue, maxValue);
 }
@@ -2219,6 +2379,44 @@ Future<Map<String, dynamic>> _buildTransitSegment({
     return apiResult;
   }
   return _buildEstimatedTransitSegment(from: from, to: to, weights: weights);
+}
+
+Future<Map<String, dynamic>> _buildOriginTransitSegment({
+  required (double lat, double lng) originAnchor,
+  required String originLabel,
+  required Place to,
+  required DateTime dayDate,
+  required int departureMinute,
+  required _PlannerWeights weights,
+}) async {
+  final from = Place(
+    id: '_origin_${_normalizeLocationText(originLabel)}',
+    name: originLabel,
+    tags: const [],
+    city: originLabel,
+    address: originLabel,
+    lat: originAnchor.$1,
+    lng: originAnchor.$2,
+    description: '',
+    imageUrl: '',
+  );
+  final transit = await _buildTransitSegment(
+    from: from,
+    to: to,
+    dayDate: dayDate,
+    departureMinute: departureMinute,
+    weights: weights,
+  );
+  final minutes = transit['minutes'] as int? ?? 0;
+  return {
+    ...transit,
+    'fromLabel': originLabel,
+    'toLabel': to.name,
+    'departureTime': _minutesToHm(departureMinute),
+    'arrivalTime': _minutesToHm(departureMinute + minutes),
+    'detail':
+        '從$originLabel出發前往${to.name}${transit['detail']?.toString().trim().isNotEmpty == true ? '；${transit['detail']}' : ''}',
+  };
 }
 
 Future<Map<String, dynamic>?> _fetchTransitSegmentFromGoogle({
@@ -2380,16 +2578,22 @@ Map<String, dynamic> _buildEstimatedTransitSegment({
 }
 
 Future<Map<String, dynamic>> _buildItineraryInsight({
+  required List<Place> allPlaces,
   required List<Map<String, dynamic>> days,
   required List<String> interests,
+  required String? originCity,
+  required List<String> destinationCities,
   required String? location,
   required int? budget,
   required int? people,
   required String? targetPrice,
 }) async {
   final fallback = _buildRuleBasedInsight(
+    allPlaces: allPlaces,
     days: days,
     interests: interests,
+    originCity: originCity,
+    destinationCities: destinationCities,
     location: location,
     budget: budget,
     people: people,
@@ -2409,8 +2613,11 @@ Future<Map<String, dynamic>> _buildItineraryInsight({
         ? 'gpt-4o-mini'
         : _openAiModel!.trim();
     final prompt = _buildItineraryInsightPrompt(
+      allPlaces: allPlaces,
       days: days,
       interests: interests,
+      originCity: originCity,
+      destinationCities: destinationCities,
       location: location,
       budget: budget,
       people: people,
@@ -2494,8 +2701,11 @@ Future<Map<String, dynamic>> _buildItineraryInsight({
 }
 
 Map<String, dynamic> _buildRuleBasedInsight({
+  required List<Place> allPlaces,
   required List<Map<String, dynamic>> days,
   required List<String> interests,
+  required String? originCity,
+  required List<String> destinationCities,
   required String? location,
   required int? budget,
   required int? people,
@@ -2518,7 +2728,12 @@ Map<String, dynamic> _buildRuleBasedInsight({
       .map((place) => place['city']?.toString() ?? '')
       .where((city) => city.trim().isNotEmpty)
       .toSet();
-  final tips = <String>[];
+  final tips = _buildRouteFeasibilityTips(
+    allPlaces: allPlaces,
+    days: days,
+    originCity: originCity,
+    destinationCities: destinationCities,
+  );
   if (days.length > 1) {
     tips.add('先完成同區景點再往外擴，減少跨區折返。');
   }
@@ -2542,7 +2757,9 @@ Map<String, dynamic> _buildRuleBasedInsight({
   final summary = location != null && location.trim().isNotEmpty
       ? '行程以 $location 為核心，安排 $stopCount 個景點，優先同區順路。'
       : '行程共安排 $stopCount 個景點，優先同區順路與熱門度平衡。';
-  final routeReason = '透過背包式選點先挑出高價值景點，再用最短路徑排序，降低移動時間。';
+  final routeReason =
+      '透過背包式選點先挑出高價值景點，再用最短路徑排序，降低移動時間。'
+      '${tips.any((tip) => tip.contains('跨城') || tip.contains('第一天')) ? ' 若跨城距離偏遠，也會主動提醒你調整城市數量、增加天數或提早出發。' : ''}';
   final userLikeReason = [
     if (interests.isNotEmpty) '符合你的興趣標籤',
     if (people != null && people > 0) '符合$people人同行的節奏',
@@ -2562,8 +2779,11 @@ Map<String, dynamic> _buildRuleBasedInsight({
 }
 
 String _buildItineraryInsightPrompt({
+  required List<Place> allPlaces,
   required List<Map<String, dynamic>> days,
   required List<String> interests,
+  required String? originCity,
+  required List<String> destinationCities,
   required String? location,
   required int? budget,
   required int? people,
@@ -2589,6 +2809,12 @@ String _buildItineraryInsightPrompt({
     }
     daySummaries.add('Day$dayNo $date: ${names.join(' -> ')}');
   }
+  final feasibilityTips = _buildRouteFeasibilityTips(
+    allPlaces: allPlaces,
+    days: days,
+    originCity: originCity,
+    destinationCities: destinationCities,
+  );
 
   return '''
 請根據以下行程，解釋排程邏輯與使用者偏好匹配原因。
@@ -2601,17 +2827,102 @@ String _buildItineraryInsightPrompt({
     "user_like_reason": "為何使用者會喜歡",
     "tips": ["重點提醒1","重點提醒2","重點提醒3"]
   }
+- 若出發地到第一站距離偏遠，或複選旅遊城市彼此距離太遠、天數不足，請明確指出不合理之處並提出改善建議
 - 不要輸出任何 JSON 以外文字
 
 使用者條件：
+- 出發地：${originCity ?? '未指定'}
+- 旅遊城市：${destinationCities.isEmpty ? '未提供' : destinationCities.join(', ')}
 - 位置：${location ?? '未指定'}
 - 預算：${budget?.toString() ?? '未提供'}（分類：${targetPrice ?? '未提供'}）
 - 人數：${people?.toString() ?? '未提供'}
 - 興趣：${interests.isEmpty ? '未提供' : interests.join(', ')}
+- 可行性提醒：${feasibilityTips.isEmpty ? '目前沒有明顯跨城風險' : feasibilityTips.join('；')}
 
 行程：
 ${daySummaries.join('\n')}
 ''';
+}
+
+List<String> _buildRouteFeasibilityTips({
+  required List<Place> allPlaces,
+  required List<Map<String, dynamic>> days,
+  required String? originCity,
+  required List<String> destinationCities,
+}) {
+  final tips = <String>[];
+  final normalizedDestinationCities = destinationCities
+      .map(_normalizeLocationText)
+      .where((city) => city.isNotEmpty)
+      .toSet()
+      .toList();
+  final totalDays = max(1, days.length);
+  if (normalizedDestinationCities.length >= 2) {
+    if (normalizedDestinationCities.length > totalDays + 1) {
+      tips.add(
+        '這次勾選 ${normalizedDestinationCities.length} 個旅遊城市，但只有 $totalDays 天，跨城移動可能壓縮實際可玩時間，建議減少城市數量或增加旅遊天數。',
+      );
+    }
+    double maxPairKm = 0;
+    for (var i = 0; i < normalizedDestinationCities.length; i++) {
+      final a = _resolveCityAnchor(
+        places: allPlaces,
+        city: normalizedDestinationCities[i],
+      );
+      if (a == null) continue;
+      for (var j = i + 1; j < normalizedDestinationCities.length; j++) {
+        final b = _resolveCityAnchor(
+          places: allPlaces,
+          city: normalizedDestinationCities[j],
+        );
+        if (b == null) continue;
+        maxPairKm = max(
+          maxPairKm,
+          _distanceKm(a.$1, a.$2, b.$1, b.$2),
+        );
+      }
+    }
+    if (maxPairKm >= 90) {
+      tips.add(
+        '你選擇的旅遊城市彼此距離偏遠（最遠約 ${maxPairKm.toStringAsFixed(0)} km），單趟跨城時間可能較長，建議優先挑相鄰縣市、拆成兩趟旅程，或增加停留天數。',
+      );
+    }
+  }
+
+  final normalizedOriginCity = originCity == null
+      ? null
+      : _normalizeLocationText(originCity);
+  final originAnchor = _resolveCityAnchor(
+    places: allPlaces,
+    city: normalizedOriginCity,
+  );
+  final firstPlace = () {
+    if (days.isEmpty) return null;
+    final items = days.first['items'];
+    if (items is! List || items.isEmpty || items.first is! Map) return null;
+    final place = (items.first as Map)['place'];
+    return place is Map ? Map<String, dynamic>.from(place) : null;
+  }();
+  if (originAnchor != null && firstPlace != null) {
+    final firstLat = (firstPlace['lat'] as num?)?.toDouble();
+    final firstLng = (firstPlace['lng'] as num?)?.toDouble();
+    final firstName = firstPlace['name']?.toString() ?? '第一站';
+    if (firstLat != null && firstLng != null) {
+      final originKm = _distanceKm(
+        originAnchor.$1,
+        originAnchor.$2,
+        firstLat,
+        firstLng,
+      );
+      if (originKm >= 40) {
+        tips.add(
+          '出發地到第一站 $firstName 約 ${originKm.toStringAsFixed(0)} km，第一天會先花較多時間在移動上，建議提早出門，或改成更靠近出發地／進城動線的第一站。',
+        );
+      }
+    }
+  }
+
+  return tips.take(4).toList();
 }
 
 Future<Map<String, dynamic>> _buildStopExplanation(
