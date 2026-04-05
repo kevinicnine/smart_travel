@@ -33,8 +33,8 @@ class _HomePageState extends State<HomePage> {
 
   DateTime? _startDate;
   DateTime? _endDate;
-  String? _selectedCity;
-  String? _selectedTownship;
+  String? _selectedOriginCity;
+  final List<String> _selectedDestinationCities = [];
   int? _selectedBudgetTier;
   int _currentNavIndex = 0;
   bool _generatingPlan = false;
@@ -122,7 +122,7 @@ class _HomePageState extends State<HomePage> {
             infoWindow: InfoWindow(title: p.name, snippet: p.description),
             onTap: () => _selectPlace(p),
             icon: BitmapDescriptor.defaultMarkerWithHue(
-              isSelected ? BitmapDescriptor.hueAzure : BitmapDescriptor.hueRed,
+              BitmapDescriptor.hueRed,
             ),
             zIndexInt: isSelected ? 10 : 0,
           );
@@ -274,8 +274,12 @@ class _HomePageState extends State<HomePage> {
       _showMessage('結束日期必須在開始日期之後');
       return;
     }
-    if (_selectedCity == null || _selectedCity!.isEmpty) {
-      _showMessage('請先選擇城市');
+    if (_selectedOriginCity == null || _selectedOriginCity!.isEmpty) {
+      _showMessage('請先選擇出發地');
+      return;
+    }
+    if (_selectedDestinationCities.isEmpty) {
+      _showMessage('請至少選擇一個旅遊城市');
       return;
     }
 
@@ -284,15 +288,15 @@ class _HomePageState extends State<HomePage> {
     });
 
     try {
-      final location = _selectedTownship == null || _selectedTownship!.isEmpty
-          ? _selectedCity
-          : '${_selectedCity!} ${_selectedTownship!}';
+      final destinationLabel = _selectedDestinationCities.join('、');
       final plan = await _api.generateItinerary(
         interestIds: widget.selectedInterestIds,
         userId: UserState.userId,
         startDate: _startDate,
         endDate: _endDate,
-        location: location,
+        originCity: _selectedOriginCity,
+        destinationCities: _selectedDestinationCities,
+        location: destinationLabel,
         budget: _budgetToValue(_selectedBudgetTier),
       );
       await _saveGeneratedTrip(plan);
@@ -733,7 +737,6 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildPlannerCard() {
     final cityOptions = _cityOptions();
-    final townshipOptions = _townshipOptions();
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 22),
@@ -787,28 +790,17 @@ class _HomePageState extends State<HomePage> {
           ),
           const SizedBox(height: 8),
           _buildDropdownField(
-            hint: '選擇城市（必選）',
-            value: _selectedCity,
+            hint: '選擇出發地（必選）',
+            value: _selectedOriginCity,
             options: cityOptions,
             onChanged: (value) {
               setState(() {
-                _selectedCity = value;
-                _selectedTownship = null;
+                _selectedOriginCity = value;
               });
             },
           ),
           const SizedBox(height: 10),
-          _buildDropdownField(
-            hint: '選擇鄉鎮（選填）',
-            value: _selectedTownship,
-            options: townshipOptions,
-            enabled: _selectedCity != null,
-            onChanged: (value) {
-              setState(() {
-                _selectedTownship = value;
-              });
-            },
-          ),
+          _buildMultiSelectCityField(options: cityOptions),
           const SizedBox(height: 10),
           _buildBudgetSelector(),
           const SizedBox(height: 14),
@@ -914,6 +906,135 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  Widget _buildMultiSelectCityField({required List<String> options}) {
+    final hasSelection = _selectedDestinationCities.isNotEmpty;
+    return InkWell(
+      borderRadius: BorderRadius.circular(17),
+      onTap: options.isEmpty ? null : () => _openDestinationCityPicker(options),
+      child: InputDecorator(
+        decoration: InputDecoration(
+          filled: true,
+          fillColor: Colors.white,
+          hintText: '選擇旅遊城市（可複選）',
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 12,
+          ),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(17),
+            borderSide: BorderSide.none,
+          ),
+          suffixIcon: Icon(
+            Icons.keyboard_arrow_down,
+            color: Colors.black.withOpacity(0.7),
+          ),
+        ),
+        child: hasSelection
+            ? Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: _selectedDestinationCities
+                    .map(
+                      (city) => Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.88),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(
+                            color: Colors.black.withOpacity(0.08),
+                          ),
+                        ),
+                        child: Text(
+                          city,
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.black.withOpacity(0.72),
+                          ),
+                        ),
+                      ),
+                    )
+                    .toList(),
+              )
+            : Text(
+                '選擇旅遊城市（可複選）',
+                style: TextStyle(
+                  fontSize: 17,
+                  color: Colors.black.withOpacity(0.48),
+                ),
+              ),
+      ),
+    );
+  }
+
+  Future<void> _openDestinationCityPicker(List<String> options) async {
+    final tempSelected = _selectedDestinationCities.toSet();
+    final result = await showDialog<List<String>>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setStateDialog) {
+            return AlertDialog(
+              title: const Text('選擇旅遊城市'),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: ListView(
+                  shrinkWrap: true,
+                  children: options
+                      .map(
+                        (city) => CheckboxListTile(
+                          value: tempSelected.contains(city),
+                          controlAffinity: ListTileControlAffinity.leading,
+                          title: Text(city),
+                          onChanged: (checked) {
+                            setStateDialog(() {
+                              if (checked == true) {
+                                tempSelected.add(city);
+                              } else {
+                                tempSelected.remove(city);
+                              }
+                            });
+                          },
+                        ),
+                      )
+                      .toList(),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('取消'),
+                ),
+                TextButton(
+                  onPressed: () {
+                    tempSelected.clear();
+                    setStateDialog(() {});
+                  },
+                  child: const Text('清空'),
+                ),
+                ElevatedButton(
+                  onPressed: () =>
+                      Navigator.pop(context, tempSelected.toList()..sort()),
+                  child: const Text('完成'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (result == null) return;
+    setState(() {
+      _selectedDestinationCities
+        ..clear()
+        ..addAll(result);
+    });
+  }
+
   Widget _buildBudgetSelector() {
     return Row(
       children: [
@@ -962,42 +1083,10 @@ class _HomePageState extends State<HomePage> {
             .map((p) => p.city.trim())
             .where((city) => city.isNotEmpty)
             .toSet()
+            .map(_normalizeTaiwanAdminText)
             .toList()
-          ..sort();
+          ..sort(_compareTaiwanCityOrder);
     return values;
-  }
-
-  List<String> _townshipOptions() {
-    final city = _selectedCity;
-    if (city == null || city.isEmpty) {
-      return const [];
-    }
-    final values =
-        _places
-            .where((p) => p.city == city)
-            .map(_extractTownship)
-            .where((township) => township.isNotEmpty)
-            .toSet()
-            .toList()
-          ..sort();
-    return values;
-  }
-
-  String _extractTownship(_Place place) {
-    final address = place.address.trim();
-    if (address.isEmpty) return '';
-    final pattern = RegExp(r'([\u4e00-\u9fff]{1,6}[鄉鎮市區])');
-    final matches = pattern
-        .allMatches(address)
-        .map((m) => m.group(1) ?? '')
-        .where((part) => part.isNotEmpty)
-        .toList();
-    if (matches.isEmpty) return '';
-    if (matches.length == 1) return matches.first;
-    if (matches.first == place.city) {
-      return matches[1];
-    }
-    return matches.first;
   }
 
   void _syncPlannerSelections(List<_Place> places) {
@@ -1005,21 +1094,10 @@ class _HomePageState extends State<HomePage> {
         .map((p) => p.city.trim())
         .where((city) => city.isNotEmpty)
         .toSet();
-    if (_selectedCity != null && !cities.contains(_selectedCity)) {
-      _selectedCity = null;
-      _selectedTownship = null;
-      return;
+    if (_selectedOriginCity != null && !cities.contains(_selectedOriginCity)) {
+      _selectedOriginCity = null;
     }
-    if (_selectedCity != null && _selectedTownship != null) {
-      final townships = places
-          .where((p) => p.city == _selectedCity)
-          .map(_extractTownship)
-          .where((township) => township.isNotEmpty)
-          .toSet();
-      if (!townships.contains(_selectedTownship)) {
-        _selectedTownship = null;
-      }
-    }
+    _selectedDestinationCities.removeWhere((city) => !cities.contains(city));
   }
 
   int? _budgetToValue(int? tier) {
@@ -1569,6 +1647,49 @@ String _normalizeTaiwanAdminText(String input) {
     sb.write(charMap[ch] ?? ch);
   }
   return sb.toString();
+}
+
+const List<String> _taiwanCityNorthToSouth = <String>[
+  '基隆市',
+  '臺北市',
+  '新北市',
+  '桃園市',
+  '新竹市',
+  '新竹縣',
+  '苗栗縣',
+  '臺中市',
+  '彰化縣',
+  '南投縣',
+  '雲林縣',
+  '嘉義市',
+  '嘉義縣',
+  '臺南市',
+  '高雄市',
+  '屏東縣',
+  '宜蘭縣',
+  '花蓮縣',
+  '臺東縣',
+  '澎湖縣',
+  '金門縣',
+  '連江縣',
+];
+
+int _compareTaiwanCityOrder(String a, String b) {
+  final normalizedA = _normalizeTaiwanAdminText(a);
+  final normalizedB = _normalizeTaiwanAdminText(b);
+  final indexA = _taiwanCityNorthToSouth.indexOf(normalizedA);
+  final indexB = _taiwanCityNorthToSouth.indexOf(normalizedB);
+
+  if (indexA != -1 && indexB != -1) {
+    return indexA.compareTo(indexB);
+  }
+  if (indexA != -1) {
+    return -1;
+  }
+  if (indexB != -1) {
+    return 1;
+  }
+  return normalizedA.compareTo(normalizedB);
 }
 
 class _SavedTrip {
