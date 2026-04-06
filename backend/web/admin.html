@@ -76,12 +76,21 @@
         width: 100%;
         border-collapse: collapse;
         margin-top: 12px;
+        min-width: 1280px;
       }
       th, td {
         text-align: left;
         padding: 10px;
         border-bottom: 1px solid #eee;
         font-size: 13px;
+        vertical-align: top;
+        line-height: 1.45;
+        word-break: break-word;
+      }
+      .table-scroll {
+        overflow-x: auto;
+        overflow-y: visible;
+        width: 100%;
       }
       .muted { color: var(--muted); }
       .hidden { display: none; }
@@ -166,23 +175,25 @@
           <button class="primary" onclick="loadPlaces()">查詢</button>
           <button onclick="openEditor()">新增景點</button>
         </div>
-        <table>
-          <thead>
-            <tr>
-              <th>名稱</th>
-              <th>來源 / 更新</th>
-              <th>完整度</th>
-              <th>標籤</th>
-              <th>評分</th>
-              <th>價格</th>
-              <th>營業時間</th>
-              <th>城市</th>
-              <th>地址</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody id="placesBody"></tbody>
-        </table>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th style="min-width:160px;">名稱</th>
+                <th style="min-width:160px;">來源 / 更新</th>
+                <th style="min-width:150px;">完整度</th>
+                <th style="min-width:180px;">標籤</th>
+                <th style="min-width:90px;">評分</th>
+                <th style="min-width:70px;">價格</th>
+                <th style="min-width:150px;">營業時間</th>
+                <th style="min-width:90px;">城市</th>
+                <th style="min-width:220px;">地址</th>
+                <th style="min-width:120px;">操作</th>
+              </tr>
+            </thead>
+            <tbody id="placesBody"></tbody>
+          </table>
+        </div>
       </section>
 
       <section id="users" class="card hidden">
