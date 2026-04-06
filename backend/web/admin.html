@@ -155,6 +155,14 @@
             <option value="name">名稱排序</option>
             <option value="city">城市排序</option>
           </select>
+          <label style="display:flex; align-items:center; gap:6px; color:var(--muted); font-size:13px;">
+            <input id="onlyRecent" type="checkbox" onchange="loadPlaces()" />
+            只看剛更新
+          </label>
+          <label style="display:flex; align-items:center; gap:6px; color:var(--muted); font-size:13px;">
+            <input id="onlyIncomplete" type="checkbox" onchange="loadPlaces()" />
+            只看資料不完整
+          </label>
           <button class="primary" onclick="loadPlaces()">查詢</button>
           <button onclick="openEditor()">新增景點</button>
         </div>
@@ -420,7 +428,9 @@
         const q = document.getElementById('q').value;
         const category = document.getElementById('category').value;
         const sort = document.getElementById('sort').value;
-        const url = `${api}/places?q=${encodeURIComponent(q)}&category=${encodeURIComponent(category)}&sort=${encodeURIComponent(sort)}`;
+        const recent = document.getElementById('onlyRecent').checked;
+        const incomplete = document.getElementById('onlyIncomplete').checked;
+        const url = `${api}/places?q=${encodeURIComponent(q)}&category=${encodeURIComponent(category)}&sort=${encodeURIComponent(sort)}&recent=${recent ? '1' : '0'}&incomplete=${incomplete ? '1' : '0'}`;
         const res = await fetch(url, { headers: headers() });
         const data = await res.json().catch(() => ({}));
         const body = document.getElementById('placesBody');

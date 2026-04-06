@@ -250,6 +250,12 @@ Future<void> main(List<String> args) async {
         final category = req.url.queryParameters['category']?.trim();
         final tagsParam = req.url.queryParameters['tags']?.trim();
         final sort = req.url.queryParameters['sort']?.trim();
+        final onlyRecent =
+            req.url.queryParameters['recent'] == '1' ||
+            req.url.queryParameters['recent'] == 'true';
+        final onlyIncomplete =
+            req.url.queryParameters['incomplete'] == '1' ||
+            req.url.queryParameters['incomplete'] == 'true';
         var places = data.places;
         if (query != null && query.isNotEmpty) {
           places = places
@@ -270,8 +276,14 @@ Future<void> main(List<String> args) async {
                 .toSet();
         if (combinedTags.isNotEmpty) {
           places = places
-              .where((p) => p.tags.any((tag) => combinedTags.contains(tag)))
+                .where((p) => p.tags.any((tag) => combinedTags.contains(tag)))
               .toList();
+        }
+        if (onlyRecent) {
+          places = places.where(_isRecentPlaceUpdate).toList();
+        }
+        if (onlyIncomplete) {
+          places = places.where(_isPlaceIncomplete).toList();
         }
         if (sort == 'latest') {
           places = _sortPlacesByLatest(places);
@@ -1394,6 +1406,29 @@ List<Place> _sortPlacesByOldest(List<Place> places) {
     });
 }
 
+bool _isRecentPlaceUpdate(Place place) {
+  final updatedAt = place.updatedAt;
+  if (updatedAt == null) return false;
+  return DateTime.now().toUtc().difference(updatedAt.toUtc()) <=
+      const Duration(hours: 24);
+}
+
+bool _isPlaceIncomplete(Place place) {
+  final hasPrice = place.priceLevel != null ||
+      (place.priceCategory != null && place.priceCategory!.trim().isNotEmpty);
+  final hasOpeningHours = place.openingHours != null &&
+      place.openingHours!.isNotEmpty;
+  final hasLatLng = place.lat != 0 && place.lng != 0;
+  return place.imageUrl.trim().isEmpty ||
+      place.rating == null ||
+      place.userRatingsTotal == null ||
+      !hasPrice ||
+      !hasOpeningHours ||
+      place.city.trim().isEmpty ||
+      place.address.trim().isEmpty ||
+      !hasLatLng;
+}
+
 DateTime? _parseDateTimeValue(dynamic raw) {
   if (raw == null) return null;
   if (raw is DateTime) return raw.toUtc();
@@ -1654,30 +1689,90 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
         currentMinute = preferredStartMinute + originMinutes;
         dayOriginTransit = originTransit;
       }
+      var hadLunchBreak = false;
+      var hadDinnerBreak = false;
       for (var i = 0; i < ordered.length; i++) {
         final place = ordered[i];
+        final nextPlace = i < ordered.length - 1 ? ordered[i + 1] : null;
+
+        if (!hadLunchBreak && _shouldInsertMealBreak(currentMinute, 'lunch')) {
+          items.add(
+            _buildMealBreakItem(
+              dayIndex: dayIndex,
+              mealType: 'lunch',
+              startMinute: currentMinute,
+              city: place.city,
+            ),
+          );
+          currentMinute += _mealBreakDurationMinutes('lunch');
+          hadLunchBreak = true;
+        }
+        if (!hadDinnerBreak && _shouldInsertMealBreak(currentMinute, 'dinner')) {
+          items.add(
+            _buildMealBreakItem(
+              dayIndex: dayIndex,
+              mealType: 'dinner',
+              startMinute: currentMinute,
+              city: place.city,
+            ),
+          );
+          currentMinute += _mealBreakDurationMinutes('dinner');
+          hadDinnerBreak = true;
+        }
+
+        final stayMinutes = _estimateStayMinutes(place);
+        final departureMinute = currentMinute + stayMinutes;
         items.add({
           'time': _minutesToHm(currentMinute),
+          'endTime': _minutesToHm(departureMinute),
+          'durationMinutes': stayMinutes,
           'place': _placeToPlanJson(place),
         });
         globallyPicked.add(place);
-        final stayMinutes = _estimateStayMinutes(place);
-        final departureMinute = currentMinute + stayMinutes;
-        if (i < ordered.length - 1) {
+
+        var nextMinute = departureMinute;
+        if (!hadLunchBreak &&
+            _shouldInsertMealBreak(departureMinute, 'lunch')) {
+          items.add(
+            _buildMealBreakItem(
+              dayIndex: dayIndex,
+              mealType: 'lunch',
+              startMinute: departureMinute,
+              city: place.city,
+            ),
+          );
+          nextMinute += _mealBreakDurationMinutes('lunch');
+          hadLunchBreak = true;
+        }
+        if (!hadDinnerBreak &&
+            _shouldInsertMealBreak(nextMinute, 'dinner')) {
+          items.add(
+            _buildMealBreakItem(
+              dayIndex: dayIndex,
+              mealType: 'dinner',
+              startMinute: nextMinute,
+              city: place.city,
+            ),
+          );
+          nextMinute += _mealBreakDurationMinutes('dinner');
+          hadDinnerBreak = true;
+        }
+
+        if (nextPlace != null) {
           final transit = await _buildTransitSegment(
             from: ordered[i],
-            to: ordered[i + 1],
+            to: nextPlace,
             dayDate: dayDate,
-            departureMinute: departureMinute,
+            departureMinute: nextMinute,
             weights: weights,
           );
           items.last['transitToNext'] = transit;
-          currentMinute = departureMinute + (transit['minutes'] as int? ?? 0);
+          currentMinute = nextMinute + (transit['minutes'] as int? ?? 0);
           if (currentMinute > preferredEndMinute) {
             currentMinute = preferredEndMinute;
           }
         } else {
-          currentMinute = departureMinute;
+          currentMinute = nextMinute;
         }
       }
 
@@ -2318,26 +2413,111 @@ double _removalTravelDeltaKm(List<Place> route, int index) {
 int _estimateStayMinutes(Place place) {
   var minutes = 70;
   final tags = place.tags.map((e) => e.toLowerCase()).toSet();
-  if (tags.contains('national_park') || tags.contains('lake_river')) {
+  final text =
+      '${place.name} ${place.description} ${place.tags.join(' ')}'.toLowerCase();
+
+  bool hasAny(Iterable<String> values) =>
+      values.any((value) => tags.contains(value) || text.contains(value));
+
+  if (hasAny(['theme_park', 'amusement', 'aquarium', 'zoo'])) {
+    minutes += 70;
+  }
+  if (hasAny([
+    'national_park',
+    'lake_river',
+    'beach',
+    'trail',
+    'hiking',
+    'forest',
+    'water_sport',
+    'mountain',
+  ])) {
+    minutes += 55;
+  }
+  if (hasAny(['museum', 'heritage', 'creative_park', 'gallery', 'exhibition'])) {
     minutes += 35;
   }
-  if (tags.contains('museum') ||
-      tags.contains('heritage') ||
-      tags.contains('creative_park')) {
+  if (hasAny(['night_market', 'street_food', 'market', 'food'])) {
+    minutes += 35;
+  }
+  if (hasAny(['temple', 'church', 'memorial', 'historic'])) {
     minutes += 20;
   }
-  if (tags.contains('street_food') || tags.contains('night_market')) {
+  if (hasAny(['campus', 'park', 'garden'])) {
     minutes += 15;
   }
-  if ((place.userRatingsTotal ?? 0) >= 10000) {
-    minutes += 20;
-  } else if ((place.userRatingsTotal ?? 0) <= 200) {
+
+  final rating = place.rating ?? 0;
+  final reviews = place.userRatingsTotal ?? 0;
+  if (reviews >= 10000) {
+    minutes += 25;
+  } else if (reviews >= 3000) {
+    minutes += 15;
+  } else if (reviews <= 150) {
+    minutes -= 10;
+  }
+  if (rating >= 4.7) {
+    minutes += 10;
+  } else if (rating > 0 && rating <= 3.8) {
     minutes -= 10;
   }
   if (place.description.trim().isNotEmpty) {
-    minutes += 5;
+    minutes += 8;
   }
-  return minutes.clamp(45, 180).toInt();
+  return minutes.clamp(40, 240).toInt();
+}
+
+int _mealBreakDurationMinutes(String mealType) {
+  return switch (mealType) {
+    'lunch' => 60,
+    'dinner' => 75,
+    _ => 45,
+  };
+}
+
+bool _shouldInsertMealBreak(int currentMinute, String mealType) {
+  final (windowStart, latestRecommended) = switch (mealType) {
+    'lunch' => (11 * 60 + 45, 14 * 60),
+    'dinner' => (17 * 60 + 30, 20 * 60),
+    _ => (12 * 60, 19 * 60),
+  };
+  return currentMinute >= windowStart && currentMinute <= latestRecommended;
+}
+
+Map<String, dynamic> _buildMealBreakItem({
+  required int dayIndex,
+  required String mealType,
+  required int startMinute,
+  required String city,
+}) {
+  final durationMinutes = _mealBreakDurationMinutes(mealType);
+  final start = _minutesToHm(startMinute);
+  final end = _minutesToHm(startMinute + durationMinutes);
+  final isLunch = mealType == 'lunch';
+  return {
+    'time': start,
+    'endTime': end,
+    'durationMinutes': durationMinutes,
+    'place': {
+      'id': 'meal-${mealType}-${dayIndex + 1}-$start',
+      'name': isLunch ? '午餐時間' : '晚餐時間',
+      'city': city,
+      'address': '',
+      'description': isLunch
+          ? '預留午餐與短暫休息時間，避免上午景點連續壓縮體力。'
+          : '預留晚餐與休息時間，讓晚間行程節奏更合理。',
+      'lat': null,
+      'lng': null,
+      'tags': ['meal_break', mealType],
+      'rating': null,
+      'userRatingsTotal': null,
+      'priceLevel': null,
+      'priceCategory': null,
+      'imageUrl': '',
+      'openingHours': null,
+      'kind': 'meal_break',
+    },
+  };
 }
 
 int _estimateTransitMinutes(Place from, Place to, _PlannerWeights weights) {
@@ -2782,6 +2962,7 @@ Map<String, dynamic> _buildRuleBasedInsight({
   if (days.length > 1) {
     tips.add('先完成同區景點再往外擴，減少跨區折返。');
   }
+  tips.add('已預留午餐與晚餐的緩衝時間，避免整天只是在趕景點。');
   if (targetPrice != null) {
     final label = switch (targetPrice) {
       'low' => '低預算',
@@ -2803,7 +2984,7 @@ Map<String, dynamic> _buildRuleBasedInsight({
       ? '行程以 $location 為核心，安排 $stopCount 個景點，優先同區順路。'
       : '行程共安排 $stopCount 個景點，優先同區順路與熱門度平衡。';
   final routeReason =
-      '透過背包式選點先挑出高價值景點，再用最短路徑排序，降低移動時間。'
+      '透過背包式選點先挑出高價值景點，再用最短路徑排序，並按景點類型、熱門度與停留價值估算每站時間，降低移動時間。'
       '${tips.any((tip) => tip.contains('跨城') || tip.contains('第一天')) ? ' 若跨城距離偏遠，也會主動提醒你調整城市數量、增加天數或提早出發。' : ''}';
   final userLikeReason = [
     if (interests.isNotEmpty) '符合你的興趣標籤',
@@ -2873,6 +3054,7 @@ String _buildItineraryInsightPrompt({
     "tips": ["重點提醒1","重點提醒2","重點提醒3"]
   }
 - 若出發地到第一站距離偏遠，或複選旅遊城市彼此距離太遠、天數不足，請明確指出不合理之處並提出改善建議
+- 請說明午餐/晚餐保留時段、景點停留時長估算依據，以及行程是否過趕
 - 不要輸出任何 JSON 以外文字
 
 使用者條件：
@@ -3616,6 +3798,7 @@ Map<String, dynamic> _placeToPlanJson(Place place) {
     'priceCategory': place.priceCategory,
     'imageUrl': place.imageUrl,
     'openingHours': place.openingHours,
+    'kind': 'place',
   };
 }
 
