@@ -138,6 +138,36 @@ CITY_HINTS = [
     "連江縣",
 ]
 
+CITY_CANONICAL_MAP = {
+    "台北市": "臺北市",
+    "臺北市": "臺北市",
+    "新北市": "新北市",
+    "基隆市": "基隆市",
+    "桃園市": "桃園市",
+    "新竹市": "新竹市",
+    "新竹縣": "新竹縣",
+    "苗栗縣": "苗栗縣",
+    "台中市": "臺中市",
+    "臺中市": "臺中市",
+    "彰化縣": "彰化縣",
+    "南投縣": "南投縣",
+    "雲林縣": "雲林縣",
+    "嘉義市": "嘉義市",
+    "嘉義縣": "嘉義縣",
+    "台南市": "臺南市",
+    "臺南市": "臺南市",
+    "高雄市": "高雄市",
+    "屏東縣": "屏東縣",
+    "宜蘭縣": "宜蘭縣",
+    "花蓮縣": "花蓮縣",
+    "台東縣": "臺東縣",
+    "臺東縣": "臺東縣",
+    "澎湖縣": "澎湖縣",
+    "金門縣": "金門縣",
+    "連江縣": "連江縣",
+    "馬祖": "連江縣",
+}
+
 # tag keywords (kw -> tag)
 INTEREST_KEYWORDS = [
     ("觀光工廠", "creative_park"),
@@ -333,6 +363,40 @@ def _extract_city_from_components(components: list[dict]) -> str:
     return ""
 
 
+def _normalize_city_name(value: str) -> str:
+    if not value:
+        return ""
+    normalized = value.strip().replace("臺", "台")
+    return CITY_CANONICAL_MAP.get(normalized, value.strip())
+
+
+def _city_variants(value: str) -> set[str]:
+    canonical = _normalize_city_name(value)
+    if not canonical:
+        return set()
+    variants = {
+        canonical,
+        canonical.replace("臺", "台"),
+    }
+    alias = CITY_QUERY_ALIASES.get(canonical) or CITY_QUERY_ALIASES.get(canonical.replace("臺", "台"))
+    if alias:
+        variants.add(alias)
+    if canonical.endswith(("市", "縣")):
+        variants.add(canonical[:-1])
+        variants.add(canonical.replace("臺", "台")[:-1])
+    return {item for item in variants if item}
+
+
+def _matches_selected_city(selected_city: str, city: str, address: str) -> bool:
+    normalized_selected = _normalize_city_name(selected_city)
+    if not normalized_selected:
+        return True
+    if city and _normalize_city_name(city) == normalized_selected:
+        return True
+    normalized_address = (address or "").replace("臺", "台")
+    return any(variant.replace("臺", "台") in normalized_address for variant in _city_variants(normalized_selected))
+
+
 def _extract_tags(text: str, types: list[str]) -> list[str]:
     tags = set()
     for kw, tag in INTEREST_KEYWORDS:
@@ -446,7 +510,10 @@ def _place_details(place_id: str) -> Dict[str, Any] | None:
             ),
         },
     )
-    if data.get("status") != "OK":
+    status = data.get("status")
+    if status != "OK":
+        if status not in {"ZERO_RESULTS", "NOT_FOUND"}:
+            print(f"details 狀態: {place_id} -> {status}")
         return None
     return data.get("result") or {}
 
@@ -649,6 +716,7 @@ def main() -> None:
     seen = set()
     request_count = 0
     skipped_complete = 0
+    skipped_outside_city = 0
     selected_city = (os.environ.get("GOOGLE_PLACE_CITY") or "").strip()
     single_city_mode = bool(selected_city)
 
@@ -851,6 +919,9 @@ def main() -> None:
                 full_address = details.get("formatted_address") or address
                 components = details.get("address_components") or []
                 city = _extract_city_from_components(components) or _extract_city(full_address)
+                if single_city_mode and not _matches_selected_city(selected_city, city, full_address):
+                    skipped_outside_city += 1
+                    continue
                 photos = details.get("photos") or item.get("photos") or []
                 photo_ref = ""
                 if isinstance(photos, list) and photos:
@@ -911,15 +982,17 @@ def main() -> None:
 
         print(
             f"完成查詢: {query}, 分頁 {page_no}/{max(1, TEXTSEARCH_MAX_PAGES)}, "
-            f"累積 {len(output)} 筆, 用量 {request_count}/{MAX_REQUESTS}, 跳過完整資料 {skipped_complete} 筆"
+            f"累積 {len(output)} 筆, 用量 {request_count}/{MAX_REQUESTS}, "
+            f"跳過完整資料 {skipped_complete} 筆, 跳過非目標縣市 {skipped_outside_city} 筆"
         )
         time.sleep(SLEEP_BETWEEN)
 
-    # Backfill metadata for older complete records so admin sorting/source badges
-    # become meaningful after one rerun, even when no new Google fields were needed.
+    # Backfill only the source marker for legacy records.
+    # Do not stamp updatedAt here, otherwise "只看剛更新" 會把沒有被這次爬蟲碰到的舊資料
+    # 也誤判成剛更新，讓單縣市結果看起來像混進其他縣市。
     for place in existing_places:
-        if isinstance(place, dict) and not _has_metadata(place):
-            _stamp_metadata(place, source=str(place.get("source") or "google_places"))
+        if isinstance(place, dict) and not place.get("source"):
+            place["source"] = "google_places"
 
     merged_places, merge_stats = _merge_places(existing_places, output)
     db["places"] = merged_places
@@ -940,7 +1013,8 @@ def main() -> None:
     print(
         f"完成，寫入 {DB_PATH}，來源 {len(output)} 筆，"
         f"新增 {merge_stats['added']}／更新 {merge_stats['updated']}／未變更 {merge_stats['unchanged']}，"
-        f"查詢中跳過完整資料 {skipped_complete} 筆"
+        f"查詢中跳過完整資料 {skipped_complete} 筆，"
+        f"跳過非目標縣市 {skipped_outside_city} 筆"
     )
 
 
