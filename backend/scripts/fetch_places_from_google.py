@@ -1042,10 +1042,10 @@ def _enrich_place_from_details(place: Dict[str, Any], details: Dict[str, Any]) -
     if place.get("userRatingsTotal") is None and rating_total is not None:
         place["userRatingsTotal"] = int(rating_total)
         changed = True
-    if place.get("priceLevel") is None and price_level_value is not None:
+    if price_level_value is not None and place.get("priceLevel") != price_level_value:
         place["priceLevel"] = price_level_value
         changed = True
-    if not place.get("priceCategory") and price_category:
+    if price_category and place.get("priceCategory") != price_category:
         place["priceCategory"] = price_category
         changed = True
     if not place.get("description") and editorial:
@@ -1234,10 +1234,10 @@ def main() -> None:
             if place.get("userRatingsTotal") is None and rating_total is not None:
                 place["userRatingsTotal"] = int(rating_total)
                 changed = True
-            if place.get("priceLevel") is None and price_level_value is not None:
+            if price_level_value is not None and place.get("priceLevel") != price_level_value:
                 place["priceLevel"] = price_level_value
                 changed = True
-            if not place.get("priceCategory") and price_category:
+            if price_category and place.get("priceCategory") != price_category:
                 place["priceCategory"] = price_category
                 changed = True
             if not place.get("description") and editorial:

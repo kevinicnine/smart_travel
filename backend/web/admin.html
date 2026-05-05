@@ -393,17 +393,6 @@
         return Date.now() - time <= 24 * 60 * 60 * 1000;
       }
       function inferPriceCategory(place) {
-        const explicitCategory = String(place.priceCategory || '').trim().toLowerCase();
-        if (explicitCategory) return explicitCategory;
-        if (place.priceLevel != null && place.priceLevel !== '') {
-          const level = Number(place.priceLevel);
-          if (Number.isFinite(level)) {
-            if (level <= 0) return 'free';
-            if (level <= 1) return 'low';
-            if (level === 2) return 'mid';
-            return 'high';
-          }
-        }
         const tags = Array.isArray(place.tags)
           ? place.tags.map(tag => String(tag || '').trim().toLowerCase())
           : [];

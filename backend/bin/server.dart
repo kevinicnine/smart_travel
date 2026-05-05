@@ -5347,16 +5347,22 @@ int? _inferPriceLevelFromPlace(Place place) {
 }
 
 int? _effectivePriceLevel(Place place) {
-  return place.priceLevel ?? _inferPriceLevelFromPlace(place);
+  final inferred = _inferPriceLevelFromPlace(place);
+  if (inferred != null) {
+    return inferred;
+  }
+  return place.priceLevel;
 }
 
 String? _effectivePriceCategory(Place place) {
-  final explicit = place.priceCategory;
-  if (explicit != null && explicit.trim().isNotEmpty) {
-    return explicit;
-  }
   final level = _effectivePriceLevel(place);
-  if (level == null) return null;
+  if (level == null) {
+    final explicit = place.priceCategory;
+    if (explicit != null && explicit.trim().isNotEmpty) {
+      return explicit;
+    }
+    return null;
+  }
   if (level <= 0) return 'free';
   if (level <= 1) return 'low';
   return 'high';
