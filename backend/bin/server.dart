@@ -957,9 +957,11 @@ Future<void> main(List<String> args) async {
       .addMiddleware(_corsMiddleware())
       .addHandler(router);
 
-  final server = await shelf_io.serve(pipeline, InternetAddress.anyIPv4, port);
+  final server = await shelf_io.serve(pipeline, '0.0.0.0', port);
   server.autoCompress = true;
-  _log.info('Backend API 已啟動，正在監聽 http://localhost:${server.port}');
+  _log.info(
+    'Backend API 已啟動，正在監聽 http://${server.address.address}:${server.port}',
+  );
 }
 
 String _normalizeText(String input) {
