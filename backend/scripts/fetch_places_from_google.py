@@ -658,19 +658,25 @@ def _photo_url(photo_ref: str) -> str:
 def _price_category(price_level: int | None) -> str | None:
     if price_level is None:
         return None
+    if price_level <= 0:
+        return "free"
     if price_level <= 1:
         return "low"
-    if price_level == 2:
-        return "mid"
     return "high"
 
 
-FREE_PRICE_KEYWORDS = (
-    "免費",
+FREE_TICKET_KEYWORDS = (
     "免門票",
-    "免收費",
+    "免收門票",
+    "免費入場",
+    "免費參觀",
     "自由入場",
-    "free",
+    "入場免費",
+    "門票免費",
+    "票價免費",
+    "參觀免費",
+    "free admission",
+    "free entry",
 )
 
 PAID_TICKET_KEYWORDS = (
@@ -702,6 +708,76 @@ HIGH_PRICE_VENUE_KEYWORDS = (
     "摩天輪",
     "台北101",
     "臺北101",
+)
+
+HIGH_PRICE_TAGS = {
+    "amusement_park",
+    "aquarium",
+    "zoo",
+    "rv_park",
+    "campground",
+    "spa",
+}
+
+FREE_DEFAULT_TAGS = {
+    "lake_river",
+    "beach",
+    "national_park",
+    "waterfall",
+    "temple",
+    "night_market",
+}
+
+FREE_DEFAULT_TYPES = {
+    "park",
+    "beach",
+    "hiking_area",
+}
+
+FREE_DEFAULT_KEYWORDS = (
+    "公園",
+    "老街",
+    "步道",
+    "古道",
+    "海灘",
+    "沙灘",
+    "海岸",
+    "湖",
+    "溪",
+    "瀑布",
+    "河濱",
+    "濕地",
+    "夜市",
+    "廟",
+    "寺",
+)
+
+LOW_PRICE_TAGS = {
+    "museum",
+    "heritage",
+    "creative_park",
+    "handcraft_shop",
+}
+
+LOW_PRICE_TYPES = {
+    "museum",
+    "art_gallery",
+    "tourist_attraction",
+}
+
+LOW_PRICE_KEYWORDS = (
+    "博物館",
+    "美術館",
+    "文學館",
+    "文化館",
+    "故事館",
+    "紀念館",
+    "教育園區",
+    "園區",
+    "展覽館",
+    "古蹟",
+    "觀光工廠",
+    "文創",
 )
 
 OPEN_ALL_DAY_KEYWORDS = (
@@ -766,8 +842,8 @@ def _infer_price_level(
                 return amount
         return None
 
-    if any(keyword in haystack for keyword in FREE_PRICE_KEYWORDS):
-        return 0
+    def has_explicit_free_ticket_signal() -> bool:
+        return any(keyword in haystack for keyword in FREE_TICKET_KEYWORDS)
 
     explicit_amount = extract_explicit_ticket_amount()
     if explicit_amount is not None:
@@ -775,19 +851,30 @@ def _infer_price_level(
             return 3
         return 1
 
+    if has_explicit_free_ticket_signal():
+        return 0
+
     has_explicit_paid_signal = any(keyword in haystack for keyword in PAID_TICKET_KEYWORDS)
     if has_explicit_paid_signal:
-        if type_set.intersection(
-            {
-                "amusement_park",
-                "aquarium",
-                "zoo",
-                "rv_park",
-                "campground",
-                "spa",
-            }
-        ) or any(keyword in haystack for keyword in HIGH_PRICE_VENUE_KEYWORDS):
+        if type_set.intersection(HIGH_PRICE_TAGS) or any(
+            keyword in haystack for keyword in HIGH_PRICE_VENUE_KEYWORDS
+        ):
             return 3
+        return 1
+
+    if type_set.intersection(HIGH_PRICE_TAGS) or any(
+        keyword in haystack for keyword in HIGH_PRICE_VENUE_KEYWORDS
+    ):
+        return 3
+
+    if type_set.intersection(FREE_DEFAULT_TYPES) or type_set.intersection(FREE_DEFAULT_TAGS):
+        return 0
+    if any(keyword in haystack for keyword in FREE_DEFAULT_KEYWORDS):
+        return 0
+
+    if type_set.intersection(LOW_PRICE_TYPES) or type_set.intersection(LOW_PRICE_TAGS):
+        return 1
+    if any(keyword in haystack for keyword in LOW_PRICE_KEYWORDS):
         return 1
 
     return None

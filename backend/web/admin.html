@@ -404,6 +404,7 @@
           tags.join(' '),
         ].join(' ').toLowerCase();
         const hasAny = (keywords) => keywords.some(keyword => haystack.includes(keyword));
+        const hasTag = (values) => tags.some(tag => values.includes(tag));
         const extractExplicitTicketAmount = () => {
           const patterns = [
             /(?:nt\$|twd|\$)\s*(\d{2,5})/i,
@@ -421,12 +422,24 @@
           }
           return null;
         };
-        if (hasAny(['免費', '免門票', '免收費', '自由入場', 'free'])) {
-          return 'free';
-        }
         const explicitAmount = extractExplicitTicketAmount();
         if (explicitAmount != null) {
           return explicitAmount >= 300 ? 'high' : 'low';
+        }
+        if (hasAny([
+          '免門票',
+          '免收門票',
+          '免費入場',
+          '免費參觀',
+          '自由入場',
+          '入場免費',
+          '門票免費',
+          '票價免費',
+          '參觀免費',
+          'free admission',
+          'free entry',
+        ])) {
+          return 'free';
         }
         const hasExplicitPaidSignal = hasAny([
           '門票',
@@ -437,22 +450,55 @@
           '兒童票',
           '入園費',
           '入館費',
+          '入場費',
+          '購票',
+          '售票',
           '售價',
           '收費',
         ]);
         if (!hasExplicitPaidSignal) {
-          return 'free';
+          if (
+            hasTag(['amusement_park', 'aquarium', 'zoo', 'rv_park', 'campground', 'spa']) ||
+            hasAny(['遊樂園', '主題樂園', '樂園', '水族館', '動物園', '海洋公園', '纜車', '渡假村', '觀景台', '摩天輪', '台北101', '臺北101'])
+          ) {
+            return 'high';
+          }
+          if (
+            hasTag(['lake_river', 'beach', 'national_park', 'waterfall', 'temple', 'night_market']) ||
+            hasAny(['公園', '老街', '步道', '古道', '海灘', '沙灘', '海岸', '湖', '溪', '瀑布', '河濱', '濕地', '夜市', '廟', '寺'])
+          ) {
+            return 'free';
+          }
+          if (
+            hasTag(['museum', 'heritage', 'creative_park', 'handcraft_shop']) ||
+            hasAny(['博物館', '美術館', '文學館', '文化館', '故事館', '紀念館', '教育園區', '園區', '展覽館', '古蹟', '觀光工廠', '文創'])
+          ) {
+            return 'low';
+          }
+          return null;
         }
         if (
-          tags.some(tag => ['amusement_park', 'aquarium', 'zoo'].includes(tag)) ||
+          hasTag(['amusement_park', 'aquarium', 'zoo', 'rv_park', 'campground', 'spa']) ||
           hasAny(['遊樂園', '主題樂園', '樂園', '水族館', '動物園', '海洋公園', '纜車', '渡假村', '觀景台', '摩天輪', '台北101', '臺北101'])
         ) {
           return 'high';
         }
         return 'low';
       }
+
+      function effectivePriceCategory(place) {
+        const inferred = inferPriceCategory(place);
+        if (inferred) return inferred;
+        if (place.priceCategory === 'free' || place.priceLevel === 0) {
+          return null;
+        }
+        if (typeof place.priceCategory === 'string' && place.priceCategory.trim()) {
+          return place.priceCategory.trim();
+        }
+        return null;
+      }
       function computeCompleteness(place) {
-        const hasPrice = !!inferPriceCategory(place);
+        const hasPrice = !!effectivePriceCategory(place);
         const checks = [
           ['圖片', !!place.imageUrl],
           ['評分', place.rating != null],
@@ -490,11 +536,12 @@
         return `<div class="stack"><span class="badge ${stateClass}">${info.score}/${info.total} ${stateLabel}</span>${missingText}</div>`;
       }
       function formatPrice(place) {
-        const category = inferPriceCategory(place);
+        const category = effectivePriceCategory(place);
         if (category === 'free') return '免費';
         if (category === 'low') return '$';
         if (category === 'mid' || category === 'high') return '$$';
         if (place.priceLevel != null) {
+          if (place.priceLevel === 0 && !category) return '-';
           if (Number(place.priceLevel) <= 0) return '免費';
           if (Number(place.priceLevel) <= 1) return '$';
           return '$$';

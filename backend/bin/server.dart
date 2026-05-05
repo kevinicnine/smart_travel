@@ -5279,8 +5279,46 @@ int? _inferPriceLevelFromPlace(Place place) {
   final text = _normalizeLocationText(
     '${place.name} ${place.city} ${place.address} ${place.description} ${place.tags.join(' ')}',
   );
+  const highPriceTags = <String>{
+    'amusement_park',
+    'aquarium',
+    'zoo',
+    'rv_park',
+    'campground',
+    'spa',
+  };
+  const freeDefaultTags = <String>{
+    'lake_river',
+    'beach',
+    'national_park',
+    'waterfall',
+    'temple',
+    'night_market',
+  };
+  const lowPriceTags = <String>{
+    'museum',
+    'heritage',
+    'creative_park',
+    'handcraft_shop',
+  };
 
   bool containsAny(List<String> values) => values.any(text.contains);
+  bool hasFreeTicketSignal() {
+    final patterns = <RegExp>[
+      RegExp(r'免門票'),
+      RegExp(r'免收門票'),
+      RegExp(r'免費入場'),
+      RegExp(r'免費參觀'),
+      RegExp(r'自由入場'),
+      RegExp(r'門票免費'),
+      RegExp(r'票價免費'),
+      RegExp(r'入場免費'),
+      RegExp(r'參觀免費'),
+      RegExp(r'free admission', caseSensitive: false),
+      RegExp(r'free entry', caseSensitive: false),
+    ];
+    return patterns.any((pattern) => pattern.hasMatch(text));
+  }
   int? extractExplicitTicketAmount() {
     final patterns = <RegExp>[
       RegExp(r'(?:nt\$|twd|\$)\s*(\d{2,5})', caseSensitive: false),
@@ -5307,13 +5345,12 @@ int? _inferPriceLevelFromPlace(Place place) {
     '兒童票',
     '入園費',
     '入館費',
+    '入場費',
+    '購票',
+    '售票',
     '售價',
     '收費',
   ]);
-
-  if (containsAny(['免費', '免門票', '免收費', '自由入場', 'free'])) {
-    return 0;
-  }
 
   final explicitAmount = extractExplicitTicketAmount();
   if (explicitAmount != null) {
@@ -5321,12 +5358,12 @@ int? _inferPriceLevelFromPlace(Place place) {
     return 1;
   }
 
+  if (hasFreeTicketSignal()) {
+    return 0;
+  }
+
   if (hasExplicitPaidTicketSignal()) {
-    if (tags.any({
-          'amusement_park',
-          'aquarium',
-          'zoo',
-        }.contains) ||
+    if (tags.any(highPriceTags.contains) ||
         containsAny([
           '遊樂園',
           '主題樂園',
@@ -5345,13 +5382,92 @@ int? _inferPriceLevelFromPlace(Place place) {
     return 1;
   }
 
-  return 0;
+  if (tags.any(highPriceTags.contains) ||
+      containsAny([
+        '遊樂園',
+        '主題樂園',
+        '水族館',
+        '動物園',
+        '海洋公園',
+        '纜車',
+        '渡假村',
+        '觀景台',
+        '摩天輪',
+        '台北101',
+        '臺北101',
+      ])) {
+    return 3;
+  }
+
+  if (tags.any(freeDefaultTags.contains) ||
+      containsAny([
+        '公園',
+        '老街',
+        '步道',
+        '古道',
+        '海灘',
+        '沙灘',
+        '海岸',
+        '湖',
+        '溪',
+        '瀑布',
+        '河濱',
+        '濕地',
+        '夜市',
+        '廟',
+        '寺',
+      ])) {
+    return 0;
+  }
+
+  if (tags.any(lowPriceTags.contains) ||
+      containsAny([
+        '博物館',
+        '美術館',
+        '文學館',
+        '文化館',
+        '故事館',
+        '紀念館',
+        '教育園區',
+        '園區',
+        '展覽館',
+        '古蹟',
+        '觀光工廠',
+        '文創',
+      ])) {
+    return 1;
+  }
+
+  return null;
+}
+
+bool _hasFreeTicketSignalFromPlace(Place place) {
+  final text = _normalizeLocationText(
+    '${place.name} ${place.city} ${place.address} ${place.description} ${place.tags.join(' ')}',
+  );
+  final patterns = <RegExp>[
+    RegExp(r'免門票'),
+    RegExp(r'免收門票'),
+    RegExp(r'免費入場'),
+    RegExp(r'免費參觀'),
+    RegExp(r'自由入場'),
+    RegExp(r'門票免費'),
+    RegExp(r'票價免費'),
+    RegExp(r'入場免費'),
+    RegExp(r'參觀免費'),
+    RegExp(r'free admission', caseSensitive: false),
+    RegExp(r'free entry', caseSensitive: false),
+  ];
+  return patterns.any((pattern) => pattern.hasMatch(text));
 }
 
 int? _effectivePriceLevel(Place place) {
   final inferred = _inferPriceLevelFromPlace(place);
   if (inferred != null) {
     return inferred;
+  }
+  if (place.priceLevel == 0 && !_hasFreeTicketSignalFromPlace(place)) {
+    return null;
   }
   return place.priceLevel;
 }
