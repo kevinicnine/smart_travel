@@ -343,12 +343,48 @@ def _ssl_context() -> ssl.SSLContext:
         return ssl.create_default_context()
 
 
+TW_TEXT_VARIANT_MAP = str.maketrans({
+    "臺": "台",
+    "云": "雲",
+    "县": "縣",
+    "市": "市",
+    "区": "區",
+    "镇": "鎮",
+    "乡": "鄉",
+    "村": "村",
+    "里": "里",
+    "东": "東",
+    "西": "西",
+    "南": "南",
+    "北": "北",
+    "兰": "蘭",
+    "门": "門",
+    "连": "連",
+    "江": "江",
+    "台": "台",
+    "号": "號",
+    "段": "段",
+    "路": "路",
+    "街": "街",
+    "巷": "巷",
+    "弄": "弄",
+})
+
+
+def _normalize_tw_text(value: str) -> str:
+    if not value:
+        return ""
+    text = str(value).strip().translate(TW_TEXT_VARIANT_MAP)
+    text = text.replace("邮政编码", "郵政編碼").replace("郵遞區號", "郵政編碼")
+    return text
+
+
 def _extract_city(address: str) -> str:
     if not address:
         return ""
-    address = address.replace("臺", "台")
+    address = _normalize_tw_text(address)
     for hint in CITY_HINTS:
-        if hint in address.replace("臺", "台"):
+        if hint in address:
             return hint
     return ""
 
@@ -359,7 +395,7 @@ def _extract_city_from_components(components: list[dict]) -> str:
         for comp in components:
             types = comp.get("types") or []
             if level in types:
-                name = (comp.get("long_name") or "").replace("臺", "台")
+                name = _normalize_tw_text(comp.get("long_name") or "")
                 return name
     return ""
 
@@ -367,7 +403,7 @@ def _extract_city_from_components(components: list[dict]) -> str:
 def _normalize_city_name(value: str) -> str:
     if not value:
         return ""
-    normalized = value.strip().replace("臺", "台")
+    normalized = _normalize_tw_text(value)
     return CITY_CANONICAL_MAP.get(normalized, value.strip())
 
 
@@ -376,14 +412,13 @@ def _normalize_name(value: str) -> str:
 
 
 def _normalize_address(value: str) -> str:
-    return "".join((value or "").strip().replace("臺", "台").split()).lower()
+    return "".join(_normalize_tw_text(value).split()).lower()
 
 
 def _clean_display_address(value: str) -> str:
     if not value:
         return ""
-    text = str(value).strip().replace("臺", "台")
-    text = text.replace("邮政编码", "郵政編碼").replace("郵遞區號", "郵政編碼")
+    text = _normalize_tw_text(value)
     text = re.sub(r"[，,、]?\s*郵政編碼[:：]?\s*\d{3,6}", "", text)
     text = re.sub(r"\s+", "", text)
     text = re.sub(
@@ -486,8 +521,8 @@ def _matches_selected_city(selected_city: str, city: str, address: str) -> bool:
         return True
     if city and _normalize_city_name(city) == normalized_selected:
         return True
-    normalized_address = (address or "").replace("臺", "台")
-    return any(variant.replace("臺", "台") in normalized_address for variant in _city_variants(normalized_selected))
+    normalized_address = _normalize_tw_text(address or "")
+    return any(_normalize_tw_text(variant) in normalized_address for variant in _city_variants(normalized_selected))
 
 
 def _extract_tags(text: str, types: list[str]) -> list[str]:
@@ -647,6 +682,9 @@ PAID_TICKET_KEYWORDS = (
     "兒童票",
     "入園費",
     "入館費",
+    "入場費",
+    "購票",
+    "售票",
     "售價",
     "收費",
 )
@@ -703,9 +741,12 @@ def _infer_price_level(
     city: str,
     address: str,
     description: str,
-) -> int:
+    review_text: str = "",
+) -> int | None:
     haystack = " ".join(
-        part for part in [name, city, address, description] if (part or "").strip()
+        part
+        for part in [name, city, address, description, review_text]
+        if (part or "").strip()
     ).lower()
     type_set = set(types or [])
 
@@ -749,7 +790,7 @@ def _infer_price_level(
             return 3
         return 1
 
-    return 0
+    return None
 
 
 def _build_inferred_opening_hours(
@@ -1018,6 +1059,7 @@ def _enrich_place_from_details(place: Dict[str, Any], details: Dict[str, Any]) -
             city,
             full_address,
             editorial or "",
+            " ".join(reviews),
         )
     price_category = _price_category(price_level_value)
     changed = False
@@ -1209,6 +1251,7 @@ def main() -> None:
                     city,
                     full_address,
                     editorial or "",
+                    " ".join(reviews),
                 )
             price_category = _price_category(price_level_value)
             changed = False
@@ -1384,6 +1427,7 @@ def main() -> None:
                         city,
                         full_address,
                         editorial or "",
+                        " ".join(reviews),
                     )
                 price_category = _price_category(price_level_value)
                 output.append(
