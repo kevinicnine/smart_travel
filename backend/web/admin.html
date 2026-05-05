@@ -392,12 +392,83 @@
         if (!Number.isFinite(time)) return false;
         return Date.now() - time <= 24 * 60 * 60 * 1000;
       }
+      function inferPriceCategory(place) {
+        const explicitCategory = String(place.priceCategory || '').trim().toLowerCase();
+        if (explicitCategory) return explicitCategory;
+        if (place.priceLevel != null && place.priceLevel !== '') {
+          const level = Number(place.priceLevel);
+          if (Number.isFinite(level)) {
+            if (level <= 0) return 'free';
+            if (level <= 1) return 'low';
+            if (level === 2) return 'mid';
+            return 'high';
+          }
+        }
+        const tags = Array.isArray(place.tags)
+          ? place.tags.map(tag => String(tag || '').trim().toLowerCase())
+          : [];
+        const haystack = [
+          place.name,
+          place.city,
+          place.address,
+          place.description,
+          tags.join(' '),
+        ].join(' ').toLowerCase();
+        const hasAny = (keywords) => keywords.some(keyword => haystack.includes(keyword));
+        const extractExplicitTicketAmount = () => {
+          const patterns = [
+            /(?:nt\$|twd|\$)\s*(\d{2,5})/i,
+            /(\d{2,5})\s*元/i,
+            /(?:門票|票價|全票|入園|入館|成人票|優待票|售價|收費)[^\d]{0,8}(\d{2,5})/i,
+            /(\d{2,5})[^\d]{0,6}(?:門票|票價|全票|入園|入館|成人票|優待票|售價|收費)/i,
+          ];
+          for (const pattern of patterns) {
+            const match = haystack.match(pattern);
+            if (!match) continue;
+            const amount = Number(match[1]);
+            if (Number.isFinite(amount) && amount > 0) {
+              return amount;
+            }
+          }
+          return null;
+        };
+        if (hasAny(['免費', '免門票', '免收費', '自由入場', 'free'])) {
+          return 'free';
+        }
+        const explicitAmount = extractExplicitTicketAmount();
+        if (explicitAmount != null) {
+          return explicitAmount >= 300 ? 'high' : 'low';
+        }
+        const hasExplicitPaidSignal = hasAny([
+          '門票',
+          '票價',
+          '全票',
+          '優待票',
+          '成人票',
+          '兒童票',
+          '入園費',
+          '入館費',
+          '售價',
+          '收費',
+        ]);
+        if (!hasExplicitPaidSignal) {
+          return 'free';
+        }
+        if (
+          tags.some(tag => ['amusement_park', 'aquarium', 'zoo'].includes(tag)) ||
+          hasAny(['遊樂園', '主題樂園', '樂園', '水族館', '動物園', '海洋公園', '纜車', '渡假村', '觀景台', '摩天輪', '台北101', '臺北101'])
+        ) {
+          return 'high';
+        }
+        return 'low';
+      }
       function computeCompleteness(place) {
+        const hasPrice = !!inferPriceCategory(place);
         const checks = [
           ['圖片', !!place.imageUrl],
           ['評分', place.rating != null],
           ['評論數', place.userRatingsTotal != null],
-          ['價格', place.priceLevel != null || !!place.priceCategory],
+          ['價格', hasPrice],
           ['營業時間', !!place.openingHours],
           ['城市', !!place.city],
           ['地址', !!place.address],
@@ -428,6 +499,18 @@
           ? `<div class="missing-list">缺：${info.missing.join('、')}</div>`
           : `<div class="missing-list">圖片、評分、價格、營業時間皆完整</div>`;
         return `<div class="stack"><span class="badge ${stateClass}">${info.score}/${info.total} ${stateLabel}</span>${missingText}</div>`;
+      }
+      function formatPrice(place) {
+        const category = inferPriceCategory(place);
+        if (category === 'free') return '免費';
+        if (category === 'low') return '$';
+        if (category === 'mid' || category === 'high') return '$$';
+        if (place.priceLevel != null) {
+          if (Number(place.priceLevel) <= 0) return '免費';
+          if (Number(place.priceLevel) <= 1) return '$';
+          return '$$';
+        }
+        return '-';
       }
       function showTab(name) {
         for (const sec of ['places','users','import']) {
@@ -461,7 +544,7 @@
           const tags = (p.tags || []).join(', ');
           const rating = p.rating ? `${p.rating}★` : '-';
           const total = p.userRatingsTotal ? `(${p.userRatingsTotal})` : '';
-          const price = p.priceCategory || (p.priceLevel != null ? `L${p.priceLevel}` : '-');
+          const price = formatPrice(p);
           const openingHours = summarizeOpeningHours(p.openingHours);
           tr.innerHTML = `<td>${p.name}</td><td>${renderSourceMeta(p)}</td><td>${renderCompleteness(p)}</td><td>${tags}</td><td>${rating} ${total}</td><td>${price}</td><td>${openingHours}</td><td>${p.city}</td><td>${p.address}</td>
             <td><button onclick='editPlace(${JSON.stringify(p)})'>編輯</button>
@@ -728,8 +811,9 @@
           }
           return;
         }
+        const cityText = job.city ? `, 縣市: ${job.city}` : '';
         const endText = job.finished_at ? `, 結束 ${job.finished_at}` : '';
-        status.textContent = `狀態: ${job.running ? '進行中' : '已結束'} (模式: ${job.mode}${endText})`;
+        status.textContent = `狀態: ${job.running ? '進行中' : '已結束'} (模式: ${job.mode}${cityText}${endText})`;
         logs.textContent = (job.logs || []).join('\n');
         if (!job.running && crawlTimer) {
           clearInterval(crawlTimer);

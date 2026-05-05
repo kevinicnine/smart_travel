@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import ssl
 import sys
 import time
@@ -370,6 +371,98 @@ def _normalize_city_name(value: str) -> str:
     return CITY_CANONICAL_MAP.get(normalized, value.strip())
 
 
+def _normalize_name(value: str) -> str:
+    return " ".join((value or "").strip().split()).lower()
+
+
+def _normalize_address(value: str) -> str:
+    return "".join((value or "").strip().replace("臺", "台").split()).lower()
+
+
+def _clean_display_address(value: str) -> str:
+    if not value:
+        return ""
+    text = str(value).strip().replace("臺", "台")
+    text = text.replace("邮政编码", "郵政編碼").replace("郵遞區號", "郵政編碼")
+    text = re.sub(r"[，,、]?\s*郵政編碼[:：]?\s*\d{3,6}", "", text)
+    text = re.sub(r"\s+", "", text)
+    text = re.sub(
+        r"^(?P<postal>\d{3,6})(?=(台北市|臺北市|新北市|基隆市|桃園市|新竹市|新竹縣|苗栗縣|台中市|臺中市|彰化縣|南投縣|雲林縣|嘉義市|嘉義縣|台南市|臺南市|高雄市|屏東縣|宜蘭縣|花蓮縣|台東縣|臺東縣|澎湖縣|金門縣|連江縣))",
+        "",
+        text,
+    )
+    return text.strip(" ,，、")
+
+
+def _address_quality_score(value: str) -> int:
+    text = _clean_display_address(value)
+    if not text:
+        return -100
+    score = len(text)
+    if _extract_city(text):
+        score += 30
+    if re.search(r"[鄉鎮市區村里]", text):
+        score += 20
+    if re.search(r"[路街道段巷弄號]", text):
+        score += 20
+    if re.fullmatch(r"\d{3,6}", text):
+        score -= 120
+    if "郵政編碼" in text:
+        score -= 80
+    return score
+
+
+def _build_address_from_components(components: list[dict], fallback: str = "") -> str:
+    cleaned_fallback = _clean_display_address(fallback)
+    if not components:
+        return cleaned_fallback
+
+    ordered_types = [
+        "administrative_area_level_1",
+        "administrative_area_level_2",
+        "administrative_area_level_3",
+        "administrative_area_level_4",
+        "locality",
+        "sublocality_level_1",
+        "sublocality_level_2",
+        "sublocality_level_3",
+        "route",
+        "street_number",
+        "premise",
+        "subpremise",
+    ]
+
+    parts: list[str] = []
+    seen: set[str] = set()
+    for type_name in ordered_types:
+        for comp in components:
+            types = comp.get("types") or []
+            if type_name not in types:
+                continue
+            name = _clean_display_address(comp.get("long_name") or "")
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            parts.append(name)
+
+    rebuilt = _clean_display_address("".join(parts))
+    if _address_quality_score(cleaned_fallback) > _address_quality_score(rebuilt):
+        return cleaned_fallback
+    return rebuilt or cleaned_fallback
+
+
+def _place_merge_key(name: str, city: str, address: str) -> tuple[str, str]:
+    normalized_name = _normalize_name(name)
+    normalized_city = _normalize_city_name(city)
+    if normalized_city:
+        return normalized_name, normalized_city
+    extracted_city = _normalize_city_name(_extract_city(address))
+    if extracted_city:
+        return normalized_name, extracted_city
+    normalized_address = _normalize_address(address)
+    return normalized_name, normalized_address
+
+
 def _city_variants(value: str) -> set[str]:
     canonical = _normalize_city_name(value)
     if not canonical:
@@ -537,6 +630,193 @@ def _price_category(price_level: int | None) -> str | None:
     return "high"
 
 
+FREE_PRICE_KEYWORDS = (
+    "免費",
+    "免門票",
+    "免收費",
+    "自由入場",
+    "free",
+)
+
+PAID_TICKET_KEYWORDS = (
+    "門票",
+    "票價",
+    "全票",
+    "優待票",
+    "成人票",
+    "兒童票",
+    "入園費",
+    "入館費",
+    "售價",
+    "收費",
+)
+
+HIGH_PRICE_VENUE_KEYWORDS = (
+    "遊樂園",
+    "主題樂園",
+    "樂園",
+    "水族館",
+    "動物園",
+    "海洋公園",
+    "纜車",
+    "渡假村",
+    "觀景台",
+    "摩天輪",
+    "台北101",
+    "臺北101",
+)
+
+OPEN_ALL_DAY_KEYWORDS = (
+    "公園",
+    "老街",
+    "步道",
+    "古道",
+    "海灘",
+    "沙灘",
+    "海岸",
+    "湖",
+    "溪",
+    "河濱",
+    "濕地",
+    "紀念公園",
+    "紀念林",
+    "風景區",
+    "自然公園",
+)
+
+DAYTIME_OPEN_KEYWORDS = (
+    "博物館",
+    "美術館",
+    "文化館",
+    "展覽館",
+    "紀念館",
+    "教育園區",
+    "文創園區",
+    "觀光工廠",
+    "科學館",
+)
+
+
+def _infer_price_level(
+    name: str,
+    types: Iterable[str],
+    city: str,
+    address: str,
+    description: str,
+) -> int:
+    haystack = " ".join(
+        part for part in [name, city, address, description] if (part or "").strip()
+    ).lower()
+    type_set = set(types or [])
+
+    def extract_explicit_ticket_amount() -> int | None:
+        patterns = [
+            r"(?:nt\$|twd|\$)\s*(\d{2,5})",
+            r"(\d{2,5})\s*元",
+            r"(?:門票|票價|全票|入園|入館|成人票|優待票|售價|收費)[^\d]{0,8}(\d{2,5})",
+            r"(\d{2,5})[^\d]{0,6}(?:門票|票價|全票|入園|入館|成人票|優待票|售價|收費)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, haystack, re.IGNORECASE)
+            if not match:
+                continue
+            amount = int(match.group(1))
+            if amount > 0:
+                return amount
+        return None
+
+    if any(keyword in haystack for keyword in FREE_PRICE_KEYWORDS):
+        return 0
+
+    explicit_amount = extract_explicit_ticket_amount()
+    if explicit_amount is not None:
+        if explicit_amount >= 300:
+            return 3
+        return 1
+
+    has_explicit_paid_signal = any(keyword in haystack for keyword in PAID_TICKET_KEYWORDS)
+    if has_explicit_paid_signal:
+        if type_set.intersection(
+            {
+                "amusement_park",
+                "aquarium",
+                "zoo",
+                "rv_park",
+                "campground",
+                "spa",
+            }
+        ) or any(keyword in haystack for keyword in HIGH_PRICE_VENUE_KEYWORDS):
+            return 3
+        return 1
+
+    return 0
+
+
+def _build_inferred_opening_hours(
+    *,
+    open_now: bool | None,
+    weekday_line: str,
+    note: str,
+) -> Dict[str, Any]:
+    weekdays = ['星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日']
+    lines = [f'{day} {weekday_line}' for day in weekdays]
+    result: Dict[str, Any] = {
+        "weekday_text": lines,
+        "inferred": True,
+        "note": note,
+    }
+    if open_now is not None:
+        result["open_now"] = open_now
+    return result
+
+
+def _infer_opening_hours(
+    name: str,
+    types: Iterable[str],
+    tags: Iterable[str],
+    description: str,
+) -> Dict[str, Any] | None:
+    haystack = " ".join(
+        part for part in [name, description] if (part or "").strip()
+    ).lower()
+    type_set = set(types or [])
+    tag_set = set(tags or [])
+
+    if any(keyword in haystack for keyword in OPEN_ALL_DAY_KEYWORDS) or type_set.intersection(
+        {"park", "beach", "hiking_area"}
+    ) or tag_set.intersection({"lake_river", "beach", "national_park", "waterfall"}):
+        return _build_inferred_opening_hours(
+            open_now=True,
+            weekday_line="24 小時開放",
+            note="依景點型態推估為開放式場域，實際仍以現場公告為準",
+        )
+
+    if "夜市" in haystack or "night_market" in tag_set:
+        return _build_inferred_opening_hours(
+            open_now=False,
+            weekday_line="17:00–23:00",
+            note="依夜市型景點推估，實際仍以現場公告為準",
+        )
+
+    if any(keyword in haystack for keyword in DAYTIME_OPEN_KEYWORDS) or type_set.intersection(
+        {"museum", "art_gallery", "library"}
+    ) or tag_set.intersection({"museum", "creative_park", "heritage"}):
+        return _build_inferred_opening_hours(
+            open_now=False,
+            weekday_line="09:00–17:00",
+            note="依景點型態推估為日間開放，實際仍以現場公告為準",
+        )
+
+    if type_set.intersection({"tourist_attraction"}) or tag_set:
+        return _build_inferred_opening_hours(
+            open_now=None,
+            weekday_line="依現場公告",
+            note="Google 未提供營業時間，先以景點頁面顯示為準",
+        )
+
+    return None
+
+
 def _normalize_opening_hours(raw: Any) -> Dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
@@ -574,6 +854,11 @@ def _normalize_opening_hours(raw: Any) -> Dict[str, Any] | None:
                 cleaned_periods.append(item)
         if cleaned_periods:
             out["periods"] = cleaned_periods
+    if isinstance(raw.get("inferred"), bool):
+        out["inferred"] = raw["inferred"]
+    note = raw.get("note")
+    if isinstance(note, str) and note.strip():
+        out["note"] = note.strip()
     return out or None
 
 def _normalize_tag_list(tags: Any) -> list[str]:
@@ -607,7 +892,7 @@ def _needs_enrich(place: Dict[str, Any]) -> bool:
         return True
     if place.get("priceLevel") is None or not place.get("priceCategory"):
         return True
-    if not place.get("address") or len(str(place.get("address")).strip()) < 6:
+    if _address_quality_score(str(place.get("address") or "")) < 40:
         return True
     if not place.get("city"):
         return True
@@ -652,14 +937,25 @@ def _merge_places(
         stats["added"] = len(fresh)
         return [p.to_dict() for p in fresh], stats
     by_id: Dict[str, Dict[str, Any]] = {p.get("id"): p for p in existing if p.get("id")}
-    by_name = {p.get("name"): p for p in existing if p.get("name")}
+    by_merge_key: Dict[tuple[str, str], Dict[str, Any]] = {}
+    for place in existing:
+        if not isinstance(place, dict):
+            continue
+        key = _place_merge_key(
+            str(place.get("name") or ""),
+            str(place.get("city") or ""),
+            str(place.get("address") or ""),
+        )
+        if key[0]:
+            by_merge_key[key] = place
     for place in fresh:
         fresh_dict = place.to_dict()
         target = None
         if place.id in by_id:
             target = by_id[place.id]
-        elif place.name in by_name:
-            target = by_name[place.name]
+        else:
+            key = _place_merge_key(place.name, place.city, place.address)
+            target = by_merge_key.get(key)
 
         if target is not None:
             before = json.dumps(target, ensure_ascii=False, sort_keys=True)
@@ -673,10 +969,119 @@ def _merge_places(
             existing.append(fresh_dict)
             if place.id:
                 by_id[place.id] = fresh_dict
-            if place.name:
-                by_name[place.name] = fresh_dict
+            key = _place_merge_key(place.name, place.city, place.address)
+            if key[0]:
+                by_merge_key[key] = fresh_dict
             stats["added"] += 1
     return existing, stats
+
+
+def _enrich_place_from_details(place: Dict[str, Any], details: Dict[str, Any]) -> tuple[bool, Dict[str, Any] | None]:
+    if not details:
+        return False, None
+
+    geometry = (details.get("geometry") or {}).get("location", {})
+    lat = float(geometry.get("lat") or 0)
+    lng = float(geometry.get("lng") or 0)
+    types = details.get("types") or []
+    rating = details.get("rating")
+    rating_total = details.get("user_ratings_total")
+    price_level = details.get("price_level")
+    editorial = (details.get("editorial_summary") or {}).get("overview") if details else None
+    full_address = details.get("formatted_address") or place.get("address") or ""
+    components = details.get("address_components") or []
+    full_address = _build_address_from_components(components, full_address)
+    city = _normalize_city_name(
+        _extract_city_from_components(components) or _extract_city(full_address)
+    )
+    photos = details.get("photos") or []
+    photo_ref = ""
+    if isinstance(photos, list) and photos:
+        photo_ref = photos[0].get("photo_reference", "") if isinstance(photos[0], dict) else ""
+    image_url = _photo_url(photo_ref)
+    raw_reviews = [r.get("text", "") for r in (details.get("reviews") or []) if isinstance(r, dict)]
+    reviews = _clean_reviews(raw_reviews)
+    text = f"{place.get('name','')} {full_address} {editorial or ''} {' '.join(reviews)}"
+    tags = _extract_tags(text, types)
+    merged_tags = _merge_tags(_normalize_tag_list(place.get("tags")), tags)
+    opening_hours = _normalize_opening_hours(details.get("opening_hours")) or _infer_opening_hours(
+        str(place.get("name") or ""),
+        types,
+        merged_tags,
+        editorial or "",
+    )
+    price_level_value = int(price_level) if price_level is not None else None
+    if price_level_value is None:
+        price_level_value = _infer_price_level(
+            str(place.get("name") or ""),
+            types,
+            city,
+            full_address,
+            editorial or "",
+        )
+    price_category = _price_category(price_level_value)
+    changed = False
+
+    if city and _normalize_city_name(str(place.get("city") or "")) != city:
+        place["city"] = city
+        changed = True
+    existing_address = str(place.get("address") or "")
+    if full_address and _address_quality_score(full_address) > _address_quality_score(existing_address):
+        place["address"] = full_address
+        changed = True
+    if (not place.get("lat") or not place.get("lng")) and lat and lng:
+        place["lat"] = lat
+        place["lng"] = lng
+        changed = True
+    if not place.get("imageUrl") and image_url:
+        place["imageUrl"] = image_url
+        changed = True
+    if place.get("rating") is None and rating is not None:
+        place["rating"] = float(rating)
+        changed = True
+    if place.get("userRatingsTotal") is None and rating_total is not None:
+        place["userRatingsTotal"] = int(rating_total)
+        changed = True
+    if place.get("priceLevel") is None and price_level_value is not None:
+        place["priceLevel"] = price_level_value
+        changed = True
+    if not place.get("priceCategory") and price_category:
+        place["priceCategory"] = price_category
+        changed = True
+    if not place.get("description") and editorial:
+        place["description"] = editorial
+        changed = True
+    if merged_tags:
+        if _normalize_tag_list(place.get("tags")) != merged_tags:
+            place["tags"] = merged_tags
+            changed = True
+        if not place.get("category") and merged_tags[0]:
+            place["category"] = merged_tags[0]
+            changed = True
+    if opening_hours and (
+        not place.get("openingHours") or
+        len(str(place.get("openingHours"))) < len(str(opening_hours))
+    ):
+        place["openingHours"] = opening_hours
+        changed = True
+    if changed or not _has_metadata(place):
+        _stamp_metadata(place)
+
+    review_item = {
+        "place_id": place.get("id") or details.get("place_id"),
+        "source_name": place.get("name"),
+        "name": place.get("name"),
+        "formatted_address": full_address,
+        "rating": rating,
+        "user_ratings_total": rating_total,
+        "price_level": price_level,
+        "types": types,
+        "editorial_summary": editorial or "",
+        "reviews": reviews,
+        "image_url": image_url,
+        "opening_hours": opening_hours,
+    }
+    return changed, review_item
 
 
 def main() -> None:
@@ -688,11 +1093,17 @@ def main() -> None:
     db = json.loads(DB_PATH.read_text(encoding="utf-8"))
     existing_places = db.get("places") or []
     existing_by_id = {p.get("id"): p for p in existing_places if isinstance(p, dict) and p.get("id")}
-    existing_by_name = {
-        (p.get("name") or "").strip(): p
-        for p in existing_places
-        if isinstance(p, dict) and (p.get("name") or "").strip()
-    }
+    existing_by_merge_key = {}
+    for place in existing_places:
+        if not isinstance(place, dict):
+            continue
+        key = _place_merge_key(
+            str(place.get("name") or ""),
+            str(place.get("city") or ""),
+            str(place.get("address") or ""),
+        )
+        if key[0]:
+            existing_by_merge_key[key] = place
     if REVIEWS_PATH.exists():
         reviews_db = json.loads(REVIEWS_PATH.read_text(encoding="utf-8"))
         if not isinstance(reviews_db, list):
@@ -769,7 +1180,10 @@ def main() -> None:
             editorial = (details.get("editorial_summary") or {}).get("overview") if details else None
             full_address = details.get("formatted_address") or place.get("address") or ""
             components = details.get("address_components") or []
-            city = _extract_city_from_components(components) or _extract_city(full_address)
+            full_address = _build_address_from_components(components, full_address)
+            city = _normalize_city_name(
+                _extract_city_from_components(components) or _extract_city(full_address)
+            )
             photos = details.get("photos") or []
             photo_ref = ""
             if isinstance(photos, list) and photos:
@@ -781,18 +1195,32 @@ def main() -> None:
             text = f"{place.get('name','')} {full_address} {editorial or ''} {' '.join(reviews)}"
             tags = _extract_tags(text, types)
             merged_tags = _merge_tags(_normalize_tag_list(place.get("tags")), tags)
+            opening_hours = opening_hours or _infer_opening_hours(
+                str(place.get("name") or ""),
+                types,
+                merged_tags,
+                editorial or "",
+            )
             price_level_value = int(price_level) if price_level is not None else None
+            if price_level_value is None:
+                price_level_value = _infer_price_level(
+                    str(place.get("name") or ""),
+                    types,
+                    city,
+                    full_address,
+                    editorial or "",
+                )
             price_category = _price_category(price_level_value)
             changed = False
 
             # Fill only missing fields
-            if not place.get("city") and city:
+            if city and _normalize_city_name(str(place.get("city") or "")) != city:
                 place["city"] = city
                 changed = True
-            if not place.get("address") or len(str(place.get("address")).strip()) < 6:
-                if full_address:
-                    place["address"] = full_address
-                    changed = True
+            existing_address = str(place.get("address") or "")
+            if full_address and _address_quality_score(full_address) > _address_quality_score(existing_address):
+                place["address"] = full_address
+                changed = True
             if (not place.get("lat") or not place.get("lng")) and lat and lng:
                 place["lat"] = lat
                 place["lng"] = lng
@@ -822,7 +1250,10 @@ def main() -> None:
                 if not place.get("category") and merged_tags[0]:
                     place["category"] = merged_tags[0]
                     changed = True
-            if not place.get("openingHours") and opening_hours:
+            if opening_hours and (
+                not place.get("openingHours") or
+                len(str(place.get("openingHours"))) < len(str(opening_hours))
+            ):
                 place["openingHours"] = opening_hours
                 changed = True
             if changed or not _has_metadata(place):
@@ -892,10 +1323,11 @@ def main() -> None:
                 seen.add(place_id)
                 seen.add(name)
 
-                existing_hit = existing_by_id.get(place_id) or existing_by_name.get(name.strip())
+                preview_address = item.get("formatted_address") or ""
+                preview_city = _normalize_city_name(_extract_city(preview_address))
+                merge_key = _place_merge_key(name, preview_city, preview_address)
+                existing_hit = existing_by_id.get(place_id) or existing_by_merge_key.get(merge_key)
                 if existing_hit and not _needs_enrich(existing_hit):
-                    if not _has_metadata(existing_hit):
-                        _stamp_metadata(existing_hit)
                     skipped_complete += 1
                     continue
 
@@ -918,7 +1350,12 @@ def main() -> None:
                 editorial = (details.get("editorial_summary") or {}).get("overview") if details else None
                 full_address = details.get("formatted_address") or address
                 components = details.get("address_components") or []
-                city = _extract_city_from_components(components) or _extract_city(full_address)
+                full_address = _build_address_from_components(components, full_address)
+                city = _normalize_city_name(
+                    _extract_city_from_components(components) or _extract_city(full_address)
+                )
+                if single_city_mode and not city:
+                    city = _normalize_city_name(selected_city)
                 if single_city_mode and not _matches_selected_city(selected_city, city, full_address):
                     skipped_outside_city += 1
                     continue
@@ -933,7 +1370,21 @@ def main() -> None:
                 text = f"{name} {full_address} {editorial or ''} {' '.join(reviews)}"
                 tags = _extract_tags(text, types)
                 category = tags[0] if tags else "other"
+                opening_hours = opening_hours or _infer_opening_hours(
+                    name,
+                    types,
+                    tags,
+                    editorial or "",
+                )
                 price_level_value = int(price_level) if price_level is not None else None
+                if price_level_value is None:
+                    price_level_value = _infer_price_level(
+                        name,
+                        types,
+                        city,
+                        full_address,
+                        editorial or "",
+                    )
                 price_category = _price_category(price_level_value)
                 output.append(
                     Place(
@@ -995,6 +1446,45 @@ def main() -> None:
             place["source"] = "google_places"
 
     merged_places, merge_stats = _merge_places(existing_places, output)
+
+    if single_city_mode and request_count < MAX_REQUESTS:
+        enriched_selected_city = 0
+        for place in merged_places:
+            if request_count >= MAX_REQUESTS:
+                break
+            if not isinstance(place, dict):
+                continue
+            if not _matches_selected_city(selected_city, str(place.get("city") or ""), str(place.get("address") or "")):
+                continue
+            if not _needs_enrich(place):
+                continue
+
+            place_id = (place.get("id") or "").strip()
+            if not place_id:
+                query = _build_query_from_place(place)
+                if not query:
+                    continue
+                place_id = _find_place_id(query) or ""
+                request_count += 1
+                if not place_id:
+                    continue
+                place["id"] = place_id
+
+            details = _place_details(place_id) or {}
+            if details:
+                request_count += 1
+            changed, review_item = _enrich_place_from_details(place, details)
+            if changed:
+                enriched_selected_city += 1
+            if review_item:
+                reviews_out.append(review_item)
+                review_place_id = (review_item.get("place_id") or "").strip()
+                if review_place_id:
+                    reviews_by_id[review_place_id] = review_item
+
+        if enriched_selected_city:
+            print(f"單縣市補完整資料：{selected_city} 額外補齊 {enriched_selected_city} 筆")
+
     db["places"] = merged_places
     DB_PATH.write_text(json.dumps(db, ensure_ascii=False, indent=2), encoding="utf-8")
     if reviews_out:
