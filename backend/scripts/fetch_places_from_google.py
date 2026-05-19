@@ -475,6 +475,8 @@ def _build_address_from_components(components: list[dict], fallback: str = "") -
             if type_name not in types:
                 continue
             name = _clean_display_address(comp.get("long_name") or "")
+            if type_name == "street_number" and name.isdigit():
+                name = f"{name}號"
             if not name or name in seen:
                 continue
             seen.add(name)
@@ -484,6 +486,35 @@ def _build_address_from_components(components: list[dict], fallback: str = "") -
     if _address_quality_score(cleaned_fallback) > _address_quality_score(rebuilt):
         return cleaned_fallback
     return rebuilt or cleaned_fallback
+
+
+def _pick_best_address(*candidates: str) -> str:
+    best = ""
+    best_score = -10**9
+    best_len = -1
+    for candidate in candidates:
+        cleaned = _clean_display_address(candidate)
+        if not cleaned:
+            continue
+        score = _address_quality_score(cleaned)
+        if score > best_score or (score == best_score and len(cleaned) > best_len):
+            best = cleaned
+            best_score = score
+            best_len = len(cleaned)
+    return best
+
+
+def _ensure_address_with_city(address: str, city: str) -> str:
+    cleaned = _clean_display_address(address)
+    normalized_city = _normalize_city_name(city)
+    if not cleaned or not normalized_city:
+        return cleaned
+    if normalized_city in cleaned:
+        return cleaned
+    candidate = _clean_display_address(f"{normalized_city}{cleaned}")
+    if _address_quality_score(candidate) >= _address_quality_score(cleaned):
+        return candidate
+    return cleaned
 
 
 def _place_merge_key(name: str, city: str, address: str) -> tuple[str, str]:
@@ -1116,12 +1147,18 @@ def _enrich_place_from_details(place: Dict[str, Any], details: Dict[str, Any]) -
     rating_total = details.get("user_ratings_total")
     price_level = details.get("price_level")
     editorial = (details.get("editorial_summary") or {}).get("overview") if details else None
-    full_address = details.get("formatted_address") or place.get("address") or ""
+    details_address = details.get("formatted_address") or ""
+    existing_address = place.get("address") or ""
     components = details.get("address_components") or []
-    full_address = _build_address_from_components(components, full_address)
+    base_address = _pick_best_address(details_address, existing_address)
+    rebuilt_address = _build_address_from_components(components, base_address)
     city = _normalize_city_name(
-        _extract_city_from_components(components) or _extract_city(full_address)
+        _extract_city_from_components(components)
+        or _extract_city(base_address)
+        or _extract_city(rebuilt_address)
     )
+    full_address = _pick_best_address(base_address, rebuilt_address)
+    full_address = _ensure_address_with_city(full_address, city)
     photos = details.get("photos") or []
     photo_ref = ""
     if isinstance(photos, list) and photos:
@@ -1307,12 +1344,18 @@ def main() -> None:
             rating_total = details.get("user_ratings_total")
             price_level = details.get("price_level")
             editorial = (details.get("editorial_summary") or {}).get("overview") if details else None
-            full_address = details.get("formatted_address") or place.get("address") or ""
+            details_address = details.get("formatted_address") or ""
+            existing_address = place.get("address") or ""
             components = details.get("address_components") or []
-            full_address = _build_address_from_components(components, full_address)
+            base_address = _pick_best_address(details_address, existing_address)
+            rebuilt_address = _build_address_from_components(components, base_address)
             city = _normalize_city_name(
-                _extract_city_from_components(components) or _extract_city(full_address)
+                _extract_city_from_components(components)
+                or _extract_city(base_address)
+                or _extract_city(rebuilt_address)
             )
+            full_address = _pick_best_address(base_address, rebuilt_address)
+            full_address = _ensure_address_with_city(full_address, city)
             photos = details.get("photos") or []
             photo_ref = ""
             if isinstance(photos, list) and photos:
@@ -1478,14 +1521,19 @@ def main() -> None:
                 rating_total = details.get("user_ratings_total") or item.get("user_ratings_total")
                 price_level = details.get("price_level") or item.get("price_level")
                 editorial = (details.get("editorial_summary") or {}).get("overview") if details else None
-                full_address = details.get("formatted_address") or address
+                details_address = details.get("formatted_address") or ""
                 components = details.get("address_components") or []
-                full_address = _build_address_from_components(components, full_address)
+                base_address = _pick_best_address(details_address, address)
+                rebuilt_address = _build_address_from_components(components, base_address)
                 city = _normalize_city_name(
-                    _extract_city_from_components(components) or _extract_city(full_address)
+                    _extract_city_from_components(components)
+                    or _extract_city(base_address)
+                    or _extract_city(rebuilt_address)
                 )
                 if single_city_mode and not city:
                     city = _normalize_city_name(selected_city)
+                full_address = _pick_best_address(base_address, rebuilt_address)
+                full_address = _ensure_address_with_city(full_address, city)
                 if single_city_mode and not _matches_selected_city(selected_city, city, full_address):
                     skipped_outside_city += 1
                     continue
