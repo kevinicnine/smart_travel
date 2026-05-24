@@ -94,6 +94,15 @@ FIELDS = ",".join(
 if not API_KEY:
     sys.exit("請先在環境變數設定 GOOGLE_MAPS_API_KEY")
 
+try:
+    import certifi
+
+    ssl._create_default_https_context = lambda: ssl.create_default_context(  # noqa: E731
+        cafile=certifi.where()
+    )
+except Exception:
+    pass
+
 
 # tag keywords (kw -> tag)
 INTEREST_KEYWORDS = [

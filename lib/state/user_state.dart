@@ -6,12 +6,14 @@ class UserState {
   static const _kUserId = 'user_id';
   static const _kLineLinked = 'user_line_linked';
   static const _kLinePushEnabled = 'user_line_push_enabled';
+  static const _kInterestPrefix = 'user_interest_ids_';
 
   static String? displayName;
   static String? avatarPath;
   static String? userId;
   static bool lineLinked = false;
   static bool linePushEnabled = false;
+  static List<String> selectedInterestIds = const [];
   static SharedPreferences? _prefs;
 
   static Future<void> load() async {
@@ -21,6 +23,7 @@ class UserState {
     userId = _prefs!.getString(_kUserId);
     lineLinked = _prefs!.getBool(_kLineLinked) ?? false;
     linePushEnabled = _prefs!.getBool(_kLinePushEnabled) ?? false;
+    selectedInterestIds = _loadInterestsForUser(userId);
   }
 
   static Future<void> updateName(String? name) async {
@@ -45,9 +48,11 @@ class UserState {
     bool? pushEnabled,
   }) async {
     await _ensurePrefs();
+    var shouldReloadInterests = false;
     if (id != null && id.trim().isNotEmpty) {
       userId = id.trim();
       await _prefs!.setString(_kUserId, userId!);
+      shouldReloadInterests = true;
     }
     if (name != null && name.trim().isNotEmpty) {
       displayName = name.trim();
@@ -61,6 +66,46 @@ class UserState {
       linePushEnabled = pushEnabled;
       await _prefs!.setBool(_kLinePushEnabled, pushEnabled);
     }
+    if (shouldReloadInterests) {
+      selectedInterestIds = _loadInterestsForUser(userId);
+    }
+  }
+
+  static Future<void> saveSelectedInterests(List<String> interestIds) async {
+    await _ensurePrefs();
+    final cleaned = interestIds
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+    selectedInterestIds = cleaned;
+    final currentUserId = userId;
+    if (currentUserId == null || currentUserId.isEmpty) {
+      return;
+    }
+    await _prefs!.setStringList(_interestKey(currentUserId), cleaned);
+  }
+
+  static bool get hasSavedInterests => selectedInterestIds.isNotEmpty;
+
+  static List<String> _loadInterestsForUser(String? id) {
+    if (_prefs == null || id == null || id.isEmpty) {
+      return const [];
+    }
+    return List<String>.from(_prefs!.getStringList(_interestKey(id)) ?? const []);
+  }
+
+  static String _interestKey(String id) => '$_kInterestPrefix$id';
+
+  static Future<void> clearCurrentUserInterests() async {
+    await _ensurePrefs();
+    final currentUserId = userId;
+    selectedInterestIds = const [];
+    if (currentUserId == null || currentUserId.isEmpty) {
+      return;
+    }
+    await _prefs!.remove(_interestKey(currentUserId));
   }
 
   static Future<void> _ensurePrefs() async {

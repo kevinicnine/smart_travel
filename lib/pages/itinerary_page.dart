@@ -19,6 +19,9 @@ class ItineraryPage extends StatefulWidget {
 }
 
 class _ItineraryPageState extends State<ItineraryPage> {
+  static const _googleMapsApiKey = String.fromEnvironment('GOOGLE_MAPS_API_KEY');
+  static const _contextPollingInterval = Duration(minutes: 3);
+
   final BackendApi _api = BackendApi.instance;
   late _ItineraryPlan _plan;
   late Map<String, dynamic> _planJson;
@@ -31,6 +34,13 @@ class _ItineraryPageState extends State<ItineraryPage> {
   int _extraSpotsPreference = 0;
   final List<String> _wishlistPlaces = [];
   final Map<String, String> _transitModeOverrides = {};
+  final Set<String> _manuallyEditedDayKeys = <String>{};
+  _ItineraryContextAwareness? _contextAwareness;
+  bool _loadingContextAwareness = false;
+  int _contextAwarenessRequestSerial = 0;
+  String? _lastContextReplanPromptKey;
+  bool _showingContextReplanDialog = false;
+  Timer? _contextAwarenessPollingTimer;
 
   @override
   void initState() {
@@ -39,10 +49,14 @@ class _ItineraryPageState extends State<ItineraryPage> {
     _plan = _ItineraryPlan.fromJson(_planJson);
     _dayPageController = PageController();
     _hydrateArrangementPreferencesFromPlanMeta();
+    unawaited(_loadContextAwarenessForSelectedDay());
+    unawaited(_syncActivePlanToCloud());
+    _refreshContextAwarenessPolling();
   }
 
   @override
   void dispose() {
+    _contextAwarenessPollingTimer?.cancel();
     _dayPageController.dispose();
     _timelineScrollController.dispose();
     super.dispose();
@@ -87,19 +101,24 @@ class _ItineraryPageState extends State<ItineraryPage> {
               children: [
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-                  child: Column(
+                  child: ListView(
+                    controller: _timelineScrollController,
+                    physics: const BouncingScrollPhysics(),
+                    padding: const EdgeInsets.only(bottom: 20),
                     children: [
                       _buildDaySelector(days),
                       if (_hasArrangementPreferences) ...[
                         const SizedBox(height: 8),
                         _buildArrangementPreferenceCard(),
                       ],
+                      const SizedBox(height: 8),
+                      _buildContextAwarenessSection(),
                       if (_plan.insight != null) ...[
                         const SizedBox(height: 8),
                         _buildInsightCard(_plan.insight!),
                       ],
                       const SizedBox(height: 10),
-                      Expanded(child: _buildTimeline(days[_selectedDayIndex])),
+                      ..._buildTimelineChildren(days[_selectedDayIndex]),
                     ],
                   ),
                 ),
@@ -154,18 +173,19 @@ class _ItineraryPageState extends State<ItineraryPage> {
       final options = _transitComparisonOptions(
         day,
         fromStop.itemIndex,
+        toStop.itemIndex,
         fromStop.item,
         toStop.item,
       );
-      final selectedMode =
-          _transitModeOverrides[_transitSegmentKey(day, fromStop.itemIndex)] ??
-          'best';
+      final selectedMode = _normalizeTransitMode(
+        _transitModeOverrides[_transitSegmentKey(day, fromStop.itemIndex)],
+      );
       segments.add(
         _DayRouteSegment(
           from: fromStop,
           to: toStop,
           selectedMode: selectedMode,
-          transit: options[selectedMode] ?? options['best']!,
+          transit: options[selectedMode] ?? options['car']!,
         ),
       );
     }
@@ -530,8 +550,11 @@ class _ItineraryPageState extends State<ItineraryPage> {
         _planJson = result;
         _plan = _ItineraryPlan.fromJson(result);
         _transitModeOverrides.clear();
+        _manuallyEditedDayKeys.clear();
         _selectedDayIndex = 0;
+        _contextAwareness = null;
       });
+      _refreshContextAwarenessPolling();
       if (_dayPageController.hasClients) {
         _dayPageController.jumpToPage(0);
       }
@@ -543,6 +566,8 @@ class _ItineraryPageState extends State<ItineraryPage> {
           _timelineScrollController.jumpTo(0);
         });
       }
+      unawaited(_syncActivePlanToCloud());
+      await _loadContextAwarenessForSelectedDay();
       _showTopMessage('已套用並切換到新編排行程（第 1 天）');
     } on ApiClientException catch (error) {
       if (!mounted) return;
@@ -556,11 +581,1419 @@ class _ItineraryPageState extends State<ItineraryPage> {
     }
   }
 
+  Future<void> _loadContextAwarenessForSelectedDay() async {
+    if (_loadingContextAwareness) {
+      return;
+    }
+    final rawDays = _planJson['days'];
+    if (rawDays is! List ||
+        rawDays.isEmpty ||
+        _selectedDayIndex < 0 ||
+        _selectedDayIndex >= rawDays.length) {
+      if (!mounted) return;
+      setState(() {
+        _contextAwareness = null;
+        _loadingContextAwareness = false;
+      });
+      return;
+    }
+
+    final rawDay = rawDays[_selectedDayIndex];
+    if (rawDay is! Map) {
+      if (!mounted) return;
+      setState(() {
+        _contextAwareness = null;
+        _loadingContextAwareness = false;
+      });
+      return;
+    }
+
+    final requestSerial = ++_contextAwarenessRequestSerial;
+    if (mounted) {
+      setState(() {
+        _loadingContextAwareness = true;
+        _contextAwareness = null;
+      });
+    }
+
+    try {
+      final result = await _api.fetchContextAwareness(
+        day: Map<String, dynamic>.from(rawDay),
+        userId: UserState.userId,
+        currentTime: DateTime.now(),
+      );
+      if (!mounted || requestSerial != _contextAwarenessRequestSerial) return;
+      final parsed = _ItineraryContextAwareness.fromJson(result);
+      setState(() {
+        _contextAwareness = parsed;
+      });
+      unawaited(_maybePromptContextReplan(parsed));
+    } on ApiClientException {
+      if (!mounted || requestSerial != _contextAwarenessRequestSerial) return;
+      setState(() {
+        _contextAwareness = null;
+      });
+    } finally {
+      if (mounted && requestSerial == _contextAwarenessRequestSerial) {
+        setState(() {
+          _loadingContextAwareness = false;
+        });
+      }
+    }
+  }
+
   void _showTopMessage(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _syncActivePlanToCloud() async {
+    final userId = UserState.userId?.trim() ?? '';
+    if (userId.isEmpty) {
+      return;
+    }
+    try {
+      await _api.syncActivePlan(userId: userId, plan: _planJson);
+    } on ApiClientException {
+      // 保持前端可用；雲端同步失敗時不阻斷本地行程操作。
+    }
+  }
+
+  bool _isSelectedDayToday() {
+    if (_selectedDayIndex < 0 || _selectedDayIndex >= _plan.days.length) {
+      return false;
+    }
+    final date = _plan.days[_selectedDayIndex].date;
+    if (date == null) {
+      return false;
+    }
+    final now = DateTime.now();
+    return date.year == now.year &&
+        date.month == now.month &&
+        date.day == now.day;
+  }
+
+  void _refreshContextAwarenessPolling() {
+    _contextAwarenessPollingTimer?.cancel();
+    if (!_isSelectedDayToday() || (UserState.userId?.trim().isEmpty ?? true)) {
+      return;
+    }
+    _contextAwarenessPollingTimer = Timer.periodic(
+      _contextPollingInterval,
+      (_) {
+        if (!mounted || _loadingContextAwareness) {
+          return;
+        }
+        unawaited(_loadContextAwarenessForSelectedDay());
+      },
+    );
+  }
+
+  String _dayEditKey(_ItineraryDay day) {
+    return day.date?.toIso8601String() ?? 'day-${day.day}';
+  }
+
+  Future<void> _applyManualDayEdit(
+    _ItineraryDay day,
+    List<Map<String, dynamic>> items,
+  ) async {
+    final rawDays = _planJson['days'];
+    if (rawDays is! List || _selectedDayIndex >= rawDays.length) {
+      return;
+    }
+    final rawDay = rawDays[_selectedDayIndex];
+    if (rawDay is! Map) {
+      return;
+    }
+    final dayMap = Map<String, dynamic>.from(rawDay);
+    final sanitizedItems = items
+        .map((item) => Map<String, dynamic>.from(jsonDecode(jsonEncode(item)) as Map))
+        .toList();
+    for (var i = 0; i < sanitizedItems.length; i++) {
+      sanitizedItems[i].remove('transitToNext');
+    }
+    dayMap['items'] = sanitizedItems;
+    dayMap.remove('originTransit');
+    final updatedDays = List<dynamic>.from(rawDays);
+    updatedDays[_selectedDayIndex] = dayMap;
+    final updatedPlan = Map<String, dynamic>.from(_planJson)
+      ..['days'] = updatedDays;
+
+    setState(() {
+      _planJson = updatedPlan;
+      _plan = _ItineraryPlan.fromJson(updatedPlan);
+      _transitModeOverrides.clear();
+      _manuallyEditedDayKeys.add(_dayEditKey(day));
+      _contextAwareness = null;
+    });
+    _recomputeManualDayTimes(_plan.days[_selectedDayIndex]);
+    unawaited(_syncActivePlanToCloud());
+    await _loadContextAwarenessForSelectedDay();
+  }
+
+  void _recomputeManualDayTimes(_ItineraryDay day) {
+    final rawDays = _planJson['days'];
+    if (rawDays is! List || _selectedDayIndex >= rawDays.length) {
+      return;
+    }
+    final rawDay = rawDays[_selectedDayIndex];
+    if (rawDay is! Map) {
+      return;
+    }
+    final items = rawDay['items'];
+    if (items is! List) {
+      return;
+    }
+    var current = _preferredDayStartDateTime(day);
+    for (var i = 0; i < day.items.length && i < items.length; i++) {
+      final rawItem = items[i];
+      if (rawItem is! Map) continue;
+      final duration = _resolvedItemDurationMinutes(day, i);
+      rawItem['time'] = _toHm(current);
+      final end = current.add(Duration(minutes: duration));
+      rawItem['endTime'] = _toHm(end);
+      current = end;
+      if (i < day.items.length - 1) {
+        current = current.add(
+          Duration(minutes: _resolvedTransitMinutes(day, i, i + 1)),
+        );
+      }
+    }
+    final updatedPlan = Map<String, dynamic>.from(_planJson);
+    setState(() {
+      _planJson = updatedPlan;
+      _plan = _ItineraryPlan.fromJson(updatedPlan);
+    });
+  }
+
+  Future<void> _reorderDayStop(
+    _ItineraryDay day,
+    int fromIndex,
+    int toIndex,
+  ) async {
+    if (fromIndex == toIndex) return;
+    final rawDays = _planJson['days'];
+    if (rawDays is! List || _selectedDayIndex >= rawDays.length) {
+      return;
+    }
+    final rawDay = rawDays[_selectedDayIndex];
+    if (rawDay is! Map) {
+      return;
+    }
+    final rawItems = rawDay['items'];
+    if (rawItems is! List ||
+        fromIndex < 0 ||
+        fromIndex >= rawItems.length ||
+        toIndex < 0 ||
+        toIndex >= rawItems.length) {
+      return;
+    }
+    final fromItem = day.items[fromIndex];
+    final toItem = day.items[toIndex];
+    if (fromItem.place.isMealBreak || toItem.place.isMealBreak) {
+      return;
+    }
+    final items = rawItems
+        .map((item) => Map<String, dynamic>.from(item as Map))
+        .toList();
+    final moved = items.removeAt(fromIndex);
+    var insertIndex = toIndex;
+    if (fromIndex < toIndex) {
+      insertIndex -= 1;
+    }
+    items.insert(insertIndex.clamp(0, items.length), moved);
+    await _applyManualDayEdit(day, items);
+    _showTopMessage('已更新景點順序並重算時間');
+  }
+
+  Future<int?> _promptStopDuration(
+    _ItineraryDay day,
+    int itemIndex,
+  ) async {
+    final controller = TextEditingController(
+      text: (_resolvedItemDurationMinutes(day, itemIndex)).toString(),
+    );
+    final result = await Navigator.of(context).push<int>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (routeContext) => Scaffold(
+          backgroundColor: const Color(0xFFF7F4EE),
+          appBar: AppBar(
+            title: const Text('調整停留時間'),
+            backgroundColor: Colors.white,
+            foregroundColor: const Color(0xFF3C3552),
+            elevation: 0,
+          ),
+          body: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text(
+                    '設定停留分鐘數',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF3C3552),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: controller,
+                    autofocus: true,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: '分鐘',
+                      hintText: '例如 90',
+                      filled: true,
+                      fillColor: Colors.white,
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    '建議至少 10 分鐘。',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Color(0xFF6D6880),
+                    ),
+                  ),
+                  const Spacer(),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.of(routeContext).pop(),
+                          child: const Text('取消'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: () {
+                            final minutes = int.tryParse(controller.text.trim());
+                            if (minutes == null || minutes < 10) {
+                              return;
+                            }
+                            FocusManager.instance.primaryFocus?.unfocus();
+                            Navigator.of(routeContext).pop(minutes);
+                          },
+                          child: const Text('套用'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    controller.dispose();
+    return result;
+  }
+
+  Future<void> _applyStopDuration(
+    _ItineraryDay day,
+    int itemIndex,
+    _ItineraryItem item,
+    int result,
+  ) async {
+    final rawDays = _planJson['days'];
+    if (rawDays is! List || _selectedDayIndex >= rawDays.length) {
+      return;
+    }
+    final rawDay = rawDays[_selectedDayIndex];
+    if (rawDay is! Map) return;
+    final rawItems = rawDay['items'];
+    if (rawItems is! List || itemIndex >= rawItems.length) return;
+    final items = rawItems
+        .map((entry) => Map<String, dynamic>.from(entry as Map))
+        .toList();
+    items[itemIndex]['durationMinutes'] = result;
+    await _applyManualDayEdit(day, items);
+    _showTopMessage('已更新 ${item.place.name} 的停留時間');
+  }
+
+  Future<bool?> _promptDeleteStop(_ItineraryItem item) async {
+    final confirmed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (routeContext) => Scaffold(
+          backgroundColor: const Color(0xFFF7F4EE),
+          appBar: AppBar(
+            title: const Text('刪除景點'),
+            backgroundColor: Colors.white,
+            foregroundColor: const Color(0xFF3C3552),
+            elevation: 0,
+          ),
+          body: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    '要從今天行程中刪除「${item.place.name}」嗎？',
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF3C3552),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    '刪除後會重新計算後續時間與交通。',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Color(0xFF6D6880),
+                    ),
+                  ),
+                  const Spacer(),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.of(routeContext).pop(false),
+                          child: const Text('取消'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: () => Navigator.of(routeContext).pop(true),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFB24C3A),
+                            foregroundColor: Colors.white,
+                          ),
+                          child: const Text('刪除'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    return confirmed;
+  }
+
+  Future<void> _applyDeleteStop(
+    _ItineraryDay day,
+    int itemIndex,
+    _ItineraryItem item,
+  ) async {
+    final rawDays = _planJson['days'];
+    if (rawDays is! List || _selectedDayIndex >= rawDays.length) {
+      return;
+    }
+    final rawDay = rawDays[_selectedDayIndex];
+    if (rawDay is! Map) return;
+    final rawItems = rawDay['items'];
+    if (rawItems is! List || itemIndex >= rawItems.length) return;
+    final items = rawItems
+        .map((entry) => Map<String, dynamic>.from(entry as Map))
+        .toList();
+    items.removeAt(itemIndex);
+    await _applyManualDayEdit(day, items);
+    _showTopMessage('已刪除 ${item.place.name}');
+  }
+
+  Future<void> _handleStopEditAction(
+    _ItineraryDay day,
+    int itemIndex,
+    _ItineraryItem item,
+    String action,
+  ) async {
+    if (!mounted) return;
+    await Future<void>.delayed(const Duration(milliseconds: 160));
+    if (!mounted) return;
+    switch (action) {
+      case 'duration':
+        final duration = await _promptStopDuration(day, itemIndex);
+        if (duration == null || !mounted) return;
+        await Future<void>.delayed(const Duration(milliseconds: 120));
+        if (!mounted) return;
+        await _applyStopDuration(day, itemIndex, item, duration);
+        break;
+      case 'delete':
+        final confirmed = await _promptDeleteStop(item);
+        if (confirmed != true || !mounted) return;
+        await Future<void>.delayed(const Duration(milliseconds: 120));
+        if (!mounted) return;
+        await _applyDeleteStop(day, itemIndex, item);
+        break;
+    }
+  }
+
+  _ItineraryItem? _previousNonMealItem(_ItineraryDay day, int index) {
+    for (var i = index - 1; i >= 0; i--) {
+      final item = day.items[i];
+      if (!item.place.isMealBreak) {
+        return item;
+      }
+    }
+    return null;
+  }
+
+  _ItineraryItem? _nextNonMealItem(_ItineraryDay day, int index) {
+    for (var i = index + 1; i < day.items.length; i++) {
+      final item = day.items[i];
+      if (!item.place.isMealBreak) {
+        return item;
+      }
+    }
+    return null;
+  }
+
+  bool _isMealVenueCandidate(_ItineraryPlace place, {String query = ''}) {
+    final tags = place.tags.map((tag) => tag.toLowerCase().trim()).toSet();
+    final text = [
+      place.name,
+      place.description,
+      place.address,
+      place.tags.join(' '),
+    ].join(' ').toLowerCase();
+    final queryText = query.trim().toLowerCase();
+
+    const strongFoodTags = <String>{
+      'restaurant',
+      'food',
+      'street_food',
+      'night_market',
+    };
+    const softFoodTags = <String>{
+      'cafe',
+      'bakery',
+      'dessert',
+      'breakfast',
+      'brunch',
+    };
+    const foodKeywords = <String>{
+      '餐廳',
+      '美食',
+      '小吃',
+      '火鍋',
+      '燒肉',
+      '拉麵',
+      '咖啡',
+      '早午餐',
+      '甜點',
+      '下午茶',
+      '牛排',
+      '壽司',
+      '便當',
+      '餐酒館',
+      '麵店',
+      '食堂',
+      'restaurant',
+      'cafe',
+      'coffee',
+      'brunch',
+      'breakfast',
+      'dessert',
+      'bistro',
+      'barbecue',
+      'steak',
+      'sushi',
+      'ramen',
+    };
+    const strongNonFoodTags = <String>{
+      'museum',
+      'heritage',
+      'creative_park',
+      'gallery',
+      'exhibition',
+      'national_park',
+      'lake_river',
+      'beach',
+      'waterfall',
+      'forest',
+      'trail',
+      'hiking',
+      'temple',
+      'church',
+      'zoo',
+      'aquarium',
+      'theme_park',
+      'amusement',
+      'park',
+      'garden',
+      'shopping',
+      'department_store',
+    };
+    const nonFoodKeywords = <String>{
+      '博物館',
+      '美術館',
+      '紀念館',
+      '文化館',
+      '展覽館',
+      '樂園',
+      '公園',
+      '步道',
+      '古蹟',
+      '濕地',
+      '觀景台',
+      '神社',
+      '寺',
+      '廟',
+      'museum',
+      'gallery',
+      'park',
+      'trail',
+      'memorial',
+      'temple',
+      'church',
+    };
+
+    bool hasAnyTag(Iterable<String> values) =>
+        values.any((value) => tags.contains(value));
+    bool hasAnyText(Iterable<String> values) =>
+        values.any((value) => text.contains(value.toLowerCase()));
+
+    final hasStrongFoodTag = hasAnyTag(strongFoodTags);
+    final hasSoftFoodTag = hasAnyTag(softFoodTags);
+    final hasFoodKeyword = hasAnyText(foodKeywords);
+    final hasStrongNonFoodTag = hasAnyTag(strongNonFoodTags);
+    final hasNonFoodKeyword = hasAnyText(nonFoodKeywords);
+
+    final foodSignalCount =
+        strongFoodTags.where(tags.contains).length +
+        softFoodTags.where(tags.contains).length +
+        foodKeywords.where((value) => text.contains(value.toLowerCase())).length;
+    final nonFoodSignalCount =
+        strongNonFoodTags.where(tags.contains).length +
+        nonFoodKeywords.where((value) => text.contains(value.toLowerCase())).length;
+
+    if (queryText.isNotEmpty &&
+        !text.contains(queryText) &&
+        !place.name.toLowerCase().contains(queryText)) {
+      return false;
+    }
+    if (!hasStrongFoodTag && !hasSoftFoodTag && !hasFoodKeyword) {
+      return false;
+    }
+    if ((hasStrongNonFoodTag || hasNonFoodKeyword) &&
+        foodSignalCount <= nonFoodSignalCount) {
+      return false;
+    }
+    return true;
+  }
+
+  Future<List<_MealCandidateOption>> _fetchMealCandidates({
+    required _ItineraryDay day,
+    required int itemIndex,
+    required _ItineraryItem item,
+    String query = '',
+  }) async {
+    final previousItem = _previousNonMealItem(day, itemIndex);
+    final nextItem = _nextNonMealItem(day, itemIndex);
+    final city = item.place.city.isNotEmpty
+        ? item.place.city
+        : previousItem?.place.city.isNotEmpty == true
+        ? previousItem!.place.city
+        : nextItem?.place.city ?? '';
+    final mealType = item.place.tags.contains('dinner') ? 'dinner' : 'lunch';
+    List<Map<String, dynamic>> raw;
+    try {
+      raw = await _api.fetchMealSuggestions(
+        previous: previousItem == null
+            ? null
+            : {
+                'name': previousItem.place.name,
+                'city': previousItem.place.city,
+                'address': previousItem.place.address,
+                'lat': previousItem.place.lat,
+                'lng': previousItem.place.lng,
+              },
+        next: nextItem == null
+            ? null
+            : {
+                'name': nextItem.place.name,
+                'city': nextItem.place.city,
+                'address': nextItem.place.address,
+                'lat': nextItem.place.lat,
+                'lng': nextItem.place.lng,
+              },
+        city: city.isEmpty ? null : city,
+        query: query.trim().isEmpty ? null : query.trim(),
+        mealType: mealType,
+        limit: 18,
+      );
+    } on ApiClientException catch (error) {
+      if (error.statusCode == 404 && _googleMapsApiKey.trim().isNotEmpty) {
+        raw = await _fetchMealSuggestionsFromGoogleDirect(
+          previousItem: previousItem,
+          nextItem: nextItem,
+          city: city,
+          query: query,
+          mealType: mealType,
+        );
+      } else {
+      throw ApiClientException(
+        '餐廳即時搜尋失敗：${error.message}${error.message.contains('GOOGLE_MAPS_API_KEY') ? '。請先設定後端 Google Maps API key 並重啟後端。' : ''}',
+        statusCode: error.statusCode,
+        details: error.details,
+        cause: error,
+      );
+      }
+    }
+    final seen = <String>{};
+    final options = <_MealCandidateOption>[];
+    for (final entry in raw) {
+      final map = Map<String, dynamic>.from(entry);
+      final place = _ItineraryPlace.fromJson(map);
+      if (!_hasValidPlaceCoordinate(place)) {
+        continue;
+      }
+      if (!_isMealVenueCandidate(place, query: query)) {
+        continue;
+      }
+      final dedupeKey = '${place.name}|${place.address}';
+      if (!seen.add(dedupeKey)) {
+        continue;
+      }
+      final fromPrevMinutes = previousItem != null &&
+              _hasValidPlaceCoordinate(previousItem.place)
+          ? _estimateTransitByMode(previousItem.place, place, 'car').minutes
+          : 0;
+      final toNextMinutes =
+          nextItem != null && _hasValidPlaceCoordinate(nextItem.place)
+          ? _estimateTransitByMode(place, nextItem.place, 'car').minutes
+          : 0;
+      final fitScore =
+          (place.rating ?? 0) * 18 -
+          fromPrevMinutes * 0.7 -
+          toNextMinutes * 0.7;
+      options.add(
+        _MealCandidateOption(
+          raw: map,
+          place: place,
+          fromPrevMinutes: fromPrevMinutes,
+          toNextMinutes: toNextMinutes,
+          fitScore: fitScore,
+        ),
+      );
+    }
+    options.sort((a, b) => b.fitScore.compareTo(a.fitScore));
+    return options.take(8).toList();
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchMealSuggestionsFromGoogleDirect({
+    required _ItineraryItem? previousItem,
+    required _ItineraryItem? nextItem,
+    required String city,
+    required String query,
+    required String mealType,
+  }) async {
+    final prevLat = previousItem?.place.lat;
+    final prevLng = previousItem?.place.lng;
+    final nextLat = nextItem?.place.lat;
+    final nextLng = nextItem?.place.lng;
+    final hasPrev = prevLat != null && prevLng != null;
+    final hasNext = nextLat != null && nextLng != null;
+    if (!hasPrev && !hasNext) {
+      throw ApiClientException('缺少前後站座標，無法即時搜尋餐廳。');
+    }
+
+    late final double anchorLat;
+    late final double anchorLng;
+    if (hasPrev && hasNext) {
+      anchorLat = (prevLat + nextLat) / 2;
+      anchorLng = (prevLng + nextLng) / 2;
+    } else {
+      anchorLat = prevLat ?? nextLat!;
+      anchorLng = prevLng ?? nextLng!;
+    }
+
+    final nearby = await _googleMealSearch(
+      path: '/maps/api/place/nearbysearch/json',
+      params: {
+        'location': '$anchorLat,$anchorLng',
+        'radius': hasPrev && hasNext ? '3500' : '5000',
+        'type': 'restaurant',
+        'language': 'zh-TW',
+        'region': 'tw',
+        if (query.trim().isNotEmpty) 'keyword': query.trim(),
+      },
+    );
+
+    var results = _normalizeDirectGoogleMealResults(
+      nearby,
+      fallbackCity: city,
+      mealType: mealType,
+    );
+
+    if (results.length < 5) {
+      final textQuery = query.trim().isNotEmpty
+          ? '${query.trim()} ${city.trim()} 餐廳'.trim()
+          : '${city.trim()} ${mealType == 'dinner' ? '晚餐' : '午餐'} 餐廳'.trim();
+      if (textQuery.isNotEmpty) {
+        final textSearch = await _googleMealSearch(
+          path: '/maps/api/place/textsearch/json',
+          params: {
+            'query': textQuery,
+            'language': 'zh-TW',
+            'region': 'tw',
+            'location': '$anchorLat,$anchorLng',
+            'radius': '6000',
+          },
+        );
+        results = [
+          ...results,
+          ..._normalizeDirectGoogleMealResults(
+            textSearch,
+            fallbackCity: city,
+            mealType: mealType,
+          ),
+        ];
+      }
+    }
+
+    final unique = <String, Map<String, dynamic>>{};
+    for (final result in results) {
+      final name = result['name']?.toString().trim() ?? '';
+      final address = result['address']?.toString().trim() ?? '';
+      if (name.isEmpty || address.isEmpty) continue;
+      unique.putIfAbsent('$name|$address', () => result);
+    }
+    return unique.values.toList();
+  }
+
+  Future<List<Map<String, dynamic>>> _googleMealSearch({
+    required String path,
+    required Map<String, String> params,
+  }) async {
+    if (_googleMapsApiKey.trim().isEmpty) {
+      return const <Map<String, dynamic>>[];
+    }
+    final uri = Uri.https('maps.googleapis.com', path, {
+      ...params,
+      'key': _googleMapsApiKey,
+    });
+    try {
+      final response = await http.get(uri).timeout(const Duration(seconds: 10));
+      if (response.statusCode != 200) {
+        return const <Map<String, dynamic>>[];
+      }
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map<String, dynamic>) {
+        return const <Map<String, dynamic>>[];
+      }
+      final status = decoded['status']?.toString() ?? '';
+      if (status != 'OK' && status != 'ZERO_RESULTS') {
+        return const <Map<String, dynamic>>[];
+      }
+      final results = decoded['results'];
+      if (results is! List) {
+        return const <Map<String, dynamic>>[];
+      }
+      return results.whereType<Map>().map(Map<String, dynamic>.from).toList();
+    } on Exception {
+      return const <Map<String, dynamic>>[];
+    }
+  }
+
+  List<Map<String, dynamic>> _normalizeDirectGoogleMealResults(
+    List<Map<String, dynamic>> results, {
+    required String fallbackCity,
+    required String mealType,
+  }) {
+    const allowedMealTypes = <String>{
+      'restaurant',
+      'cafe',
+      'bakery',
+      'meal_takeaway',
+      'meal_delivery',
+      'bar',
+    };
+    final normalized = <Map<String, dynamic>>[];
+    for (final result in results) {
+      final types = (result['types'] as List?)
+              ?.map((e) => e.toString().trim().toLowerCase())
+              .where((e) => e.isNotEmpty)
+              .toSet() ??
+          <String>{};
+      if (!types.any(allowedMealTypes.contains)) {
+        continue;
+      }
+      final name = result['name']?.toString().trim() ?? '';
+      final address =
+          result['formatted_address']?.toString().trim() ??
+          result['vicinity']?.toString().trim() ??
+          '';
+      final text = '$name $address ${types.join(' ')}'.toLowerCase();
+      if (text.contains('博物館') ||
+          text.contains('紀念館') ||
+          text.contains('公園') ||
+          text.contains('步道') ||
+          text.contains('museum') ||
+          text.contains('park') ||
+          text.contains('trail')) {
+        continue;
+      }
+      final geometry = result['geometry'];
+      final geometryMap = geometry is Map ? Map<String, dynamic>.from(geometry) : const <String, dynamic>{};
+      final location = geometryMap['location'];
+      final locationMap = location is Map ? Map<String, dynamic>.from(location) : const <String, dynamic>{};
+      final lat = (locationMap['lat'] as num?)?.toDouble();
+      final lng = (locationMap['lng'] as num?)?.toDouble();
+      if (lat == null || lng == null) {
+        continue;
+      }
+      String imageUrl = '';
+      final photos = result['photos'];
+      if (photos is List && photos.isNotEmpty && photos.first is Map) {
+        final photoRef = (photos.first as Map)['photo_reference']?.toString();
+        if (photoRef != null && photoRef.isNotEmpty) {
+          imageUrl = Uri.https(
+            'maps.googleapis.com',
+            '/maps/api/place/photo',
+            {
+              'maxwidth': '800',
+              'photo_reference': photoRef,
+              'key': _googleMapsApiKey,
+            },
+          ).toString();
+        }
+      }
+      normalized.add({
+        'id': result['place_id']?.toString() ?? '$name|$address',
+        'name': name,
+        'kind': 'place',
+        'city': _extractCityFromAddress(address) ?? fallbackCity,
+        'address': address,
+        'description':
+            mealType == 'dinner'
+                ? 'Google Places 即時搜尋到的晚餐候選。'
+                : 'Google Places 即時搜尋到的午餐候選。',
+        'imageUrl': imageUrl,
+        'tags': <String>[
+          if (types.contains('restaurant')) 'restaurant',
+          if (types.contains('cafe')) 'cafe',
+          if (types.contains('bakery')) 'bakery',
+          if (types.contains('meal_takeaway')) 'meal_takeaway',
+          if (types.contains('meal_delivery')) 'meal_delivery',
+          if (types.contains('bar')) 'bar',
+          'live_google_place',
+        ],
+        'rating': (result['rating'] as num?)?.toDouble(),
+        'userRatingsTotal': (result['user_ratings_total'] as num?)?.toInt(),
+        'priceLevel': (result['price_level'] as num?)?.toInt(),
+        'lat': lat,
+        'lng': lng,
+        'source': 'google_places_client',
+      });
+    }
+    return normalized;
+  }
+
+  String? _extractCityFromAddress(String address) {
+    final match = RegExp(r'[\u4e00-\u9fff]{1,8}(縣|市)').firstMatch(address);
+    return match?.group(0);
+  }
+
+  String _mealCandidateLoadErrorText(Object? error) {
+    if (error is ApiClientException) {
+      return error.message;
+    }
+    final text = error?.toString().trim() ?? '';
+    if (text.isEmpty) {
+      return '餐廳推薦載入失敗';
+    }
+    return text;
+  }
+
+  Future<Map<String, dynamic>> _fetchMealFitExplanation({
+    required _ItineraryDay day,
+    required int itemIndex,
+    required _ItineraryItem mealItem,
+    required _MealCandidateOption candidate,
+  }) async {
+    final meta = _planJson['meta'];
+    final metaMap = meta is Map
+        ? Map<String, dynamic>.from(meta)
+        : <String, dynamic>{};
+    final previousItem = _previousNonMealItem(day, itemIndex);
+    final nextItem = _nextNonMealItem(day, itemIndex);
+    final range = _buildTimeRange(day, itemIndex);
+    final durationMinutes = _rangeDurationMinutes(range);
+    String? weatherSummary;
+    String? weatherTempRange;
+    if (day.weather != null) {
+      weatherSummary = day.weather!.summary;
+      final min = day.weather!.temperatureMin;
+      final max = day.weather!.temperatureMax;
+      if (min != null && max != null) {
+        weatherTempRange = '${min.round()}~${max.round()}°C';
+      }
+    }
+
+    final payload = <String, dynamic>{
+      'explanationContext': 'meal_selection',
+      'date': day.date?.toIso8601String().substring(0, 10),
+      'day': day.day,
+      'startTime': range.start,
+      'endTime': range.end,
+      'durationMinutes': durationMinutes,
+      'location': metaMap['location'],
+      'budget': metaMap['budget'],
+      'people': metaMap['people'],
+      'weatherSummary': weatherSummary,
+      'weatherTempRange': weatherTempRange,
+      'prevPlaceName': previousItem?.place.name,
+      'nextPlaceName': nextItem?.place.name,
+      'transitFromPrev': previousItem == null
+          ? null
+          : _estimateTransitByMode(previousItem.place, candidate.place, 'car')
+                .primaryLine,
+      'transitToNext': nextItem == null
+          ? null
+          : _estimateTransitByMode(candidate.place, nextItem.place, 'car')
+                .primaryLine,
+      'place': candidate.raw,
+    };
+    try {
+      return await _api.explainItineraryStop(payload: payload);
+    } catch (_) {
+      return {
+        'summary': '${candidate.place.name} 位於前後站點之間，適合作為${mealItem.place.name}安排。',
+        'whyIncluded':
+            '前一站約 ${candidate.fromPrevMinutes} 分鐘、下一站約 ${candidate.toNextMinutes} 分鐘，動線仍屬合理。',
+        'whyTiming': '餐期安排在 ${range.start}-${range.end}，可銜接前後景點並保留休息時間。',
+        'whyDuration': '維持原本用餐停留時長，減少對整體節奏的破壞。',
+        'tips': [
+          if (candidate.fromPrevMinutes >= 25) '前往餐廳前建議預留一些交通緩衝時間',
+          if (candidate.toNextMinutes >= 25) '用餐後到下一站移動稍長，可避免再加其他繞路點',
+          '若現場候位時間過長，可改選同城市備選餐廳',
+        ],
+        'source': 'rule',
+      };
+    }
+  }
+
+  Future<void> _confirmAndApplyMealSelection({
+    required _ItineraryDay day,
+    required int itemIndex,
+    required _ItineraryItem mealItem,
+    required _MealCandidateOption candidate,
+  }) async {
+    final explanation = await _fetchMealFitExplanation(
+      day: day,
+      itemIndex: itemIndex,
+      mealItem: mealItem,
+      candidate: candidate,
+    );
+    if (!mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        final tips =
+            (explanation['tips'] as List?)
+                ?.map((e) => e.toString())
+                .where((e) => e.trim().isNotEmpty)
+                .toList() ??
+            const <String>[];
+        return AlertDialog(
+          title: Text('套用 ${candidate.place.name}？'),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if ((explanation['summary']?.toString() ?? '').trim().isNotEmpty)
+                  Text(
+                    explanation['summary'].toString(),
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                const SizedBox(height: 8),
+                Text(explanation['whyIncluded']?.toString() ?? ''),
+                const SizedBox(height: 6),
+                Text(explanation['whyTiming']?.toString() ?? ''),
+                const SizedBox(height: 6),
+                Text(explanation['whyDuration']?.toString() ?? ''),
+                const SizedBox(height: 10),
+                Text(
+                  '前一站約 ${candidate.fromPrevMinutes} 分鐘，下一站約 ${candidate.toNextMinutes} 分鐘',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF5A5670),
+                  ),
+                ),
+                if (tips.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  for (final tip in tips.take(3))
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Text(
+                        '• $tip',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF5A5670),
+                        ),
+                      ),
+                    ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('套用餐廳'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) return;
+    await _applyMealSelection(day, itemIndex, mealItem, candidate.raw);
+    _showTopMessage('已套用 ${candidate.place.name} 並重算時間交通');
+  }
+
+  Future<void> _applyMealSelection(
+    _ItineraryDay day,
+    int itemIndex,
+    _ItineraryItem mealItem,
+    Map<String, dynamic> candidateRaw,
+  ) async {
+    final rawDays = _planJson['days'];
+    if (rawDays is! List || _selectedDayIndex >= rawDays.length) {
+      return;
+    }
+    final rawDay = rawDays[_selectedDayIndex];
+    if (rawDay is! Map) return;
+    final rawItems = rawDay['items'];
+    if (rawItems is! List || itemIndex >= rawItems.length) return;
+    final items = rawItems
+        .map((entry) => Map<String, dynamic>.from(entry as Map))
+        .toList();
+    final selected = Map<String, dynamic>.from(candidateRaw);
+    final originalTags = mealItem.place.tags;
+    final mealType = originalTags.contains('dinner') ? 'dinner' : 'lunch';
+    selected['kind'] = 'meal_break';
+    selected['tags'] = <String>{
+      ...((selected['tags'] as List?)?.map((e) => e.toString()) ?? const <String>[]),
+      'meal_break',
+      mealType,
+    }.toList();
+    selected['description'] = selected['description']?.toString().trim().isNotEmpty == true
+        ? selected['description']
+        : '已選擇${mealType == 'lunch' ? '午餐' : '晚餐'}餐廳，會依前後景點重新調整交通與時間。';
+    items[itemIndex]['place'] = selected;
+    await _applyManualDayEdit(day, items);
+  }
+
+  Future<void> _openMealBreakPlanner(
+    _ItineraryDay day,
+    int itemIndex,
+    _ItineraryItem item,
+  ) async {
+    final previousItem = _previousNonMealItem(day, itemIndex);
+    final nextItem = _nextNonMealItem(day, itemIndex);
+    final searchController = TextEditingController();
+    Future<List<_MealCandidateOption>> candidatesFuture =
+        _fetchMealCandidates(day: day, itemIndex: itemIndex, item: item);
+
+    final selectedCandidate = await showModalBottomSheet<_MealCandidateOption>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return SafeArea(
+              child: SizedBox(
+                height: MediaQuery.of(context).size.height * 0.78,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        item.place.name,
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        '${previousItem?.place.name ?? '前一站未定'} -> ${item.place.name} -> ${nextItem?.place.name ?? '下一站未定'}',
+                        style: const TextStyle(
+                          fontSize: 12.5,
+                          color: Color(0xFF5A5670),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: searchController,
+                        textInputAction: TextInputAction.search,
+                        decoration: InputDecoration(
+                          hintText: '搜尋想要的餐廳名稱',
+                          suffixIcon: IconButton(
+                            onPressed: () {
+                              setModalState(() {
+                                candidatesFuture = _fetchMealCandidates(
+                                  day: day,
+                                  itemIndex: itemIndex,
+                                  item: item,
+                                  query: searchController.text,
+                                );
+                              });
+                            },
+                            icon: const Icon(Icons.search_rounded),
+                          ),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                        onSubmitted: (_) {
+                          setModalState(() {
+                            candidatesFuture = _fetchMealCandidates(
+                              day: day,
+                              itemIndex: itemIndex,
+                              item: item,
+                              query: searchController.text,
+                            );
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      const Text(
+                        '推薦餐廳',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Expanded(
+                        child: FutureBuilder<List<_MealCandidateOption>>(
+                          future: candidatesFuture,
+                          builder: (context, snapshot) {
+                            if (snapshot.connectionState == ConnectionState.waiting) {
+                              return const Center(
+                                child: CircularProgressIndicator(),
+                              );
+                            }
+                            if (snapshot.hasError) {
+                              return Center(
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                                  child: Text(
+                                    _mealCandidateLoadErrorText(snapshot.error),
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      color: Color(0xFF5A5670),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            }
+                            final candidates = snapshot.data ?? const <_MealCandidateOption>[];
+                            if (candidates.isEmpty) {
+                              return const Center(
+                                child: Text('找不到符合的餐廳'),
+                              );
+                            }
+                            return ListView.separated(
+                              itemCount: candidates.length,
+                              separatorBuilder: (_, __) => const SizedBox(height: 8),
+                              itemBuilder: (context, index) {
+                                final candidate = candidates[index];
+                                return Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFFFFBF7),
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(
+                                      color: const Color(0xFFF0D8C9),
+                                    ),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  candidate.place.name,
+                                                  style: const TextStyle(
+                                                    fontSize: 15,
+                                                    fontWeight: FontWeight.w800,
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 4),
+                                                Text(
+                                                  candidate.place.address.isNotEmpty
+                                                      ? candidate.place.address
+                                                      : candidate.place.city,
+                                                  style: const TextStyle(
+                                                    fontSize: 12,
+                                                    color: Colors.black54,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          if (candidate.place.rating != null)
+                                            Text(
+                                              '${candidate.place.rating!.toStringAsFixed(1)}★',
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        '前一站約 ${candidate.fromPrevMinutes} 分鐘，下一站約 ${candidate.toNextMinutes} 分鐘',
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          color: Color(0xFF5A5670),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Align(
+                                        alignment: Alignment.centerRight,
+                                        child: ElevatedButton(
+                                          onPressed: () {
+                                            Navigator.of(context).pop(candidate);
+                                          },
+                                          child: const Text('AI 檢查並套用'),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+    searchController.dispose();
+    if (!mounted || selectedCandidate == null) return;
+    await _confirmAndApplyMealSelection(
+      day: day,
+      itemIndex: itemIndex,
+      mealItem: item,
+      candidate: selectedCandidate,
+    );
+  }
+
+  Future<void> _maybePromptContextReplan(
+    _ItineraryContextAwareness contextData,
+  ) async {
+    final action = contextData.nextAction;
+    if (!mounted || action == null) return;
+    if (action.phase == 'completed') return;
+    if (_contextSeverityRank(action.severity) < 2) return;
+    final key = [
+      _selectedDayIndex,
+      action.type,
+      action.targetPlaceName,
+      action.scheduledTime,
+    ].join('|');
+    if (_lastContextReplanPromptKey == key || _showingContextReplanDialog) {
+      return;
+    }
+    _showingContextReplanDialog = true;
+    try {
+      await Future<void>.delayed(Duration.zero);
+      if (!mounted) return;
+      final shouldReplan = await _showContextReplanConfirmDialog(action);
+      _lastContextReplanPromptKey = key;
+      if (shouldReplan == true && mounted) {
+        await _replanWithCurrentPreferences();
+      }
+    } finally {
+      _showingContextReplanDialog = false;
+    }
+  }
+
+  Future<bool?> _showContextReplanConfirmDialog(
+    _ItineraryContextNextAction action,
+  ) {
+    return showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('要重新安排後續行程嗎？'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(action.title),
+            const SizedBox(height: 8),
+            Text(
+              action.message,
+              style: const TextStyle(
+                fontSize: 13,
+                color: Color(0xFF5A5670),
+                height: 1.35,
+              ),
+            ),
+            if (action.recommendedAction.trim().isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Text(
+                '建議：${action.recommendedAction}',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('先維持原行程'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('重新安排'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  int _contextSeverityRank(String severity) {
+    return switch (severity) {
+      'high' => 3,
+      'medium' => 2,
+      'low' => 1,
+      _ => 0,
+    };
   }
 
   Widget _settingChipButton({
@@ -643,6 +2076,15 @@ class _ItineraryPageState extends State<ItineraryPage> {
                 setState(() {
                   _selectedDayIndex = index;
                 });
+                _refreshContextAwarenessPolling();
+                unawaited(_loadContextAwarenessForSelectedDay());
+                if (_timelineScrollController.hasClients) {
+                  _timelineScrollController.animateTo(
+                    0,
+                    duration: const Duration(milliseconds: 220),
+                    curve: Curves.easeOut,
+                  );
+                }
               },
               itemBuilder: (context, index) {
                 final day = days[index];
@@ -768,6 +2210,8 @@ class _ItineraryPageState extends State<ItineraryPage> {
 
   Widget _buildInsightCard(_ItineraryInsight insight) {
     final tips = insight.tips.take(3).toList();
+    final warnings = insight.warnings.take(3).toList();
+    final improvements = insight.improvements.take(3).toList();
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
@@ -809,6 +2253,28 @@ class _ItineraryPageState extends State<ItineraryPage> {
                 color: Color(0xFF292533),
               ),
             ),
+          if (insight.planningFocus.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              'AI 規劃焦點：${insight.planningFocus}',
+              style: const TextStyle(
+                fontSize: 12,
+                height: 1.35,
+                color: Color(0xFF4C4760),
+              ),
+            ),
+          ],
+          if (insight.alternativePlan.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              '替代方案：${insight.alternativePlan}',
+              style: const TextStyle(
+                fontSize: 12,
+                height: 1.35,
+                color: Color(0xFF4C4760),
+              ),
+            ),
+          ],
           if (insight.routeReason.isNotEmpty) ...[
             const SizedBox(height: 4),
             Text(
@@ -831,6 +2297,76 @@ class _ItineraryPageState extends State<ItineraryPage> {
               ),
             ),
           ],
+          if (insight.pacing.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              '節奏判斷：${insight.pacing}',
+              style: const TextStyle(
+                fontSize: 12,
+                height: 1.35,
+                color: Color(0xFF4C4760),
+              ),
+            ),
+          ],
+          if (insight.mealPlan.isNotEmpty) ...[
+            const SizedBox(height: 2),
+            Text(
+              '餐食安排：${insight.mealPlan}',
+              style: const TextStyle(
+                fontSize: 12,
+                height: 1.35,
+                color: Color(0xFF4C4760),
+              ),
+            ),
+          ],
+          if (warnings.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            const Text(
+              'AI 提醒',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                color: Color(0xFF9A5A30),
+              ),
+            ),
+            const SizedBox(height: 4),
+            for (final warning in warnings)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 2),
+                child: Text(
+                  '• $warning',
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    height: 1.3,
+                    color: Color(0xFF7A533B),
+                  ),
+                ),
+              ),
+          ],
+          if (improvements.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            const Text(
+              'AI 改善建議',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                color: Color(0xFF49636D),
+              ),
+            ),
+            const SizedBox(height: 4),
+            for (final item in improvements)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 2),
+                child: Text(
+                  '• $item',
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    height: 1.3,
+                    color: Color(0xFF4F6670),
+                  ),
+                ),
+              ),
+          ],
           if (tips.isNotEmpty) ...[
             const SizedBox(height: 6),
             for (final tip in tips)
@@ -851,8 +2387,424 @@ class _ItineraryPageState extends State<ItineraryPage> {
     );
   }
 
+  Widget _buildContextAwarenessSection() {
+    if (_loadingContextAwareness) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.82),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0xFFE0D8CE)),
+        ),
+        child: const Row(
+          children: [
+            SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                '正在檢查今日天氣、營業時間與交通狀況...',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF4B465B),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    final contextData = _contextAwareness;
+    if (contextData == null) {
+      return const SizedBox.shrink();
+    }
+
+    final theme = _contextSeverityTheme(contextData.severity);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        color: theme.$2,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: theme.$3),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(theme.$1, size: 16, color: theme.$4),
+              const SizedBox(width: 6),
+              Text(
+                '情境感知提醒',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                  color: theme.$4,
+                ),
+              ),
+              if (contextData.linePushed) ...[
+                const Spacer(),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEAF6EF),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: const Text(
+                    '已推播到 LINE',
+                    style: TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF2E6D52),
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            contextData.summary,
+            style: const TextStyle(
+              fontSize: 12.5,
+              height: 1.35,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF2F2B3F),
+            ),
+          ),
+          if (contextData.upcomingReminder != null) ...[
+            const SizedBox(height: 8),
+            _buildUpcomingReminderCard(contextData.upcomingReminder!),
+          ],
+          if (contextData.nextAction != null) ...[
+            const SizedBox(height: 8),
+            _buildContextNextActionCard(contextData.nextAction!),
+          ],
+          if (contextData.alerts.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            for (final alert in contextData.alerts.take(3))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(
+                  '• ${alert.title}：${alert.message}',
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    height: 1.35,
+                    color: Color(0xFF4C4760),
+                  ),
+                ),
+              ),
+          ],
+          if (contextData.suggestions.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            const Text(
+              '即時建議',
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w800,
+                color: Color(0xFF49636D),
+              ),
+            ),
+            const SizedBox(height: 4),
+            for (final suggestion in contextData.suggestions.take(2))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 2),
+                child: Text(
+                  '• $suggestion',
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    height: 1.3,
+                    color: Color(0xFF4F6670),
+                  ),
+                ),
+              ),
+          ],
+          if (contextData.backupPlans.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            const Text(
+              '雨天／室內備案',
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w800,
+                color: Color(0xFF49636D),
+              ),
+            ),
+            const SizedBox(height: 4),
+            for (final plan in contextData.backupPlans.take(2))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.55),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFFE5DDD2)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${plan.targetPlaceName}：${plan.reason}',
+                        style: const TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF4C4760),
+                          height: 1.35,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      for (final replacement in plan.replacements.take(2))
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 2),
+                          child: Text(
+                            '• ${replacement.name}'
+                            '${replacement.rating != null ? ' ${replacement.rating!.toStringAsFixed(1)}★' : ''}'
+                            '${replacement.city.isNotEmpty ? ' · ${replacement.city}' : ''}',
+                            style: const TextStyle(
+                              fontSize: 11.5,
+                              color: Color(0xFF4F6670),
+                              height: 1.3,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildContextNextActionCard(_ItineraryContextNextAction action) {
+    final isCurrent = action.phase == 'current';
+    final accent = switch (action.severity) {
+      'high' => const Color(0xFFB85B4B),
+      'medium' => const Color(0xFF5A6FB3),
+      _ => const Color(0xFF567F68),
+    };
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.62),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: accent.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                isCurrent ? Icons.bolt_rounded : Icons.update_rounded,
+                size: 16,
+                color: accent,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  isCurrent ? '即時調整建議' : '下一站調整建議',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    color: accent,
+                  ),
+                ),
+              ),
+              if (action.scheduledTime.trim().isNotEmpty)
+                Text(
+                  action.scheduledTime,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: accent,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            action.title,
+            style: const TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w800,
+              color: Color(0xFF2F2B3F),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            action.message,
+            style: const TextStyle(
+              fontSize: 11.5,
+              height: 1.35,
+              color: Color(0xFF4C4760),
+            ),
+          ),
+          if (action.recommendedAction.trim().isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              '建議操作：${action.recommendedAction}',
+              style: TextStyle(
+                fontSize: 11.5,
+                height: 1.35,
+                fontWeight: FontWeight.w700,
+                color: accent,
+              ),
+            ),
+          ],
+          if (action.alternatives.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            for (final alt in action.alternatives.take(2))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 2),
+                child: Text(
+                  '• ${alt.name}'
+                  '${alt.rating != null ? ' ${alt.rating!.toStringAsFixed(1)}★' : ''}'
+                  '${alt.city.isNotEmpty ? ' · ${alt.city}' : ''}',
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    color: Color(0xFF4F6670),
+                    height: 1.3,
+                  ),
+                ),
+              ),
+          ],
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerRight,
+            child: OutlinedButton.icon(
+              onPressed: _replanning
+                  ? null
+                  : () async {
+                      final shouldReplan =
+                          await _showContextReplanConfirmDialog(action);
+                      if (shouldReplan == true && mounted) {
+                        await _replanWithCurrentPreferences();
+                      }
+                    },
+              icon: const Icon(Icons.refresh_rounded, size: 16),
+              label: const Text('詢問是否重排'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUpcomingReminderCard(_ItineraryUpcomingReminder reminder) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.58),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5DDD2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '即將前往 ${reminder.targetPlaceName}'
+            '${reminder.scheduledTime.isNotEmpty ? ' · ${reminder.scheduledTime}' : ''}',
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: Color(0xFF2F2B3F),
+            ),
+          ),
+          if (reminder.transitLabel.isNotEmpty || reminder.transitMinutes != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              '建議交通：'
+              '${reminder.transitLabel.isNotEmpty ? reminder.transitLabel : '依目前路況前往'}'
+              '${reminder.transitMinutes != null ? '，約 ${reminder.transitMinutes} 分鐘' : ''}',
+              style: const TextStyle(
+                fontSize: 11.5,
+                height: 1.3,
+                color: Color(0xFF4C4760),
+              ),
+            ),
+          ],
+          if (reminder.minutesUntil != null && reminder.minutesUntil! >= 0) ...[
+            const SizedBox(height: 2),
+            Text(
+              '距離出發約 ${reminder.minutesUntil} 分鐘，系統會持續重檢天氣與交通。',
+              style: const TextStyle(
+                fontSize: 11.5,
+                height: 1.3,
+                color: Color(0xFF4F6670),
+              ),
+            ),
+          ],
+          if (reminder.notes.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            for (final note in reminder.notes.take(2))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 2),
+                child: Text(
+                  '• $note',
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    height: 1.3,
+                    color: Color(0xFF4F6670),
+                  ),
+                ),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  (IconData, Color, Color, Color) _contextSeverityTheme(String severity) {
+    return switch (severity) {
+      'high' => (
+        Icons.warning_amber_rounded,
+        const Color(0xFFFFF3E9),
+        const Color(0xFFF2D1B2),
+        const Color(0xFF9A5A30),
+      ),
+      'medium' => (
+        Icons.cloud_queue_rounded,
+        const Color(0xFFF7F3E9),
+        const Color(0xFFE5DAC1),
+        const Color(0xFF7A6243),
+      ),
+      'low' => (
+        Icons.info_outline_rounded,
+        const Color(0xFFF3F4FA),
+        const Color(0xFFD7DCEE),
+        const Color(0xFF5C5774),
+      ),
+      _ => (
+        Icons.verified_outlined,
+        const Color(0xFFEEF7F1),
+        const Color(0xFFD2E6D7),
+        const Color(0xFF2E6D52),
+      ),
+    };
+  }
+
   void _animateToDay(int index) {
     if (index < 0 || index >= _plan.days.length) return;
+    if (_timelineScrollController.hasClients) {
+      _timelineScrollController.animateTo(
+        0,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+      );
+    }
     _dayPageController.animateToPage(
       index,
       duration: const Duration(milliseconds: 220),
@@ -860,88 +2812,161 @@ class _ItineraryPageState extends State<ItineraryPage> {
     );
   }
 
-  Widget _buildTimeline(_ItineraryDay day) {
-    if (day.items.isEmpty) {
-      return const Center(
-        child: Text(
-          '這一天沒有安排景點',
-          style: TextStyle(fontSize: 16, color: Colors.black54),
+  List<Widget> _buildTimelineChildren(_ItineraryDay day) {
+    if (day.items.isEmpty && day.originTransit == null) {
+      return const [
+        Padding(
+          padding: EdgeInsets.symmetric(vertical: 32),
+          child: Center(
+            child: Text(
+              '這一天沒有安排景點',
+              style: TextStyle(fontSize: 16, color: Colors.black54),
+            ),
+          ),
         ),
-      );
+      ];
     }
 
-    return ListView.builder(
-      controller: _timelineScrollController,
-      physics: const BouncingScrollPhysics(),
-      itemCount: day.items.length * 2 - 1,
-      itemBuilder: (context, index) {
-        if (index.isOdd) {
-          final fromIndex = (index - 1) ~/ 2;
-          final from = day.items[fromIndex];
-          final to = day.items[(index + 1) ~/ 2];
-          final options = _transitComparisonOptions(day, fromIndex, from, to);
-          final selectedModeKey =
-              _transitModeOverrides[_transitSegmentKey(day, fromIndex)] ??
-              'best';
-          final transit = options[selectedModeKey] ?? options['best']!;
-          return Padding(
-            padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const SizedBox(width: 20),
-                Container(width: 2, height: 24, color: const Color(0xFFE2D7EA)),
-                const SizedBox(width: 12),
-                Icon(transit.icon, size: 16, color: const Color(0xFF5B5779)),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: Text(
-                              transit.primaryLine,
-                              style: const TextStyle(
-                                color: Color(0xFF5B5779),
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
+    final children = <Widget>[];
+    if (day.originTransit != null) {
+      children.add(_buildOriginTransitRow(day));
+    }
+    for (var stopIndex = 0; stopIndex < day.items.length; stopIndex++) {
+      if (stopIndex > 0) {
+        final fromIndex = stopIndex - 1;
+        final from = day.items[fromIndex];
+        final to = day.items[stopIndex];
+        final transit = _resolvedTransitInfoForTimeline(
+          day,
+          fromIndex,
+          stopIndex,
+          from,
+          to,
+        );
+        if (transit != null) {
+          final selectedModeKey = _normalizeTransitMode(
+            _transitModeOverrides[_transitSegmentKey(day, fromIndex)],
+          );
+          children.add(
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(width: 20),
+                  Container(
+                    width: 2,
+                    height: 24,
+                    color: const Color(0xFFE2D7EA),
+                  ),
+                  const SizedBox(width: 12),
+                  Icon(transit.icon, size: 16, color: const Color(0xFF5B5779)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                transit.primaryLine,
+                                style: const TextStyle(
+                                  color: Color(0xFF5B5779),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                ),
                               ),
                             ),
-                          ),
-                          const SizedBox(width: 6),
-                          _buildTransitModeMenu(
-                            day: day,
-                            segmentIndex: fromIndex,
-                            selected: selectedModeKey,
-                          ),
-                        ],
-                      ),
-                      if (transit.secondaryLine.isNotEmpty)
-                        Text(
-                          transit.secondaryLine,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Color(0xFF726E88),
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                          ),
+                            const SizedBox(width: 6),
+                            _buildTransitModeMenu(
+                              day: day,
+                              segmentIndex: fromIndex,
+                              selected: selectedModeKey,
+                            ),
+                          ],
                         ),
-                    ],
+                        if (transit.secondaryLine.isNotEmpty)
+                          Text(
+                            transit.secondaryLine,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Color(0xFF726E88),
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           );
         }
+      }
 
-        final stopIndex = index ~/ 2;
-        final item = day.items[stopIndex];
-        final range = _buildTimeRange(day, stopIndex);
-        return Padding(
+      final item = day.items[stopIndex];
+      final range = _buildTimeRange(day, stopIndex);
+      final stopCard = item.place.isMealBreak
+          ? _buildMealBreakCard(
+              day: day,
+              itemIndex: stopIndex,
+              item: item,
+            )
+          : _buildPlaceStopCard(
+              day: day,
+              itemIndex: stopIndex,
+              item: item,
+              range: range,
+            );
+      final stopContent = item.place.isMealBreak
+          ? stopCard
+          : DragTarget<int>(
+              onWillAcceptWithDetails: (details) {
+                final fromIndex = details.data;
+                if (fromIndex == stopIndex) return false;
+                if (fromIndex < 0 || fromIndex >= day.items.length) return false;
+                return !day.items[fromIndex].place.isMealBreak;
+              },
+              onAcceptWithDetails: (details) {
+                unawaited(_reorderDayStop(day, details.data, stopIndex));
+              },
+              builder: (context, candidateData, rejectedData) {
+                final highlighted = candidateData.isNotEmpty;
+                return LongPressDraggable<int>(
+                  data: stopIndex,
+                  feedback: Material(
+                    color: Colors.transparent,
+                    child: SizedBox(
+                      width: MediaQuery.of(context).size.width - 120,
+                      child: Opacity(opacity: 0.92, child: stopCard),
+                    ),
+                  ),
+                  childWhenDragging: Opacity(
+                    opacity: 0.35,
+                    child: stopCard,
+                  ),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 120),
+                    padding: highlighted
+                        ? const EdgeInsets.all(4)
+                        : EdgeInsets.zero,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(18),
+                      color: highlighted
+                          ? const Color(0x336E8BD8)
+                          : Colors.transparent,
+                    ),
+                    child: stopCard,
+                  ),
+                );
+              },
+            );
+      children.add(
+        Padding(
           padding: const EdgeInsets.only(bottom: 8),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -963,8 +2988,10 @@ class _ItineraryPageState extends State<ItineraryPage> {
                   Container(
                     width: 12,
                     height: 12,
-                    decoration: const BoxDecoration(
-                      color: Color(0xFF6E8BD8),
+                    decoration: BoxDecoration(
+                      color: item.place.isMealBreak
+                          ? const Color(0xFFEC8F64)
+                          : const Color(0xFF6E8BD8),
                       shape: BoxShape.circle,
                     ),
                   ),
@@ -977,112 +3004,121 @@ class _ItineraryPageState extends State<ItineraryPage> {
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(16),
-                  onTap: () => _showPlaceDetail(
-                    day: day,
-                    itemIndex: stopIndex,
-                    item: item,
-                    range: range,
-                  ),
-                  child: Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.08),
-                          blurRadius: 10,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                item.place.name,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                item.place.address.isNotEmpty
-                                    ? item.place.address
-                                    : item.place.city,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.black54,
-                                ),
-                              ),
-                              const SizedBox(height: 6),
-                              Row(
-                                children: [
-                                  if (item.place.rating != null) ...[
-                                    Text(
-                                      item.place.rating!.toStringAsFixed(1),
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 13,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 4),
-                                    const Icon(
-                                      Icons.star,
-                                      size: 14,
-                                      color: Color(0xFF5A4E7C),
-                                    ),
-                                    const SizedBox(width: 8),
-                                  ],
-                                  Text(
-                                    '查看景點詳情',
-                                    style: TextStyle(
-                                      color: Colors.black.withValues(
-                                        alpha: 0.6,
-                                      ),
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(10),
-                          child: item.place.imageUrl.isNotEmpty
-                              ? Image.network(
-                                  item.place.imageUrl,
-                                  width: 68,
-                                  height: 68,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, __, ___) =>
-                                      _imagePlaceholder(),
-                                )
-                              : _imagePlaceholder(),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+                child: stopContent,
               ),
             ],
           ),
-        );
-      },
+        ),
+      );
+    }
+
+    return children;
+  }
+
+  Widget _buildOriginTransitRow(_ItineraryDay day) {
+    final transit = day.originTransit!;
+    final info = transit.toTransitInfo();
+    final departure = _preferredDayStartDateTime(day);
+    final arrival = departure.add(Duration(minutes: transit.minutes));
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 64,
+            child: Text(
+              '${_toHm(departure)}\n${_toHm(arrival)}',
+              style: const TextStyle(
+                height: 1.2,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF555266),
+              ),
+            ),
+          ),
+          Column(
+            children: [
+              Container(
+                width: 12,
+                height: 12,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFEC8F64),
+                  shape: BoxShape.circle,
+                ),
+              ),
+              Container(
+                width: 2,
+                height: 70,
+                color: const Color(0xFFE2D7EA),
+              ),
+            ],
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFFBF7),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFFF0D8C9)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '從${transit.fromLabel ?? '出發地'}出發',
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF574351),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Icon(info.icon, size: 16, color: const Color(0xFF5B5779)),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          info.primaryLine,
+                          style: const TextStyle(
+                            color: Color(0xFF5B5779),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    transit.toLabel == null || transit.toLabel!.isEmpty
+                        ? '預計抵達第一站'
+                        : '預計抵達 ${transit.toLabel}',
+                    style: const TextStyle(
+                      color: Color(0xFF726E88),
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  if (info.secondaryLine.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      info.secondaryLine,
+                      style: const TextStyle(
+                        color: Color(0xFF726E88),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1096,12 +3132,239 @@ class _ItineraryPageState extends State<ItineraryPage> {
     );
   }
 
+  Widget _buildMealBreakCard({
+    required _ItineraryDay day,
+    required int itemIndex,
+    required _ItineraryItem item,
+  }) {
+    final isLunch = item.place.tags.contains('lunch');
+    final hasRestaurant = _hasValidPlaceCoordinate(item.place);
+    return InkWell(
+      borderRadius: BorderRadius.circular(16),
+      onTap: () => _openMealBreakPlanner(day, itemIndex, item),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFFBF7),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFFF0D8C9)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 46,
+              height: 46,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFDE9DE),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              alignment: Alignment.center,
+              child: Icon(
+                isLunch ? Icons.lunch_dining_rounded : Icons.dinner_dining_rounded,
+                color: const Color(0xFFB5623D),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item.place.name,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF574351),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    hasRestaurant
+                        ? (item.place.address.isNotEmpty
+                              ? item.place.address
+                              : item.place.city)
+                        : (item.place.description.isNotEmpty
+                              ? item.place.description
+                              : '預留用餐與休息時間，讓後續行程不會過趕。'),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFF726E88),
+                      height: 1.35,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    hasRestaurant ? '點擊可更換餐廳並重算交通時間' : '點擊可查看推薦餐廳並套用',
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFFB5623D),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPlaceStopCard({
+    required _ItineraryDay day,
+    required int itemIndex,
+    required _ItineraryItem item,
+    required _TimeRange range,
+  }) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(16),
+      onTap: () => _showPlaceDetail(
+        day: day,
+        itemIndex: itemIndex,
+        item: item,
+        range: range,
+      ),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.08),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          item.place.name,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      PopupMenuButton<String>(
+                        tooltip: '編輯景點',
+                        onSelected: (value) {
+                          unawaited(
+                            _handleStopEditAction(day, itemIndex, item, value),
+                          );
+                        },
+                        itemBuilder: (context) => const [
+                          PopupMenuItem(
+                            value: 'duration',
+                            child: Text('調整停留時間'),
+                          ),
+                          PopupMenuItem(
+                            value: 'delete',
+                            child: Text('刪除景點'),
+                          ),
+                        ],
+                        child: const Padding(
+                          padding: EdgeInsets.only(left: 6),
+                          child: Icon(
+                            Icons.more_horiz_rounded,
+                            size: 18,
+                            color: Color(0xFF6D6880),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    item.place.address.isNotEmpty
+                        ? item.place.address
+                        : item.place.city,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Colors.black54,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      if (item.place.rating != null) ...[
+                        Text(
+                          item.place.rating!.toStringAsFixed(1),
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        const Icon(
+                          Icons.star,
+                          size: 14,
+                          color: Color(0xFF5A4E7C),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                      Text(
+                        '查看景點詳情',
+                        style: TextStyle(
+                          color: Colors.black.withValues(alpha: 0.6),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '長按可拖曳排序',
+                    style: TextStyle(
+                      color: Colors.black.withValues(alpha: 0.42),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: item.place.imageUrl.isNotEmpty
+                  ? Image.network(
+                      item.place.imageUrl,
+                      width: 68,
+                      height: 68,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => _imagePlaceholder(),
+                    )
+                  : _imagePlaceholder(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _showPlaceDetail({
     required _ItineraryDay day,
     required int itemIndex,
     required _ItineraryItem item,
     required _TimeRange range,
   }) {
+    if (item.place.isMealBreak) return;
     final place = item.place;
     final previousItem = itemIndex > 0 ? day.items[itemIndex - 1] : null;
     final nextItem = itemIndex < day.items.length - 1
@@ -1544,66 +3807,121 @@ class _ItineraryPageState extends State<ItineraryPage> {
 
   _TimeRange _buildTimeRange(_ItineraryDay day, int index) {
     final item = day.items[index];
-    final start = _resolveDisplayStartTime(day, index, item.time);
-    DateTime end;
-    if (index < day.items.length - 1) {
-      final next = day.items[index + 1];
-      final nextStart = _resolveDisplayStartTime(day, index + 1, next.time);
-      end = nextStart.isAfter(start)
-          ? nextStart
-          : start.add(const Duration(minutes: 90));
-    } else {
-      end = _preferredDayEndDateTime(day);
-      if (!end.isAfter(start)) {
-        end = start.add(const Duration(minutes: 90));
+    if (!_manuallyEditedDayKeys.contains(_dayEditKey(day)) &&
+        !_hasTransitOverrideAffectingIndex(day, index)) {
+      final explicitStart = item.time?.trim();
+      final explicitEnd = item.endTime?.trim();
+      if ((explicitStart ?? '').isNotEmpty && (explicitEnd ?? '').isNotEmpty) {
+        return _TimeRange(start: explicitStart!, end: explicitEnd!);
       }
     }
+    final start = _resolvedTimelineStartTime(day, index);
+    final end = start.add(
+      Duration(minutes: _resolvedItemDurationMinutes(day, index)),
+    );
     return _TimeRange(start: _toHm(start), end: _toHm(end));
   }
 
-  DateTime _resolveDisplayStartTime(
-    _ItineraryDay day,
-    int index,
-    String? rawTime,
-  ) {
-    final raw = _resolveRawStartTime(day, index, rawTime);
-    if (day.items.isEmpty) return raw;
-    final rawDayStart = _resolveRawStartTime(day, 0, day.items.first.time);
-    final rawDayEnd = _estimateRawDayEndTime(day);
-    final targetStart = _preferredDayStartDateTime(day);
-    final targetEnd = _preferredDayEndDateTime(day);
-
-    final rawSpan = rawDayEnd.difference(rawDayStart).inMinutes;
-    final targetSpan = targetEnd.difference(targetStart).inMinutes;
-    if (rawSpan <= 0 || targetSpan <= 0) {
-      return raw;
+  bool _hasTransitOverrideAffectingIndex(_ItineraryDay day, int index) {
+    for (var i = 0; i < index; i++) {
+      if (_transitModeOverrides.containsKey(_transitSegmentKey(day, i))) {
+        return true;
+      }
     }
-
-    final rawOffset = raw.difference(rawDayStart).inMinutes.clamp(0, rawSpan);
-    final mappedMinutes = (rawOffset * targetSpan / rawSpan).round();
-    return targetStart.add(Duration(minutes: mappedMinutes));
+    return false;
   }
 
-  DateTime _resolveRawStartTime(_ItineraryDay day, int index, String? rawTime) {
-    final base = day.date ?? DateTime.now();
-    final parsed = _parseHm(rawTime);
-    if (parsed != null) {
-      return DateTime(base.year, base.month, base.day, parsed.$1, parsed.$2);
+  DateTime _resolvedTimelineStartTime(_ItineraryDay day, int index) {
+    var current = _preferredDayStartDateTime(day);
+    if (day.originTransit != null) {
+      current = current.add(Duration(minutes: day.originTransit!.minutes));
     }
-    return DateTime(base.year, base.month, base.day, 9 + index * 2);
+    for (var i = 0; i < index; i++) {
+      current = current.add(Duration(minutes: _resolvedItemDurationMinutes(day, i)));
+      current = current.add(
+        Duration(minutes: _resolvedTransitMinutes(day, i, i + 1)),
+      );
+    }
+    return current;
   }
 
-  DateTime _estimateRawDayEndTime(_ItineraryDay day) {
-    if (day.items.isEmpty) {
-      return _preferredDayEndDateTime(day);
+  int _resolvedItemDurationMinutes(_ItineraryDay day, int index) {
+    final item = day.items[index];
+    final explicit = item.durationMinutes;
+    if (explicit != null && explicit > 0) {
+      return explicit;
     }
-    final lastIndex = day.items.length - 1;
-    final lastStart = _resolveRawStartTime(
+    final start = _parseHm(item.time);
+    final end = _parseHm(item.endTime);
+    if (start != null && end != null) {
+      final startMinute = start.$1 * 60 + start.$2;
+      final endMinute = end.$1 * 60 + end.$2;
+      if (endMinute > startMinute) {
+        return endMinute - startMinute;
+      }
+    }
+    return item.place.isMealBreak ? 60 : 90;
+  }
+
+  int _resolvedTransitMinutes(_ItineraryDay day, int fromIndex, int nextItemIndex) {
+    if (fromIndex < 0 || nextItemIndex >= day.items.length) {
+      return 0;
+    }
+    final from = day.items[fromIndex];
+    final to = day.items[nextItemIndex];
+    if (!_canEstimateTransitBetween(from, to)) {
+      return 0;
+    }
+    final options = _transitComparisonOptions(
       day,
-      lastIndex,
-      day.items[lastIndex].time,
+      fromIndex,
+      nextItemIndex,
+      from,
+      to,
     );
-    return lastStart.add(const Duration(minutes: 90));
+    final selectedModeKey = _normalizeTransitMode(
+      _transitModeOverrides[_transitSegmentKey(day, fromIndex)],
+    );
+    return (options[selectedModeKey] ?? options['car']!).minutes;
+  }
+
+  _TransitInfo? _resolvedTransitInfoForTimeline(
+    _ItineraryDay day,
+    int fromIndex,
+    int nextItemIndex,
+    _ItineraryItem from,
+    _ItineraryItem to,
+  ) {
+    if (!_canEstimateTransitBetween(from, to)) {
+      return null;
+    }
+    final options = _transitComparisonOptions(
+      day,
+      fromIndex,
+      nextItemIndex,
+      from,
+      to,
+    );
+    final selectedModeKey = _normalizeTransitMode(
+      _transitModeOverrides[_transitSegmentKey(day, fromIndex)],
+    );
+    return options[selectedModeKey] ?? options['car'];
+  }
+
+  bool _canEstimateTransitBetween(_ItineraryItem from, _ItineraryItem to) {
+    return _hasValidPlaceCoordinate(from.place) && _hasValidPlaceCoordinate(to.place);
+  }
+
+  bool _hasValidPlaceCoordinate(_ItineraryPlace place) {
+    final lat = place.lat;
+    final lng = place.lng;
+    if (lat == null || lng == null) {
+      return false;
+    }
+    if (lat == 0 && lng == 0) {
+      return false;
+    }
+    return true;
   }
 
   DateTime _preferredDayStartDateTime(_ItineraryDay day) {
@@ -1615,22 +3933,6 @@ class _ItineraryPageState extends State<ItineraryPage> {
       _preferredStartTime.hour,
       _preferredStartTime.minute,
     );
-  }
-
-  DateTime _preferredDayEndDateTime(_ItineraryDay day) {
-    final base = day.date ?? DateTime.now();
-    final start = _preferredDayStartDateTime(day);
-    var end = DateTime(
-      base.year,
-      base.month,
-      base.day,
-      _preferredEndTime.hour,
-      _preferredEndTime.minute,
-    );
-    if (!end.isAfter(start)) {
-      end = start.add(const Duration(hours: 8));
-    }
-    return end;
   }
 
   (int, int)? _parseHm(String? raw) {
@@ -1655,28 +3957,35 @@ class _ItineraryPageState extends State<ItineraryPage> {
     return '$h:$m';
   }
 
-  _TransitInfo _estimateTransit(_ItineraryPlace from, _ItineraryPlace to) {
-    return _estimateTransitByMode(from, to, 'best');
-  }
-
   Map<String, _TransitInfo> _transitComparisonOptions(
     _ItineraryDay day,
     int segmentIndex,
+    int nextItemIndex,
     _ItineraryItem from,
     _ItineraryItem to,
   ) {
-    final best =
-        from.transitToNext?.toTransitInfo() ??
-        _estimateTransit(from.place, to.place);
+    final resolvedTransit = _resolveSegmentTransit(day, segmentIndex, nextItemIndex);
     final transit =
-        from.transitToNext?.toTransitInfo() ??
+        resolvedTransit?.toTransitInfo() ??
         _estimateTransitByMode(from.place, to.place, 'transit');
     return {
-      'best': best,
       'transit': transit,
       'car': _estimateTransitByMode(from.place, to.place, 'car'),
       'walk': _estimateTransitByMode(from.place, to.place, 'walk'),
     };
+  }
+
+  _ItineraryTransit? _resolveSegmentTransit(
+    _ItineraryDay day,
+    int fromItemIndex,
+    int toItemIndex,
+  ) {
+    final upper = toItemIndex.clamp(fromItemIndex + 1, day.items.length);
+    for (var i = fromItemIndex; i < upper; i++) {
+      final transit = day.items[i].transitToNext;
+      if (transit != null) return transit;
+    }
+    return null;
   }
 
   String _transitSegmentKey(_ItineraryDay day, int segmentIndex) {
@@ -1690,7 +3999,6 @@ class _ItineraryPageState extends State<ItineraryPage> {
     required String selected,
   }) {
     const modeLabels = {
-      'best': '最佳',
       'transit': '大眾',
       'car': '開車',
       'walk': '步行',
@@ -1718,7 +4026,6 @@ class _ItineraryPageState extends State<ItineraryPage> {
         color: Colors.white.withValues(alpha: 0.97),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         itemBuilder: (context) => const [
-          PopupMenuItem(value: 'best', child: Text('最佳（預設）')),
           PopupMenuItem(value: 'transit', child: Text('大眾運輸')),
           PopupMenuItem(value: 'car', child: Text('開車/計程車')),
           PopupMenuItem(value: 'walk', child: Text('步行')),
@@ -1729,7 +4036,7 @@ class _ItineraryPageState extends State<ItineraryPage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                modeLabels[selected] ?? '最佳',
+                modeLabels[_normalizeTransitMode(selected)] ?? '開車',
                 style: const TextStyle(
                   fontSize: 10.5,
                   fontWeight: FontWeight.w700,
@@ -1754,6 +4061,7 @@ class _ItineraryPageState extends State<ItineraryPage> {
     _ItineraryPlace to,
     String mode,
   ) {
+    mode = _normalizeTransitMode(mode);
     final km = _haversineKm(
       from.lat ?? 0,
       from.lng ?? 0,
@@ -1792,9 +4100,17 @@ class _ItineraryPageState extends State<ItineraryPage> {
       );
     }
 
-    if (safeKm < 1.5) return _estimateTransitByMode(from, to, 'walk');
-    if (safeKm < 20) return _estimateTransitByMode(from, to, 'car');
-    return _estimateTransitByMode(from, to, 'transit');
+    return _estimateTransitByMode(from, to, 'car');
+  }
+
+  String _normalizeTransitMode(String? mode) {
+    return switch (mode) {
+      'transit' => 'transit',
+      'car' => 'car',
+      'walk' => 'walk',
+      'best' || null => 'car',
+      _ => 'car',
+    };
   }
 
   double _haversineKm(double lat1, double lon1, double lat2, double lon2) {
@@ -1936,7 +4252,6 @@ class _DayRouteMapSheetState extends State<_DayRouteMapSheet> {
   GoogleMapController? _mapController;
   bool _didFitBounds = false;
   bool _loadingRoadRoute = false;
-  bool _hasRoadRoute = false;
   String _roadRouteHint = '';
   final Map<int, List<LatLng>> _segmentRoadPaths = {};
 
@@ -2146,30 +4461,32 @@ class _DayRouteMapSheetState extends State<_DayRouteMapSheet> {
       _segmentRoadPaths
         ..clear()
         ..addAll(resolved);
-      _hasRoadRoute = resolved.isNotEmpty;
       _loadingRoadRoute = false;
       _roadRouteHint = hint;
     });
   }
 
   List<String> _directionsModesToTry(_DayRouteSegment segment) {
-    switch (segment.selectedMode) {
+    switch (_normalizeTransitMode(segment.selectedMode)) {
       case 'car':
         return const ['driving'];
       case 'walk':
         return const ['walking', 'driving'];
       case 'transit':
         return const ['transit', 'driving'];
-      case 'best':
       default:
-        if (segment.transit.icon == Icons.directions_walk) {
-          return const ['walking', 'driving'];
-        }
-        if (segment.transit.icon == Icons.directions_car_filled) {
-          return const ['driving'];
-        }
-        return const ['transit', 'driving', 'walking'];
+        return const ['driving'];
     }
+  }
+
+  String _normalizeTransitMode(String? mode) {
+    return switch (mode) {
+      'transit' => 'transit',
+      'car' => 'car',
+      'walk' => 'walk',
+      'best' || null => 'car',
+      _ => 'car',
+    };
   }
 
   Future<_DirectionsFetchResult> _fetchDirectionsPolyline({
@@ -2256,7 +4573,6 @@ class _DayRouteMapSheetState extends State<_DayRouteMapSheet> {
 
   Widget _buildLegend() {
     final legend = const [
-      ('best', '最佳'),
       ('transit', '大眾'),
       ('car', '開車'),
       ('walk', '步行'),
@@ -2442,11 +4758,10 @@ class _DayRouteMapSheetState extends State<_DayRouteMapSheet> {
   }
 
   String _modeLabel(String mode) => switch (mode) {
-    'best' => '最佳',
     'transit' => '大眾',
     'car' => '開車',
     'walk' => '步行',
-    _ => mode,
+    _ => '開車',
   };
 
   Color _segmentColor(String mode) => switch (mode) {
@@ -2552,27 +4867,273 @@ class _ItineraryPlan {
 class _ItineraryInsight {
   const _ItineraryInsight({
     required this.summary,
+    required this.planningFocus,
+    required this.alternativePlan,
     required this.routeReason,
     required this.userLikeReason,
     required this.tips,
+    required this.warnings,
+    required this.improvements,
+    required this.pacing,
+    required this.mealPlan,
     required this.source,
   });
 
   final String summary;
+  final String planningFocus;
+  final String alternativePlan;
   final String routeReason;
   final String userLikeReason;
   final List<String> tips;
+  final List<String> warnings;
+  final List<String> improvements;
+  final String pacing;
+  final String mealPlan;
   final String source;
 
   factory _ItineraryInsight.fromJson(Map<String, dynamic> json) {
     return _ItineraryInsight(
       summary: json['summary']?.toString() ?? '',
+      planningFocus: json['planningFocus']?.toString() ?? '',
+      alternativePlan: json['alternativePlan']?.toString() ?? '',
       routeReason: json['routeReason']?.toString() ?? '',
       userLikeReason: json['userLikeReason']?.toString() ?? '',
       tips:
           (json['tips'] as List?)?.map((e) => e.toString()).toList() ??
           const [],
+      warnings:
+          (json['warnings'] as List?)?.map((e) => e.toString()).toList() ??
+          const [],
+      improvements:
+          (json['improvements'] as List?)?.map((e) => e.toString()).toList() ??
+          const [],
+      pacing: json['pacing']?.toString() ?? '',
+      mealPlan: json['mealPlan']?.toString() ?? '',
       source: json['source']?.toString() ?? 'rule',
+    );
+  }
+}
+
+class _ItineraryContextAwareness {
+  const _ItineraryContextAwareness({
+    required this.summary,
+    required this.severity,
+    required this.alerts,
+    required this.suggestions,
+    required this.backupPlans,
+    required this.nextAction,
+    required this.upcomingReminder,
+    required this.linePushed,
+  });
+
+  final String summary;
+  final String severity;
+  final List<_ItineraryContextAlert> alerts;
+  final List<String> suggestions;
+  final List<_ItineraryContextBackupPlan> backupPlans;
+  final _ItineraryContextNextAction? nextAction;
+  final _ItineraryUpcomingReminder? upcomingReminder;
+  final bool linePushed;
+
+  factory _ItineraryContextAwareness.fromJson(Map<String, dynamic> json) {
+    return _ItineraryContextAwareness(
+      summary: json['summary']?.toString() ?? '',
+      severity: json['severity']?.toString() ?? 'ok',
+      alerts: (json['alerts'] as List?)
+              ?.whereType<Map>()
+              .map(
+                (item) => _ItineraryContextAlert.fromJson(
+                  Map<String, dynamic>.from(item),
+                ),
+              )
+              .toList() ??
+          const [],
+      suggestions:
+          (json['suggestions'] as List?)?.map((e) => e.toString()).toList() ??
+          const [],
+      backupPlans: (json['backupPlans'] as List?)
+              ?.whereType<Map>()
+              .map(
+                (item) => _ItineraryContextBackupPlan.fromJson(
+                  Map<String, dynamic>.from(item),
+                ),
+              )
+              .toList() ??
+          const [],
+      nextAction: json['nextAction'] is Map
+          ? _ItineraryContextNextAction.fromJson(
+              Map<String, dynamic>.from(json['nextAction'] as Map),
+            )
+          : null,
+      upcomingReminder: json['upcomingReminder'] is Map
+          ? _ItineraryUpcomingReminder.fromJson(
+              Map<String, dynamic>.from(json['upcomingReminder'] as Map),
+            )
+          : null,
+      linePushed: json['linePushed'] == true,
+    );
+  }
+}
+
+class _ItineraryUpcomingReminder {
+  const _ItineraryUpcomingReminder({
+    required this.targetPlaceName,
+    required this.scheduledTime,
+    required this.transitLabel,
+    required this.transitMinutes,
+    required this.minutesUntil,
+    required this.notes,
+  });
+
+  final String targetPlaceName;
+  final String scheduledTime;
+  final String transitLabel;
+  final int? transitMinutes;
+  final int? minutesUntil;
+  final List<String> notes;
+
+  factory _ItineraryUpcomingReminder.fromJson(Map<String, dynamic> json) {
+    return _ItineraryUpcomingReminder(
+      targetPlaceName: json['targetPlaceName']?.toString() ?? '',
+      scheduledTime: json['scheduledTime']?.toString() ?? '',
+      transitLabel: json['transitLabel']?.toString() ?? '',
+      transitMinutes: (json['transitMinutes'] as num?)?.toInt(),
+      minutesUntil: (json['minutesUntil'] as num?)?.toInt(),
+      notes:
+          (json['notes'] as List?)?.map((e) => e.toString()).toList() ??
+          const [],
+    );
+  }
+}
+
+class _ItineraryContextNextAction {
+  const _ItineraryContextNextAction({
+    required this.type,
+    required this.severity,
+    required this.phase,
+    required this.targetPlaceName,
+    required this.scheduledTime,
+    required this.title,
+    required this.message,
+    required this.recommendedAction,
+    required this.alternatives,
+  });
+
+  final String type;
+  final String severity;
+  final String phase;
+  final String targetPlaceName;
+  final String scheduledTime;
+  final String title;
+  final String message;
+  final String recommendedAction;
+  final List<_ItineraryContextReplacement> alternatives;
+
+  factory _ItineraryContextNextAction.fromJson(Map<String, dynamic> json) {
+    return _ItineraryContextNextAction(
+      type: json['type']?.toString() ?? '',
+      severity: json['severity']?.toString() ?? 'medium',
+      phase: json['phase']?.toString() ?? 'upcoming',
+      targetPlaceName: json['targetPlaceName']?.toString() ?? '',
+      scheduledTime: json['scheduledTime']?.toString() ?? '',
+      title: json['title']?.toString() ?? '',
+      message: json['message']?.toString() ?? '',
+      recommendedAction: json['recommendedAction']?.toString() ?? '',
+      alternatives: (json['alternatives'] as List?)
+              ?.whereType<Map>()
+              .map(
+                (item) => _ItineraryContextReplacement.fromJson(
+                  Map<String, dynamic>.from(item),
+                ),
+              )
+              .toList() ??
+          const [],
+    );
+  }
+}
+
+class _ItineraryContextAlert {
+  const _ItineraryContextAlert({
+    required this.type,
+    required this.severity,
+    required this.title,
+    required this.message,
+  });
+
+  final String type;
+  final String severity;
+  final String title;
+  final String message;
+
+  factory _ItineraryContextAlert.fromJson(Map<String, dynamic> json) {
+    return _ItineraryContextAlert(
+      type: json['type']?.toString() ?? '',
+      severity: json['severity']?.toString() ?? 'low',
+      title: json['title']?.toString() ?? '',
+      message: json['message']?.toString() ?? '',
+    );
+  }
+}
+
+class _ItineraryContextBackupPlan {
+  const _ItineraryContextBackupPlan({
+    required this.trigger,
+    required this.targetPlaceId,
+    required this.targetPlaceName,
+    required this.reason,
+    required this.replacements,
+  });
+
+  final String trigger;
+  final String targetPlaceId;
+  final String targetPlaceName;
+  final String reason;
+  final List<_ItineraryContextReplacement> replacements;
+
+  factory _ItineraryContextBackupPlan.fromJson(Map<String, dynamic> json) {
+    return _ItineraryContextBackupPlan(
+      trigger: json['trigger']?.toString() ?? '',
+      targetPlaceId: json['targetPlaceId']?.toString() ?? '',
+      targetPlaceName: json['targetPlaceName']?.toString() ?? '',
+      reason: json['reason']?.toString() ?? '',
+      replacements: (json['replacements'] as List?)
+              ?.whereType<Map>()
+              .map(
+                (item) => _ItineraryContextReplacement.fromJson(
+                  Map<String, dynamic>.from(item),
+                ),
+              )
+              .toList() ??
+          const [],
+    );
+  }
+}
+
+class _ItineraryContextReplacement {
+  const _ItineraryContextReplacement({
+    required this.id,
+    required this.name,
+    required this.city,
+    required this.address,
+    required this.rating,
+    required this.tags,
+  });
+
+  final String id;
+  final String name;
+  final String city;
+  final String address;
+  final double? rating;
+  final List<String> tags;
+
+  factory _ItineraryContextReplacement.fromJson(Map<String, dynamic> json) {
+    return _ItineraryContextReplacement(
+      id: json['id']?.toString() ?? '',
+      name: json['name']?.toString() ?? '',
+      city: json['city']?.toString() ?? '',
+      address: json['address']?.toString() ?? '',
+      rating: (json['rating'] as num?)?.toDouble(),
+      tags: (json['tags'] as List?)?.map((e) => e.toString()).toList() ?? const [],
     );
   }
 }
@@ -2582,22 +5143,30 @@ class _ItineraryDay {
     required this.day,
     required this.date,
     required this.weather,
+    required this.originTransit,
     required this.items,
   });
 
   final int day;
   final DateTime? date;
   final _ItineraryWeather? weather;
+  final _ItineraryTransit? originTransit;
   final List<_ItineraryItem> items;
 
   factory _ItineraryDay.fromJson(Map<String, dynamic> json) {
     final rawItems = json['items'];
     final rawWeather = json['weather'];
+    final rawOriginTransit = json['originTransit'];
     return _ItineraryDay(
       day: (json['day'] as num?)?.toInt() ?? 1,
       date: DateTime.tryParse(json['date']?.toString() ?? ''),
       weather: rawWeather is Map
           ? _ItineraryWeather.fromJson(Map<String, dynamic>.from(rawWeather))
+          : null,
+      originTransit: rawOriginTransit is Map
+          ? _ItineraryTransit.fromJson(
+              Map<String, dynamic>.from(rawOriginTransit),
+            )
           : null,
       items: rawItems is List
           ? rawItems
@@ -2645,11 +5214,15 @@ class _ItineraryWeather {
 class _ItineraryItem {
   const _ItineraryItem({
     required this.time,
+    required this.endTime,
+    required this.durationMinutes,
     required this.place,
     required this.transitToNext,
   });
 
   final String? time;
+  final String? endTime;
+  final int? durationMinutes;
   final _ItineraryPlace place;
   final _ItineraryTransit? transitToNext;
 
@@ -2657,6 +5230,8 @@ class _ItineraryItem {
     final rawTransit = json['transitToNext'];
     return _ItineraryItem(
       time: json['time']?.toString(),
+      endTime: json['endTime']?.toString(),
+      durationMinutes: (json['durationMinutes'] as num?)?.toInt(),
       place: _ItineraryPlace.fromJson(
         Map<String, dynamic>.from(json['place'] as Map? ?? const {}),
       ),
@@ -2677,6 +5252,8 @@ class _ItineraryTransit {
     required this.departureTime,
     required this.arrivalTime,
     required this.detail,
+    required this.fromLabel,
+    required this.toLabel,
   });
 
   final String mode;
@@ -2687,6 +5264,8 @@ class _ItineraryTransit {
   final String? departureTime;
   final String? arrivalTime;
   final String detail;
+  final String? fromLabel;
+  final String? toLabel;
 
   factory _ItineraryTransit.fromJson(Map<String, dynamic> json) {
     return _ItineraryTransit(
@@ -2700,6 +5279,8 @@ class _ItineraryTransit {
       departureTime: json['departureTime']?.toString(),
       arrivalTime: json['arrivalTime']?.toString(),
       detail: json['detail']?.toString() ?? '',
+      fromLabel: json['fromLabel']?.toString(),
+      toLabel: json['toLabel']?.toString(),
     );
   }
 
@@ -2734,10 +5315,27 @@ class _ItineraryTransit {
   }
 }
 
+class _MealCandidateOption {
+  const _MealCandidateOption({
+    required this.raw,
+    required this.place,
+    required this.fromPrevMinutes,
+    required this.toNextMinutes,
+    required this.fitScore,
+  });
+
+  final Map<String, dynamic> raw;
+  final _ItineraryPlace place;
+  final int fromPrevMinutes;
+  final int toNextMinutes;
+  final double fitScore;
+}
+
 class _ItineraryPlace {
   const _ItineraryPlace({
     required this.id,
     required this.name,
+    required this.kind,
     required this.city,
     required this.address,
     required this.description,
@@ -2750,6 +5348,7 @@ class _ItineraryPlace {
 
   final String id;
   final String name;
+  final String kind;
   final String city;
   final String address;
   final String description;
@@ -2759,10 +5358,13 @@ class _ItineraryPlace {
   final double? lat;
   final double? lng;
 
+  bool get isMealBreak => kind == 'meal_break';
+
   factory _ItineraryPlace.fromJson(Map<String, dynamic> json) {
     return _ItineraryPlace(
       id: json['id']?.toString() ?? '',
       name: json['name']?.toString() ?? '',
+      kind: json['kind']?.toString() ?? 'place',
       city: json['city']?.toString() ?? '',
       address: json['address']?.toString() ?? '',
       description: json['description']?.toString() ?? '',

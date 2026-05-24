@@ -20,6 +20,12 @@ class _SelectInterestPageState extends State<SelectInterestPage> {
   final BackendApi _api = BackendApi.instance;
   bool _submittingInterests = false;
 
+  @override
+  void initState() {
+    super.initState();
+    _selected.addAll(UserState.selectedInterestIds);
+  }
+
   // 點選景點用
   void _toggleSelect(String id) {
     setState(() {
@@ -42,13 +48,17 @@ class _SelectInterestPageState extends State<SelectInterestPage> {
     });
 
     try {
-      await _api.submitInterests(_selected.toList());
+      await _api.submitInterests(
+        _selected.toList(),
+        userId: UserState.userId,
+      );
+      await UserState.saveSelectedInterests(_selected.toList());
       if (!mounted) return;
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
           builder: (_) => HomePage(
-            selectedInterestIds: _selected.toList(),
+            selectedInterestIds: UserState.selectedInterestIds,
             displayName: UserState.displayName,
           ),
         ),

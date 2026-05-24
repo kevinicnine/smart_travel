@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -35,6 +36,7 @@ class _HomePageState extends State<HomePage> {
   DateTime? _endDate;
   String? _selectedOriginCity;
   final List<String> _selectedDestinationCities = [];
+  String _selectedTripPurpose = 'explore';
   int? _selectedBudgetTier;
   int _currentNavIndex = 0;
   bool _generatingPlan = false;
@@ -52,6 +54,12 @@ class _HomePageState extends State<HomePage> {
   final List<_SavedTrip> _savedTrips = [];
   static const _favoritesStorageKey = 'favorites_places';
   static const _tripsStorageKey = 'saved_itineraries_v1';
+  static const List<MapEntry<String, String>> _tripPurposeOptions = [
+    MapEntry('relax', '休閒放鬆'),
+    MapEntry('explore', '景點探索'),
+    MapEntry('couple', '情侶約會'),
+    MapEntry('family', '家庭旅遊'),
+  ];
 
   @override
   void initState() {
@@ -98,7 +106,11 @@ class _HomePageState extends State<HomePage> {
         });
       }
     } on ApiClientException catch (error) {
-      _showMessage(error.message);
+      if (_shouldShowPlannerSuggestionDialog(error)) {
+        await _showPlannerSuggestionDialog(error);
+      } else {
+        _showMessage(error.message);
+      }
     } finally {
       if (mounted) {
         setState(() {
@@ -282,6 +294,16 @@ class _HomePageState extends State<HomePage> {
       _showMessage('請至少選擇一個旅遊城市');
       return;
     }
+    final localFeasibility = _evaluateLocalRouteFeasibility();
+    if (localFeasibility != null) {
+      await _showPlannerSuggestionDialogContent(
+        title: '城市組合不建議直接排程',
+        message: localFeasibility.message,
+        reasons: localFeasibility.reasons,
+        suggestions: localFeasibility.suggestions,
+      );
+      return;
+    }
 
     setState(() {
       _generatingPlan = true;
@@ -296,6 +318,8 @@ class _HomePageState extends State<HomePage> {
         endDate: _endDate,
         originCity: _selectedOriginCity,
         destinationCities: _selectedDestinationCities,
+        tripPurpose: _selectedTripPurpose,
+        travelBehavior: _tripPurposeBehavior(_selectedTripPurpose),
         location: destinationLabel,
         budget: _budgetToValue(_selectedBudgetTier),
       );
@@ -307,7 +331,11 @@ class _HomePageState extends State<HomePage> {
         MaterialPageRoute(builder: (_) => ItineraryPage(plan: plan)),
       );
     } on ApiClientException catch (error) {
-      _showMessage(error.message);
+      if (_shouldShowPlannerSuggestionDialog(error)) {
+        await _showPlannerSuggestionDialog(error);
+      } else {
+        _showMessage(error.message);
+      }
     } finally {
       if (mounted) {
         setState(() {
@@ -802,6 +830,8 @@ class _HomePageState extends State<HomePage> {
           const SizedBox(height: 10),
           _buildMultiSelectCityField(options: cityOptions),
           const SizedBox(height: 10),
+          _buildTripPurposeSelector(),
+          const SizedBox(height: 10),
           _buildBudgetSelector(),
           const SizedBox(height: 14),
           SizedBox(
@@ -844,10 +874,43 @@ class _HomePageState extends State<HomePage> {
     IconData? prefixIcon,
     VoidCallback? onTap,
   }) {
+    if (onTap != null) {
+      final hasValue = controller.text.trim().isNotEmpty;
+      return InkWell(
+        borderRadius: BorderRadius.circular(17),
+        onTap: onTap,
+        child: InputDecorator(
+          decoration: InputDecoration(
+            filled: true,
+            fillColor: Colors.white,
+            hintText: hint,
+            prefixIcon: prefixIcon == null
+                ? null
+                : Icon(prefixIcon, color: Colors.black.withOpacity(0.6)),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 12,
+            ),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(17),
+              borderSide: BorderSide.none,
+            ),
+          ),
+          child: Text(
+            hasValue ? controller.text : hint,
+            style: TextStyle(
+              fontSize: 17,
+              color: hasValue
+                  ? Colors.black.withOpacity(0.85)
+                  : Colors.black.withOpacity(0.48),
+            ),
+          ),
+        ),
+      );
+    }
+
     return TextField(
       controller: controller,
-      readOnly: onTap != null,
-      onTap: onTap,
       keyboardType: keyboardType,
       decoration: InputDecoration(
         filled: true,
@@ -1077,6 +1140,80 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  Widget _buildTripPurposeSelector() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '旅遊目的',
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
+            color: Colors.white.withOpacity(0.92),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: _tripPurposeOptions
+              .map(
+                (option) => _buildTripPurposeChip(
+                  value: option.key,
+                  label: option.value,
+                ),
+              )
+              .toList(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTripPurposeChip({
+    required String value,
+    required String label,
+  }) {
+    final selected = _selectedTripPurpose == value;
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _selectedTripPurpose = value;
+        });
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: selected
+              ? const Color(0xFF5D73B9)
+              : Colors.white.withOpacity(0.92),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: selected
+                ? Colors.white.withOpacity(0.4)
+                : Colors.transparent,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
+            color: selected ? Colors.white : Colors.black.withOpacity(0.72),
+          ),
+        ),
+      ),
+    );
+  }
+
+  String? _tripPurposeBehavior(String purpose) {
+    return switch (purpose) {
+      'couple' => 'couple',
+      'family' => 'family',
+      _ => null,
+    };
+  }
+
   List<String> _cityOptions() {
     final values =
         _places
@@ -1287,6 +1424,220 @@ class _HomePageState extends State<HomePage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  bool _shouldShowPlannerSuggestionDialog(ApiClientException error) {
+    final details = error.details;
+    if (details == null) {
+      return false;
+    }
+    return details['code'] == 'route_not_feasible';
+  }
+
+  Future<void> _showPlannerSuggestionDialog(ApiClientException error) async {
+    final details = error.details ?? const <String, dynamic>{};
+    final reasons = (details['reasons'] as List?)
+            ?.map((e) => e.toString().trim())
+            .where((e) => e.isNotEmpty)
+            .toList() ??
+        const <String>[];
+    final suggestions = (details['suggestions'] as List?)
+            ?.map((e) => e.toString().trim())
+            .where((e) => e.isNotEmpty)
+            .toList() ??
+        const <String>[];
+
+    await _showPlannerSuggestionDialogContent(
+      title: '城市組合不建議直接排程',
+      message: error.message,
+      reasons: reasons,
+      suggestions: suggestions,
+    );
+  }
+
+  Future<void> _showPlannerSuggestionDialogContent({
+    required String title,
+    required String message,
+    List<String> reasons = const <String>[],
+    List<String> suggestions = const <String>[],
+  }) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(message),
+              if (reasons.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                const Text(
+                  '原因',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 6),
+                for (final reason in reasons)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Text('• $reason'),
+                  ),
+              ],
+              if (suggestions.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                const Text(
+                  '建議',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 6),
+                for (final suggestion in suggestions)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Text('• $suggestion'),
+                  ),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  _LocalRouteFeasibility? _evaluateLocalRouteFeasibility() {
+    final uniqueCities = _selectedDestinationCities.toSet().toList();
+    if (uniqueCities.length <= 1) {
+      return null;
+    }
+    final totalDays =
+        _startDate == null || _endDate == null
+            ? 1
+            : _endDate!.difference(_startDate!).inDays + 1;
+    final cityAnchors = <String, LatLng>{};
+    for (final city in uniqueCities) {
+      final matches = _places.where((place) => place.city == city).toList();
+      if (matches.isEmpty) {
+        continue;
+      }
+      var lat = 0.0;
+      var lng = 0.0;
+      for (final place in matches) {
+        lat += place.position.latitude;
+        lng += place.position.longitude;
+      }
+      cityAnchors[city] = LatLng(lat / matches.length, lng / matches.length);
+    }
+    if (cityAnchors.length <= 1) {
+      return null;
+    }
+
+    var maxPairKm = 0.0;
+    for (var i = 0; i < uniqueCities.length; i++) {
+      final a = cityAnchors[uniqueCities[i]];
+      if (a == null) continue;
+      for (var j = i + 1; j < uniqueCities.length; j++) {
+        final b = cityAnchors[uniqueCities[j]];
+        if (b == null) continue;
+        maxPairKm = math.max(
+          maxPairKm,
+          _haversineKm(a.latitude, a.longitude, b.latitude, b.longitude),
+        );
+      }
+    }
+
+    double nearestOriginKm = 0.0;
+    final originCity = _selectedOriginCity;
+    if (originCity != null && cityAnchors.containsKey(originCity)) {
+      final origin = cityAnchors[originCity]!;
+      var nearest = double.infinity;
+      for (final city in uniqueCities) {
+        final anchor = cityAnchors[city];
+        if (anchor == null) continue;
+        nearest = math.min(
+          nearest,
+          _haversineKm(
+            origin.latitude,
+            origin.longitude,
+            anchor.latitude,
+            anchor.longitude,
+          ),
+        );
+      }
+      if (nearest.isFinite) {
+        nearestOriginKm = nearest;
+      }
+    }
+
+    var severity = 0;
+    if (uniqueCities.length >= 3 && totalDays <= 2) {
+      severity += 2;
+    }
+    if (uniqueCities.length > totalDays + 1) {
+      severity += 1;
+    }
+    if (maxPairKm >= 220) {
+      severity += 3;
+    } else if (maxPairKm >= 160 && totalDays <= 3) {
+      severity += 2;
+    } else if (maxPairKm >= 120 && totalDays <= 2) {
+      severity += 2;
+    }
+    if ((_selectedTripPurpose == 'relax' || _selectedTripPurpose == 'family') &&
+        uniqueCities.length >= 2 &&
+        maxPairKm >= 80) {
+      severity += 1;
+    }
+
+    if (severity < 3) {
+      return null;
+    }
+
+    final recommendedCount =
+        math.max(1, math.min(uniqueCities.length, totalDays));
+    final recommendedCities = uniqueCities.take(recommendedCount).toList();
+    final reasons = <String>[
+      if (uniqueCities.length >= 3 && totalDays <= 2)
+        '$totalDays 天內安排 ${uniqueCities.length} 個城市，跨城切換次數過多。',
+      if (maxPairKm >= 90)
+        '你選的城市最遠相隔約 ${maxPairKm.toStringAsFixed(0)} 公里，移動成本過高。',
+      if (nearestOriginKm >= 160)
+        '從出發地到最近旅遊城市也約 ${nearestOriginKm.toStringAsFixed(0)} 公里，第一天會先被長距離移動吃掉。',
+    ];
+    final suggestions = <String>[
+      if (recommendedCities.isNotEmpty)
+        '這次先集中在 ${recommendedCities.join('、')}，其餘城市拆到下次。',
+      '$totalDays 天建議最多先安排 ${math.max(1, totalDays)} 到 ${totalDays + 1} 個相鄰城市。',
+      if (_selectedTripPurpose == 'relax' || _selectedTripPurpose == 'family')
+        '以目前旅遊目的來看，減少跨城會比硬塞更多景點合理。',
+    ];
+    return _LocalRouteFeasibility(
+      message: '目前選擇的城市組合距離過遠或天數不足，不建議直接排出行程。',
+      reasons: reasons,
+      suggestions: suggestions,
+    );
+  }
+
+  double _haversineKm(double lat1, double lon1, double lat2, double lon2) {
+    const r = 6371.0;
+    final dLat = _toRad(lat2 - lat1);
+    final dLon = _toRad(lon2 - lon1);
+    final a =
+        math.sin(dLat / 2) * math.sin(dLat / 2) +
+        math.cos(_toRad(lat1)) *
+            math.cos(_toRad(lat2)) *
+            math.sin(dLon / 2) *
+            math.sin(dLon / 2);
+    final c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+    return r * c;
+  }
+
+  double _toRad(double deg) => deg * math.pi / 180.0;
+
   Widget _buildMapView() {
     final center = _selectedPlace?.position ?? _mapCenter;
 
@@ -1314,7 +1665,7 @@ class _HomePageState extends State<HomePage> {
           p.name.contains(trimmed) ||
           p.address.contains(trimmed) ||
           p.city.contains(trimmed),
-      orElse: () => const _Place(
+      orElse: () => _Place(
         id: '',
         name: '',
         position: LatLng(0, 0),
@@ -1690,6 +2041,18 @@ int _compareTaiwanCityOrder(String a, String b) {
     return 1;
   }
   return normalizedA.compareTo(normalizedB);
+}
+
+class _LocalRouteFeasibility {
+  const _LocalRouteFeasibility({
+    required this.message,
+    required this.reasons,
+    required this.suggestions,
+  });
+
+  final String message;
+  final List<String> reasons;
+  final List<String> suggestions;
 }
 
 class _SavedTrip {

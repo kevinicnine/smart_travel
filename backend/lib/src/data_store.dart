@@ -169,7 +169,10 @@ class PostgresDataStore implements DataStore {
         created_at TIMESTAMPTZ NOT NULL,
         line_user_id TEXT,
         line_linked_at TIMESTAMPTZ,
-        line_push_enabled BOOLEAN NOT NULL DEFAULT FALSE
+        line_push_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+        interests_json TEXT,
+        active_plan_json TEXT,
+        active_plan_updated_at TIMESTAMPTZ
       );
     ''');
     await conn.query(
@@ -180,6 +183,15 @@ class PostgresDataStore implements DataStore {
     );
     await conn.query(
       'ALTER TABLE users ADD COLUMN IF NOT EXISTS line_push_enabled BOOLEAN NOT NULL DEFAULT FALSE',
+    );
+    await conn.query(
+      'ALTER TABLE users ADD COLUMN IF NOT EXISTS interests_json TEXT',
+    );
+    await conn.query(
+      'ALTER TABLE users ADD COLUMN IF NOT EXISTS active_plan_json TEXT',
+    );
+    await conn.query(
+      'ALTER TABLE users ADD COLUMN IF NOT EXISTS active_plan_updated_at TIMESTAMPTZ',
     );
     await conn.query('''
       CREATE TABLE IF NOT EXISTS places (
@@ -249,6 +261,52 @@ class PostgresDataStore implements DataStore {
     return null;
   }
 
+  List<String> _decodeInterests(dynamic raw) {
+    if (raw is List) {
+      return raw.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toList();
+    }
+    if (raw is String && raw.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is List) {
+          return decoded
+              .map((e) => e.toString().trim())
+              .where((e) => e.isNotEmpty)
+              .toList();
+        }
+      } catch (_) {}
+    }
+    return const <String>[];
+  }
+
+  String _encodeInterests(List<String> interests) {
+    return jsonEncode(
+      interests.map((e) => e.trim()).where((e) => e.isNotEmpty).toList(),
+    );
+  }
+
+  String? _encodePlan(Map<String, dynamic>? plan) {
+    if (plan == null) return null;
+    try {
+      return jsonEncode(plan);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Map<String, dynamic>? _decodePlan(dynamic raw) {
+    if (raw is Map<String, dynamic>) return raw;
+    if (raw is Map) return raw.map((k, v) => MapEntry('$k', v));
+    if (raw is String && raw.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map<String, dynamic>) return decoded;
+        if (decoded is Map) return decoded.map((k, v) => MapEntry('$k', v));
+      } catch (_) {}
+    }
+    return null;
+  }
+
   User _rowToUser(List<dynamic> row) {
     return User(
       id: row[0] as String,
@@ -269,6 +327,16 @@ class PostgresDataStore implements DataStore {
                     : DateTime.parse(row[7].toString()))
               : null,
       linePushEnabled: row.length > 8 ? row[8] == true : false,
+      interests: row.length > 9 ? _decodeInterests(row[9]) : const <String>[],
+      activePlan: row.length > 10 ? _decodePlan(row[10]) : null,
+      activePlanUpdatedAt:
+          row.length > 11
+              ? (row[11] == null
+                    ? null
+                    : row[11] is DateTime
+                    ? row[11] as DateTime
+                    : DateTime.parse(row[11].toString()))
+              : null,
     );
   }
 
@@ -305,7 +373,7 @@ class PostgresDataStore implements DataStore {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     final usersRows = await conn.query(
-      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users',
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled, interests_json, active_plan_json, active_plan_updated_at FROM users',
     );
     final placesRows = await conn.query(
       'SELECT id, name, tags, city, address, lat, lng, description, image_url, rating, user_ratings_total, price_level, price_category, opening_hours_json, source, updated_at FROM places',
@@ -332,7 +400,7 @@ class PostgresDataStore implements DataStore {
       await ctx.query('DELETE FROM places');
       for (final user in data.users) {
         await ctx.query(
-          'INSERT INTO users (id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled) VALUES (@id, @username, @email, @phone, @password_hash, @created_at, @line_user_id, @line_linked_at, @line_push_enabled)',
+          'INSERT INTO users (id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled, interests_json, active_plan_json, active_plan_updated_at) VALUES (@id, @username, @email, @phone, @password_hash, @created_at, @line_user_id, @line_linked_at, @line_push_enabled, @interests_json, @active_plan_json, @active_plan_updated_at)',
           substitutionValues: {
             'id': user.id,
             'username': user.username,
@@ -343,6 +411,9 @@ class PostgresDataStore implements DataStore {
             'line_user_id': user.lineUserId,
             'line_linked_at': user.lineLinkedAt?.toUtc(),
             'line_push_enabled': user.linePushEnabled,
+            'interests_json': _encodeInterests(user.interests),
+            'active_plan_json': _encodePlan(user.activePlan),
+            'active_plan_updated_at': user.activePlanUpdatedAt?.toUtc(),
           },
         );
       }
@@ -381,7 +452,7 @@ class PostgresDataStore implements DataStore {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     await conn.query(
-      'INSERT INTO users (id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled) VALUES (@id, @username, @email, @phone, @password_hash, @created_at, @line_user_id, @line_linked_at, @line_push_enabled)',
+      'INSERT INTO users (id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled, interests_json, active_plan_json, active_plan_updated_at) VALUES (@id, @username, @email, @phone, @password_hash, @created_at, @line_user_id, @line_linked_at, @line_push_enabled, @interests_json, @active_plan_json, @active_plan_updated_at)',
       substitutionValues: {
         'id': user.id,
         'username': user.username,
@@ -392,6 +463,9 @@ class PostgresDataStore implements DataStore {
         'line_user_id': user.lineUserId,
         'line_linked_at': user.lineLinkedAt?.toUtc(),
         'line_push_enabled': user.linePushEnabled,
+        'interests_json': _encodeInterests(user.interests),
+        'active_plan_json': _encodePlan(user.activePlan),
+        'active_plan_updated_at': user.activePlanUpdatedAt?.toUtc(),
       },
     );
   }
@@ -401,7 +475,7 @@ class PostgresDataStore implements DataStore {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     final count = await conn.query(
-      'UPDATE users SET username=@username, email=@email, phone=@phone, password_hash=@password_hash, line_user_id=@line_user_id, line_linked_at=@line_linked_at, line_push_enabled=@line_push_enabled WHERE id=@id',
+      'UPDATE users SET username=@username, email=@email, phone=@phone, password_hash=@password_hash, line_user_id=@line_user_id, line_linked_at=@line_linked_at, line_push_enabled=@line_push_enabled, interests_json=@interests_json, active_plan_json=@active_plan_json, active_plan_updated_at=@active_plan_updated_at WHERE id=@id',
       substitutionValues: {
         'id': updated.id,
         'username': updated.username,
@@ -411,6 +485,9 @@ class PostgresDataStore implements DataStore {
         'line_user_id': updated.lineUserId,
         'line_linked_at': updated.lineLinkedAt?.toUtc(),
         'line_push_enabled': updated.linePushEnabled,
+        'interests_json': _encodeInterests(updated.interests),
+        'active_plan_json': _encodePlan(updated.activePlan),
+        'active_plan_updated_at': updated.activePlanUpdatedAt?.toUtc(),
       },
     );
     if (count.isEmpty) {
@@ -509,7 +586,7 @@ class PostgresDataStore implements DataStore {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     final rows = await conn.query(
-      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users WHERE lower(email)=@email LIMIT 1',
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled, interests_json, active_plan_json, active_plan_updated_at FROM users WHERE lower(email)=@email LIMIT 1',
       substitutionValues: {'email': email.toLowerCase()},
     );
     if (rows.isEmpty) return null;
@@ -521,7 +598,7 @@ class PostgresDataStore implements DataStore {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     final rows = await conn.query(
-      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users WHERE phone=@phone LIMIT 1',
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled, interests_json, active_plan_json, active_plan_updated_at FROM users WHERE phone=@phone LIMIT 1',
       substitutionValues: {'phone': phone},
     );
     if (rows.isEmpty) return null;
@@ -533,7 +610,7 @@ class PostgresDataStore implements DataStore {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     final rows = await conn.query(
-      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users WHERE id=@id LIMIT 1',
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled, interests_json, active_plan_json, active_plan_updated_at FROM users WHERE id=@id LIMIT 1',
       substitutionValues: {'id': id},
     );
     if (rows.isEmpty) return null;
@@ -545,7 +622,7 @@ class PostgresDataStore implements DataStore {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     final rows = await conn.query(
-      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users WHERE line_user_id=@line_user_id LIMIT 1',
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled, interests_json, active_plan_json, active_plan_updated_at FROM users WHERE line_user_id=@line_user_id LIMIT 1',
       substitutionValues: {'line_user_id': lineUserId},
     );
     if (rows.isEmpty) return null;
@@ -557,7 +634,7 @@ class PostgresDataStore implements DataStore {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     final rows = await conn.query(
-      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users WHERE lower(username)=@username LIMIT 1',
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled, interests_json, active_plan_json, active_plan_updated_at FROM users WHERE lower(username)=@username LIMIT 1',
       substitutionValues: {'username': username.toLowerCase()},
     );
     if (rows.isEmpty) return null;
@@ -574,7 +651,7 @@ class PostgresDataStore implements DataStore {
     final conn = await _ensureConnection();
     final lower = trimmed.toLowerCase();
     final rows = await conn.query(
-      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users '
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled, interests_json, active_plan_json, active_plan_updated_at FROM users '
       'WHERE lower(username)=@account OR lower(email)=@account LIMIT 1',
       substitutionValues: {'account': lower},
     );
@@ -783,7 +860,10 @@ class MySqlDataStore implements DataStore {
         created_at DATETIME NOT NULL,
         line_user_id VARCHAR(128) NULL,
         line_linked_at DATETIME NULL,
-        line_push_enabled TINYINT(1) NOT NULL DEFAULT 0
+        line_push_enabled TINYINT(1) NOT NULL DEFAULT 0,
+        interests_json TEXT NULL,
+        active_plan_json LONGTEXT NULL,
+        active_plan_updated_at DATETIME NULL
       )
       ''',
     );
@@ -793,6 +873,9 @@ class MySqlDataStore implements DataStore {
     await _ensureColumn(conn, 'users', 'line_user_id', 'VARCHAR(128) NULL');
     await _ensureColumn(conn, 'users', 'line_linked_at', 'DATETIME NULL');
     await _ensureColumn(conn, 'users', 'line_push_enabled', 'TINYINT(1) NOT NULL DEFAULT 0');
+    await _ensureColumn(conn, 'users', 'interests_json', 'TEXT NULL');
+    await _ensureColumn(conn, 'users', 'active_plan_json', 'LONGTEXT NULL');
+    await _ensureColumn(conn, 'users', 'active_plan_updated_at', 'DATETIME NULL');
     await conn.execute(
       '''
       CREATE TABLE IF NOT EXISTS places (
@@ -825,12 +908,58 @@ class MySqlDataStore implements DataStore {
     _initialized = true;
   }
 
+  List<String> _decodeInterests(dynamic raw) {
+    if (raw is List) {
+      return raw.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toList();
+    }
+    if (raw is String && raw.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is List) {
+          return decoded
+              .map((e) => e.toString().trim())
+              .where((e) => e.isNotEmpty)
+              .toList();
+        }
+      } catch (_) {}
+    }
+    return const <String>[];
+  }
+
+  String _encodeInterests(List<String> interests) {
+    return jsonEncode(
+      interests.map((e) => e.trim()).where((e) => e.isNotEmpty).toList(),
+    );
+  }
+
+  String? _encodePlan(Map<String, dynamic>? plan) {
+    if (plan == null) return null;
+    try {
+      return jsonEncode(plan);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Map<String, dynamic>? _decodePlan(dynamic raw) {
+    if (raw is Map<String, dynamic>) return raw;
+    if (raw is Map) return raw.map((k, v) => MapEntry('$k', v));
+    if (raw is String && raw.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map<String, dynamic>) return decoded;
+        if (decoded is Map) return decoded.map((k, v) => MapEntry('$k', v));
+      } catch (_) {}
+    }
+    return null;
+  }
+
   @override
   Future<BackendData> read() async {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     final userRows = await conn.execute(
-      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users',
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled, interests_json, active_plan_json, active_plan_updated_at FROM users',
     );
     final users = userRows.rows.map<User>(_rowToUser).toList();
     final placeRows = await conn.execute(
@@ -909,7 +1038,7 @@ class MySqlDataStore implements DataStore {
     await conn.execute(
       '''
       UPDATE users
-      SET username = :username, email = :email, phone = :phone, password_hash = :password_hash, line_user_id = :line_user_id, line_linked_at = :line_linked_at, line_push_enabled = :line_push_enabled
+      SET username = :username, email = :email, phone = :phone, password_hash = :password_hash, line_user_id = :line_user_id, line_linked_at = :line_linked_at, line_push_enabled = :line_push_enabled, interests_json = :interests_json, active_plan_json = :active_plan_json, active_plan_updated_at = :active_plan_updated_at
       WHERE id = :id
       ''',
       {
@@ -920,6 +1049,9 @@ class MySqlDataStore implements DataStore {
         'line_user_id': updated.lineUserId,
         'line_linked_at': updated.lineLinkedAt == null ? null : _formatDateTime(updated.lineLinkedAt!),
         'line_push_enabled': updated.linePushEnabled ? 1 : 0,
+        'interests_json': _encodeInterests(updated.interests),
+        'active_plan_json': _encodePlan(updated.activePlan),
+        'active_plan_updated_at': updated.activePlanUpdatedAt == null ? null : _formatDateTime(updated.activePlanUpdatedAt!),
         'id': updated.id,
       },
     );
@@ -984,7 +1116,7 @@ class MySqlDataStore implements DataStore {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     final rows = await conn.execute(
-      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users WHERE LOWER(email) = :email LIMIT 1',
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled, interests_json, active_plan_json, active_plan_updated_at FROM users WHERE LOWER(email) = :email LIMIT 1',
       {'email': email.toLowerCase()},
     );
     if (rows.rows.isEmpty) {
@@ -998,7 +1130,7 @@ class MySqlDataStore implements DataStore {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     final rows = await conn.execute(
-      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users WHERE phone = :phone LIMIT 1',
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled, interests_json, active_plan_json, active_plan_updated_at FROM users WHERE phone = :phone LIMIT 1',
       {'phone': phone},
     );
     if (rows.rows.isEmpty) {
@@ -1012,7 +1144,7 @@ class MySqlDataStore implements DataStore {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     final rows = await conn.execute(
-      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users WHERE id = :id LIMIT 1',
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled, interests_json, active_plan_json, active_plan_updated_at FROM users WHERE id = :id LIMIT 1',
       {'id': id},
     );
     if (rows.rows.isEmpty) {
@@ -1026,7 +1158,7 @@ class MySqlDataStore implements DataStore {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     final rows = await conn.execute(
-      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users WHERE line_user_id = :line_user_id LIMIT 1',
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled, interests_json, active_plan_json, active_plan_updated_at FROM users WHERE line_user_id = :line_user_id LIMIT 1',
       {'line_user_id': lineUserId},
     );
     if (rows.rows.isEmpty) {
@@ -1040,7 +1172,7 @@ class MySqlDataStore implements DataStore {
     await _ensureInitialized();
     final conn = await _ensureConnection();
     final rows = await conn.execute(
-      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled FROM users WHERE LOWER(username) = :username LIMIT 1',
+      'SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled, interests_json, active_plan_json, active_plan_updated_at FROM users WHERE LOWER(username) = :username LIMIT 1',
       {'username': username.toLowerCase()},
     );
     if (rows.rows.isEmpty) {
@@ -1060,7 +1192,7 @@ class MySqlDataStore implements DataStore {
     final conn = await _ensureConnection();
     final rows = await conn.execute(
       '''
-      SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled
+      SELECT id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled, interests_json, active_plan_json, active_plan_updated_at
       FROM users
       WHERE LOWER(username) = :account OR LOWER(email) = :account
       LIMIT 1
@@ -1079,8 +1211,8 @@ class MySqlDataStore implements DataStore {
   ) async {
     await conn.execute(
       '''
-      INSERT INTO users (id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled)
-      VALUES (:id, :username, :email, :phone, :password_hash, :created_at, :line_user_id, :line_linked_at, :line_push_enabled)
+      INSERT INTO users (id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled, interests_json, active_plan_json, active_plan_updated_at)
+      VALUES (:id, :username, :email, :phone, :password_hash, :created_at, :line_user_id, :line_linked_at, :line_push_enabled, :interests_json, :active_plan_json, :active_plan_updated_at)
       ''',
       {
         'id': user.id,
@@ -1092,6 +1224,9 @@ class MySqlDataStore implements DataStore {
         'line_user_id': user.lineUserId,
         'line_linked_at': user.lineLinkedAt == null ? null : _formatDateTime(user.lineLinkedAt!),
         'line_push_enabled': user.linePushEnabled ? 1 : 0,
+        'interests_json': _encodeInterests(user.interests),
+        'active_plan_json': _encodePlan(user.activePlan),
+        'active_plan_updated_at': user.activePlanUpdatedAt == null ? null : _formatDateTime(user.activePlanUpdatedAt!),
       },
     );
   }
@@ -1158,6 +1293,11 @@ class MySqlDataStore implements DataStore {
           ? null
           : _parseDateTime(row.colByName('line_linked_at')),
       linePushEnabled: (row.colByName('line_push_enabled') ?? '0') == '1',
+      interests: _decodeInterests(row.colByName('interests_json')),
+      activePlan: _decodePlan(row.colByName('active_plan_json')),
+      activePlanUpdatedAt: row.colByName('active_plan_updated_at') == null
+          ? null
+          : _parseDateTime(row.colByName('active_plan_updated_at')),
     );
   }
 

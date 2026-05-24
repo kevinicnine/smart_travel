@@ -29,6 +29,7 @@ String? _openAiBaseUrl;
 String? _openAiModel;
 String? _lineChannelSecret;
 String? _lineAddFriendUrl;
+String? _reminderCronToken;
 late final String? _adminToken;
 late final String? _adminUser;
 late final String? _adminPass;
@@ -105,6 +106,44 @@ class _LineLinkCode {
   };
 }
 
+class _RouteFeasibilityDecision {
+  const _RouteFeasibilityDecision({
+    required this.shouldBlock,
+    required this.message,
+    this.reasons = const [],
+    this.suggestions = const [],
+    this.metrics,
+  });
+
+  final bool shouldBlock;
+  final String message;
+  final List<String> reasons;
+  final List<String> suggestions;
+  final Map<String, dynamic>? metrics;
+
+  Map<String, dynamic> toJson() => {
+    'code': 'route_not_feasible',
+    'shouldBlock': shouldBlock,
+    'reasons': reasons,
+    'suggestions': suggestions,
+    if (metrics != null) 'metrics': metrics,
+  };
+}
+
+class _ContextFocus {
+  const _ContextFocus({
+    required this.targetIndex,
+    required this.targetItem,
+    required this.phase,
+    this.currentMinute,
+  });
+
+  final int targetIndex;
+  final Map<String, dynamic> targetItem;
+  final String phase;
+  final int? currentMinute;
+}
+
 Future<void> main(List<String> args) async {
   _configureLogging();
 
@@ -123,6 +162,7 @@ Future<void> main(List<String> args) async {
   _openAiModel = Platform.environment['OPENAI_MODEL'] ?? 'gpt-4o-mini';
   _lineChannelSecret = Platform.environment['LINE_CHANNEL_SECRET'];
   _lineAddFriendUrl = Platform.environment['LINE_ADD_FRIEND_URL'];
+  _reminderCronToken = Platform.environment['REMINDER_CRON_TOKEN'];
 
   _log.info('Using data directory: $_dataDir');
   _log.info(
@@ -227,6 +267,37 @@ Future<void> main(List<String> args) async {
         places = await _backfillVisiblePlaces(store, places);
         return successBody(
           data: {'places': places.map(_placeToApiJson).toList()},
+        );
+      }),
+    )
+    ..post(
+      '/api/meal-suggestions',
+      (req) => _json(req, (body) async {
+        final previous = body['previous'];
+        final next = body['next'];
+        final query = _asString(body, 'query').trim();
+        final mealType = _asString(body, 'mealType').trim().toLowerCase();
+        final city = _asString(body, 'city').trim();
+        final limit = (_asInt(body, 'limit') ?? 12).clamp(1, 20);
+
+        final previousMap = previous is Map
+            ? Map<String, dynamic>.from(previous)
+            : const <String, dynamic>{};
+        final nextMap = next is Map
+            ? Map<String, dynamic>.from(next)
+            : const <String, dynamic>{};
+
+        final suggestions = await _fetchLiveMealSuggestions(
+          previous: previousMap,
+          next: nextMap,
+          query: query,
+          mealType: mealType,
+          city: city,
+          limit: limit,
+        );
+        return successBody(
+          message: '已取得餐廳候選',
+          data: {'places': suggestions},
         );
       }),
     )
@@ -859,10 +930,26 @@ Future<void> main(List<String> args) async {
     ..post(
       '/api/travel/preferences',
       (req) => _json(req, (body) async {
+        final userId = _asString(body, 'userId').trim();
         final interests =
             (body['interests'] as List?)?.whereType<String>().toList() ??
             const [];
-        return successBody(message: '已接收興趣偏好', data: {'saved': interests});
+        User? updatedUser;
+        if (userId.isNotEmpty) {
+          final user = await _store.findUserById(userId);
+          if (user == null) {
+            throw ApiException(404, '查無此使用者');
+          }
+          updatedUser = user.copyWith(interests: interests);
+          await _store.updateUser(updatedUser);
+        }
+        return successBody(
+          message: '已接收興趣偏好',
+          data: {
+            'saved': interests,
+            if (updatedUser != null) 'user': updatedUser.toPublicJson(),
+          },
+        );
       }),
     )
     ..post(
@@ -930,9 +1017,33 @@ Future<void> main(List<String> args) async {
           wishlistPlaces: wishlistPlaces,
         );
         if (userId.isNotEmpty) {
+          unawaited(_syncUserActivePlan(userId: userId, plan: plan));
           unawaited(_sendLineItineraryGeneratedNotification(userId: userId, plan: plan));
         }
         return successBody(message: '行程已生成', data: plan);
+      }),
+    )
+    ..post(
+      '/api/travel/active-plan',
+      (req) => _json(req, (body) async {
+        final userId = _asString(body, 'userId').trim();
+        final rawPlan = body['plan'];
+        if (userId.isEmpty) {
+          throw ApiException(400, '缺少使用者 id');
+        }
+        if (rawPlan is! Map) {
+          throw ApiException(400, '缺少行程資料');
+        }
+        final plan = Map<String, dynamic>.from(rawPlan);
+        await _syncUserActivePlan(userId: userId, plan: plan);
+        final updatedUser = await _store.findUserById(userId);
+        return successBody(
+          message: '已同步目前行程到雲端提醒',
+          data: {
+            'activePlanSynced': true,
+            'activePlanUpdatedAt': updatedUser?.activePlanUpdatedAt?.toIso8601String(),
+          },
+        );
       }),
     )
     ..post(
@@ -947,6 +1058,16 @@ Future<void> main(List<String> args) async {
       (req) => _json(req, (body) async {
         final result = await _buildContextAwareness(body);
         return successBody(message: '情境感知分析完成', data: result);
+      }),
+    )
+    ..post(
+      '/api/line/run-upcoming-reminders',
+      (req) => _withReminderCron(req, () async {
+        final result = await _runUpcomingReminderScan();
+        return jsonResponse(
+          200,
+          successBody(message: '已完成即時提醒掃描', data: result),
+        );
       }),
     );
 
@@ -1106,6 +1227,20 @@ Future<Response> _withAdmin(
   return _handle(action);
 }
 
+Future<Response> _withReminderCron(
+  Request request,
+  Future<Response> Function() action,
+) async {
+  if (_reminderCronToken == null || _reminderCronToken!.isEmpty) {
+    return jsonResponse(403, errorBody('尚未設定 REMINDER_CRON_TOKEN'));
+  }
+  final token = request.headers['x-reminder-token']?.trim();
+  if (token == null || token != _reminderCronToken) {
+    return jsonResponse(401, errorBody('未授權'));
+  }
+  return _handle(action);
+}
+
 Future<Response> _adminPageHandler(Request request) async {
   final file = File(p.join(_dataDir, '..', 'web', 'admin.html'));
   if (!await file.exists()) {
@@ -1120,6 +1255,81 @@ Future<Response> _adminPageHandler(Request request) async {
 
 Future<User?> _findUserById(String userId) async {
   return _store.findUserById(userId);
+}
+
+Future<void> _syncUserActivePlan({
+  required String userId,
+  required Map<String, dynamic> plan,
+}) async {
+  final user = await _store.findUserById(userId);
+  if (user == null) {
+    throw ApiException(404, '找不到使用者');
+  }
+  final normalizedPlan = Map<String, dynamic>.from(
+    jsonDecode(jsonEncode(plan)) as Map,
+  );
+  await _store.updateUser(
+    user.copyWith(
+      activePlan: normalizedPlan,
+      activePlanUpdatedAt: DateTime.now(),
+    ),
+  );
+}
+
+Future<Map<String, dynamic>> _runUpcomingReminderScan() async {
+  final users = (await _store.read()).users;
+  final now = DateTime.now();
+  final todayText = now.toIso8601String().substring(0, 10);
+  var scanned = 0;
+  var syncedPlans = 0;
+  var pushed = 0;
+  final pushedUsers = <String>[];
+
+  for (final user in users) {
+    if (user.lineUserId == null ||
+        user.lineUserId!.trim().isEmpty ||
+        user.linePushEnabled != true) {
+      continue;
+    }
+    final plan = user.activePlan;
+    if (plan == null) {
+      continue;
+    }
+    syncedPlans += 1;
+    final rawDays = plan['days'];
+    if (rawDays is! List) {
+      continue;
+    }
+    final todayDay = rawDays
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .firstWhere(
+          (item) => item['date']?.toString().startsWith(todayText) == true,
+          orElse: () => const <String, dynamic>{},
+        );
+    if (todayDay.isEmpty) {
+      continue;
+    }
+    scanned += 1;
+    final result = await _buildContextAwareness({
+      'day': todayDay,
+      'userId': user.id,
+      'triggerLinePush': true,
+      'currentTime': now.toIso8601String(),
+    });
+    if (result['linePushed'] == true) {
+      pushed += 1;
+      pushedUsers.add(user.username);
+    }
+  }
+
+  return {
+    'scannedUsers': scanned,
+    'syncedPlans': syncedPlans,
+    'linePushed': pushed,
+    'pushedUsers': pushedUsers,
+    'checkedAt': now.toIso8601String(),
+  };
 }
 
 Future<void> _sendLineItineraryGeneratedNotification({
@@ -1204,6 +1414,9 @@ Future<Map<String, dynamic>> _buildContextAwareness(
   final day = Map<String, dynamic>.from(rawDay);
   final userId = _asString(body, 'userId').trim();
   final triggerLinePush = body['triggerLinePush'] != false;
+  final referenceTime =
+      DateTime.tryParse(body['currentTime']?.toString() ?? '')?.toLocal() ??
+      DateTime.now();
   final dayDate = _parseDate(day['date']?.toString());
   final dayDateText = dayDate?.toIso8601String().substring(0, 10);
   if (dayDate == null || dayDateText == null) {
@@ -1246,6 +1459,11 @@ Future<Map<String, dynamic>> _buildContextAwareness(
         return kind != 'meal_break';
       })
       .toList();
+  final focus = _resolveContextFocus(
+    dayDate: dayDate,
+    visitItems: visitItems,
+    referenceTime: referenceTime,
+  );
 
   final visitPlaces = visitItems
       .map((item) => _planPlaceToPlace(Map<String, dynamic>.from(item['place'] as Map)))
@@ -1321,7 +1539,8 @@ Future<Map<String, dynamic>> _buildContextAwareness(
       : const <Place>[];
   final usedPlaceIds = visitPlaces.map((place) => place.id).toSet();
   if (catalog.isNotEmpty) {
-    for (final item in visitItems) {
+    for (var visitIndex = 0; visitIndex < visitItems.length; visitIndex++) {
+      final item = visitItems[visitIndex];
       final placeMap = Map<String, dynamic>.from(item['place'] as Map);
       final place = _planPlaceToPlace(placeMap);
       if (!_isOutdoorPlace(place)) {
@@ -1369,6 +1588,30 @@ Future<Map<String, dynamic>> _buildContextAwareness(
             .map(_contextReplacementToJson)
             .toList(),
       });
+      if (focus != null && focus.targetIndex == visitIndex) {
+        final topNames = candidates.take(2).map((e) => e.name).join(' / ');
+        _setContextNextAction(
+          day,
+          {
+            'type': severeRain ? 'swap_for_weather' : 'swap_for_heat',
+            'severity': severeRain ? 'high' : 'medium',
+            'phase': focus.phase,
+            'targetPlaceId': place.id,
+            'targetPlaceName': place.name,
+            'scheduledTime': item['time']?.toString(),
+            'title': focus.phase == 'current'
+                ? '建議立即調整目前景點'
+                : '建議調整接下來的景點',
+            'message': severeRain
+                ? '${place.name} 目前受降雨風險影響，建議不要硬走原本戶外安排。'
+                : '${place.name} 遇到高溫曝曬風險，建議改成室內點再回來。',
+            'recommendedAction': topNames.isEmpty
+                ? '先改排同城市室內備案。'
+                : '先改去 $topNames，等天氣穩定後再回來。',
+            'alternatives': candidates.take(3).map(_contextReplacementToJson).toList(),
+          },
+        );
+      }
     }
     if (backupPlans.isNotEmpty) {
       final sample = backupPlans.first;
@@ -1380,7 +1623,8 @@ Future<Map<String, dynamic>> _buildContextAwareness(
     }
   }
 
-  for (final item in visitItems) {
+  for (var visitIndex = 0; visitIndex < visitItems.length; visitIndex++) {
+    final item = visitItems[visitIndex];
     final placeMap = Map<String, dynamic>.from(item['place'] as Map);
     final place = _planPlaceToPlace(placeMap);
     final scheduleStart = _parseHmToMinute(item['time']?.toString());
@@ -1396,6 +1640,22 @@ Future<Map<String, dynamic>> _buildContextAwareness(
         message: closureText,
       ));
       suggestions.add('建議先電話確認 ${place.name} 是否營業，或改用同城市備案景點。');
+      if (focus != null && focus.targetIndex == visitIndex) {
+        _setContextNextAction(
+          day,
+          {
+            'type': 'opening_unknown',
+            'severity': 'high',
+            'phase': focus.phase,
+            'targetPlaceId': place.id,
+            'targetPlaceName': place.name,
+            'scheduledTime': item['time']?.toString(),
+            'title': '下一站營業狀態不明',
+            'message': '${place.name} 今天的營業資訊無法可靠判讀，不建議直接前往。',
+            'recommendedAction': '先電話確認，若無法確認就改用同城市備案景點。',
+          },
+        );
+      }
       continue;
     }
     if (place.openingHours == null) {
@@ -1421,6 +1681,22 @@ Future<Map<String, dynamic>> _buildContextAwareness(
         message: '行程安排 ${item['time']} 到訪，但今日約 ${_minutesToHm(openMinute)} 才開放。',
       ));
       suggestions.add('將 ${place.name} 延後到 ${_minutesToHm(openMinute)} 後，或先安排附近早開景點。');
+      if (focus != null && focus.targetIndex == visitIndex) {
+        _setContextNextAction(
+          day,
+          {
+            'type': 'delay_until_open',
+            'severity': 'high',
+            'phase': focus.phase,
+            'targetPlaceId': place.id,
+            'targetPlaceName': place.name,
+            'scheduledTime': item['time']?.toString(),
+            'title': '建議延後前往下一站',
+            'message': '${place.name} 約 ${_minutesToHm(openMinute)} 才開放，照原時間過去會撲空。',
+            'recommendedAction': '把 ${place.name} 延後到 ${_minutesToHm(openMinute)} 後，或先換去附近早開景點。',
+          },
+        );
+      }
       continue;
     }
     if (scheduleStart >= closeMinute) {
@@ -1431,6 +1707,22 @@ Future<Map<String, dynamic>> _buildContextAwareness(
         message: '行程安排 ${item['time']} 到訪，但今日約 ${_minutesToHm(closeMinute)} 前結束營業。',
       ));
       suggestions.add('把 ${place.name} 提前，或改成當天較早時段的景點。');
+      if (focus != null && focus.targetIndex == visitIndex) {
+        _setContextNextAction(
+          day,
+          {
+            'type': 'skip_closed',
+            'severity': 'high',
+            'phase': focus.phase,
+            'targetPlaceId': place.id,
+            'targetPlaceName': place.name,
+            'scheduledTime': item['time']?.toString(),
+            'title': '下一站可能已打烊',
+            'message': '${place.name} 抵達時段可能已結束營業，不建議照原順序前往。',
+            'recommendedAction': '改成當天較早時段景點，或直接換成備案景點。',
+          },
+        );
+      }
       continue;
     }
     if (scheduleEnd != null && scheduleEnd > closeMinute) {
@@ -1441,6 +1733,22 @@ Future<Map<String, dynamic>> _buildContextAwareness(
         message: '預計待到 ${item['endTime']}，但今日約 ${_minutesToHm(closeMinute)} 前結束營業。',
       ));
       suggestions.add('縮短前一站停留或提早出發，避免 ${place.name} 只逛到一半。');
+      if (focus != null && focus.targetIndex == visitIndex) {
+        _setContextNextAction(
+          day,
+          {
+            'type': 'shorten_before_stop',
+            'severity': 'medium',
+            'phase': focus.phase,
+            'targetPlaceId': place.id,
+            'targetPlaceName': place.name,
+            'scheduledTime': item['time']?.toString(),
+            'title': '下一站停留時間會被壓縮',
+            'message': '${place.name} 的可用營業時段偏短，照原節奏過去可能來不及完整停留。',
+            'recommendedAction': '提早出發，或先縮短前一站停留時間。',
+          },
+        );
+      }
       continue;
     }
     if (closeMinute - scheduleStart <= 30) {
@@ -1469,6 +1777,20 @@ Future<Map<String, dynamic>> _buildContextAwareness(
         message: '$fromLabel 到 $toLabel 預估需 $minutes 分鐘（$label），第一天節奏可能偏趕。',
       ));
       suggestions.add('若可行，建議前一晚先接近旅遊城市，或第一天減少景點數。');
+      if (focus != null && focus.targetIndex == 0) {
+        _setContextNextAction(
+          day,
+          {
+            'type': 'origin_transit_too_long',
+            'severity': 'high',
+            'phase': focus.phase,
+            'targetPlaceName': toLabel,
+            'title': '出發段過長，建議立即縮減第一天安排',
+            'message': '$fromLabel 到 $toLabel 預估需 $minutes 分鐘，第一天前段移動成本過高。',
+            'recommendedAction': '優先保留第一站與核心景點，其餘景點往後移或刪減 1 站。',
+          },
+        );
+      }
     } else if (minutes >= 120) {
       alerts.add(_contextAlert(
         type: 'origin_transit_long',
@@ -1477,6 +1799,20 @@ Future<Map<String, dynamic>> _buildContextAwareness(
         message: '$fromLabel 到 $toLabel 預估需 $minutes 分鐘（$label）。',
       ));
       suggestions.add('第一站後可預留午餐或休息時間，避免一路趕行程。');
+      if (focus != null && focus.targetIndex == 0) {
+        _setContextNextAction(
+          day,
+          {
+            'type': 'origin_transit_long',
+            'severity': 'medium',
+            'phase': focus.phase,
+            'targetPlaceName': toLabel,
+            'title': '第一站前交通偏長',
+            'message': '$fromLabel 到 $toLabel 需要約 $minutes 分鐘，照原節奏會偏趕。',
+            'recommendedAction': '第一站後先預留休息或午餐，後段景點數不要再加。',
+          },
+        );
+      }
     }
     _appendTransitContextAlerts(
       alerts: alerts,
@@ -1502,9 +1838,22 @@ Future<Map<String, dynamic>> _buildContextAwareness(
   }
 
   final overallSeverity = _contextOverallSeverity(alerts);
+  final nextAction = _contextNextAction(day);
+  final upcomingReminder = _buildContextUpcomingReminder(
+    day: day,
+    visitItems: visitItems,
+    focus: focus,
+    referenceTime: referenceTime,
+    weather: weather,
+    alerts: alerts,
+  );
   final summary = alerts.isEmpty
-      ? '今日行程狀況穩定，目前沒有需要即時調整的重點。'
-      : '今日行程有 ${alerts.length} 項需留意的情境提醒${backupPlans.isNotEmpty ? '，並已幫你準備室內備案。' : '。'}';
+      ? upcomingReminder == null
+            ? '今日行程狀況穩定，目前沒有需要即時調整的重點。'
+            : '接下來建議準備前往「${upcomingReminder['targetPlaceName']}」，已整理出發與注意事項。'
+      : nextAction == null
+      ? '今日行程有 ${alerts.length} 項需留意的情境提醒${backupPlans.isNotEmpty ? '，並已幫你準備室內備案。' : '。'}'
+      : '系統判斷接下來較需要先調整「${nextAction['targetPlaceName']?.toString().trim().isNotEmpty == true ? nextAction['targetPlaceName'] : nextAction['title']}」，已同步整理立即應變建議。';
 
   final result = <String, dynamic>{
     'summary': summary,
@@ -1512,6 +1861,8 @@ Future<Map<String, dynamic>> _buildContextAwareness(
     'alerts': alerts,
     'suggestions': suggestions.toList(),
     'backupPlans': backupPlans,
+    if (nextAction != null) 'nextAction': nextAction,
+    if (upcomingReminder != null) 'upcomingReminder': upcomingReminder,
     'checkedAt': DateTime.now().toUtc().toIso8601String(),
     'linePushed': false,
   };
@@ -1525,6 +1876,120 @@ Future<Map<String, dynamic>> _buildContextAwareness(
   }
 
   return result;
+}
+
+Map<String, dynamic>? _buildContextUpcomingReminder({
+  required Map<String, dynamic> day,
+  required List<Map<String, dynamic>> visitItems,
+  required _ContextFocus? focus,
+  required DateTime referenceTime,
+  required Map<String, dynamic>? weather,
+  required List<Map<String, dynamic>> alerts,
+}) {
+  if (focus == null || visitItems.isEmpty || focus.phase == 'completed') {
+    return null;
+  }
+
+  Map<String, dynamic>? targetItem;
+  Map<String, dynamic>? transit;
+  var targetIndex = focus.targetIndex;
+
+  if (focus.phase == 'current') {
+    final nextIndex = focus.targetIndex + 1;
+    if (nextIndex >= visitItems.length) {
+      return null;
+    }
+    targetIndex = nextIndex;
+    targetItem = visitItems[nextIndex];
+    final currentTransit = focus.targetItem['transitToNext'];
+    if (currentTransit is Map) {
+      transit = Map<String, dynamic>.from(currentTransit);
+    }
+  } else {
+    targetItem = focus.targetItem;
+    if (targetIndex == 0) {
+      final rawOriginTransit = day['originTransit'];
+      if (rawOriginTransit is Map) {
+        transit = Map<String, dynamic>.from(rawOriginTransit);
+      }
+    } else {
+      final previousItem = visitItems[targetIndex - 1];
+      final rawTransit = previousItem['transitToNext'];
+      if (rawTransit is Map) {
+        transit = Map<String, dynamic>.from(rawTransit);
+      }
+    }
+  }
+
+  final place = targetItem['place'];
+  if (place is! Map) {
+    return null;
+  }
+
+  final scheduledTime = targetItem['time']?.toString() ?? '';
+  final startMinute = _parseHmToMinute(scheduledTime);
+  if (startMinute == null) {
+    return null;
+  }
+
+  final nowMinute = referenceTime.hour * 60 + referenceTime.minute;
+  final minutesUntil = startMinute - nowMinute;
+  final dateText = day['date']?.toString() ?? '';
+  final dayDate = _parseDate(dateText);
+  final isToday = dayDate != null &&
+      dayDate.year == referenceTime.year &&
+      dayDate.month == referenceTime.month &&
+      dayDate.day == referenceTime.day;
+
+  final transitLabel = transit?['label']?.toString().trim() ?? '';
+  final fromLabel = transit?['fromLabel']?.toString().trim() ?? '';
+  final toLabel =
+      transit?['toLabel']?.toString().trim().isNotEmpty == true
+          ? transit!['toLabel']!.toString().trim()
+          : place['name']?.toString().trim() ?? '下一站';
+  final transitMinutes = _asIntValue(transit?['minutes']);
+  final cautionNotes = <String>[];
+  for (final alert in alerts) {
+    final title = alert['title']?.toString() ?? '';
+    final message = alert['message']?.toString() ?? '';
+    final placeName = place['name']?.toString() ?? '';
+    if ((title.contains(placeName) || message.contains(placeName)) &&
+        message.trim().isNotEmpty) {
+      cautionNotes.add(message.trim());
+    } else if (fromLabel.isNotEmpty &&
+        toLabel.isNotEmpty &&
+        title.contains(fromLabel) &&
+        title.contains(toLabel) &&
+        message.trim().isNotEmpty) {
+      cautionNotes.add(message.trim());
+    }
+  }
+  if (cautionNotes.isEmpty && weather != null) {
+    final rainProb = _asIntValue(weather['precipitationProbability']) ?? 0;
+    final summary = weather['summary']?.toString().trim() ?? '';
+    if (rainProb >= 50 && summary.isNotEmpty) {
+      cautionNotes.add('目前天氣為 $summary，降雨機率約 $rainProb%，建議預留雨具。');
+    }
+  }
+  if (cautionNotes.isEmpty && transitMinutes != null && transitMinutes >= 60) {
+    cautionNotes.add('本段交通約 $transitMinutes 分鐘，建議提早整理並準備出發。');
+  }
+
+  final shouldPush = isToday && minutesUntil >= 0 && minutesUntil <= 20;
+  return {
+    'phase': focus.phase == 'current' ? 'after_current' : 'upcoming',
+    'targetIndex': targetIndex,
+    'targetPlaceName': place['name']?.toString() ?? '下一站',
+    'scheduledTime': scheduledTime,
+    'minutesUntil': minutesUntil,
+    'fromLabel': fromLabel,
+    'toLabel': toLabel,
+    'transitLabel': transitLabel,
+    'transitMinutes': transitMinutes,
+    'weatherSummary': weather?['summary']?.toString(),
+    'notes': cautionNotes.take(3).toList(),
+    'shouldPush': shouldPush,
+  };
 }
 
 Map<String, dynamic> _contextAlert({
@@ -1550,6 +2015,100 @@ Map<String, dynamic> _contextReplacementToJson(Place place) {
     'rating': place.rating,
     'tags': place.tags,
   };
+}
+
+_ContextFocus? _resolveContextFocus({
+  required DateTime dayDate,
+  required List<Map<String, dynamic>> visitItems,
+  required DateTime referenceTime,
+}) {
+  if (visitItems.isEmpty) {
+    return null;
+  }
+  final dayOnly = DateTime(dayDate.year, dayDate.month, dayDate.day);
+  final refOnly = DateTime(
+    referenceTime.year,
+    referenceTime.month,
+    referenceTime.day,
+  );
+  if (refOnly.isBefore(dayOnly)) {
+    return _ContextFocus(
+      targetIndex: 0,
+      targetItem: visitItems.first,
+      phase: 'upcoming',
+    );
+  }
+  if (refOnly.isAfter(dayOnly)) {
+    return _ContextFocus(
+      targetIndex: visitItems.length - 1,
+      targetItem: visitItems.last,
+      phase: 'completed',
+    );
+  }
+
+  final currentMinute = referenceTime.hour * 60 + referenceTime.minute;
+  for (var i = 0; i < visitItems.length; i++) {
+    final item = visitItems[i];
+    final startMinute = _parseHmToMinute(item['time']?.toString());
+    final endMinute = _parseHmToMinute(item['endTime']?.toString());
+    if (startMinute == null) {
+      continue;
+    }
+    if (currentMinute < startMinute) {
+      return _ContextFocus(
+        targetIndex: i,
+        targetItem: item,
+        phase: 'upcoming',
+        currentMinute: currentMinute,
+      );
+    }
+    if (endMinute != null && currentMinute <= endMinute) {
+      return _ContextFocus(
+        targetIndex: i,
+        targetItem: item,
+        phase: 'current',
+        currentMinute: currentMinute,
+      );
+    }
+  }
+  return _ContextFocus(
+    targetIndex: visitItems.length - 1,
+    targetItem: visitItems.last,
+    phase: 'completed',
+    currentMinute: currentMinute,
+  );
+}
+
+void _setContextNextAction(
+  Map<String, dynamic> day,
+  Map<String, dynamic> candidate,
+) {
+  final existing = day['_contextNextAction'];
+  if (existing is! Map<String, dynamic>) {
+    day['_contextNextAction'] = candidate;
+    return;
+  }
+  final existingRank = _contextSeverityRank(existing['severity']?.toString());
+  final candidateRank = _contextSeverityRank(candidate['severity']?.toString());
+  if (candidateRank > existingRank) {
+    day['_contextNextAction'] = candidate;
+    return;
+  }
+  if (candidateRank == existingRank) {
+    final existingPhase = existing['phase']?.toString() ?? '';
+    final candidatePhase = candidate['phase']?.toString() ?? '';
+    if (existingPhase != 'current' && candidatePhase == 'current') {
+      day['_contextNextAction'] = candidate;
+    }
+  }
+}
+
+Map<String, dynamic>? _contextNextAction(Map<String, dynamic> day) {
+  final raw = day.remove('_contextNextAction');
+  if (raw is Map<String, dynamic>) {
+    return raw;
+  }
+  return null;
 }
 
 List<Place> _findContextAlternativeCandidates({
@@ -1819,7 +2378,11 @@ Future<bool> _sendLineContextAwarenessNotification({
             .map((e) => Map<String, dynamic>.from(e))
             .toList() ??
         const <Map<String, dynamic>>[];
-    if (alerts.isEmpty) {
+    final upcomingReminder = result['upcomingReminder'] is Map
+        ? Map<String, dynamic>.from(result['upcomingReminder'] as Map)
+        : null;
+    final shouldPushReminder = upcomingReminder?['shouldPush'] == true;
+    if (alerts.isEmpty && !shouldPushReminder) {
       return false;
     }
 
@@ -1832,20 +2395,32 @@ Future<bool> _sendLineContextAwarenessNotification({
     }
 
     final overallSeverity = result['severity']?.toString() ?? 'ok';
-    if (_contextSeverityRank(overallSeverity) < 2) {
+    if (!shouldPushReminder && _contextSeverityRank(overallSeverity) < 2) {
       return false;
     }
 
     _cleanupContextPushCooldown();
-    final signature = alerts
-        .map((alert) => '${alert['type']}:${alert['title']}')
-        .join('|');
+    final signatureParts = <String>[];
+    if (shouldPushReminder) {
+      signatureParts.add(
+        'reminder:${upcomingReminder?['targetPlaceName']}:${upcomingReminder?['scheduledTime']}',
+      );
+    }
+    if (alerts.isNotEmpty) {
+      signatureParts.add(
+        alerts.map((alert) => '${alert['type']}:${alert['title']}').join('|'),
+      );
+    }
+    final signature = signatureParts.join('||');
     final cooldownKey =
         '$userId|${dayDate.toIso8601String().substring(0, 10)}|$signature';
     final lastSentAt = _lineContextPushCooldown[cooldownKey];
     final now = DateTime.now().toUtc();
+    final cooldownWindow = shouldPushReminder && alerts.isEmpty
+        ? const Duration(minutes: 20)
+        : const Duration(minutes: 45);
     if (lastSentAt != null &&
-        now.difference(lastSentAt) < const Duration(minutes: 45)) {
+        now.difference(lastSentAt) < cooldownWindow) {
       return false;
     }
 
@@ -1862,6 +2437,7 @@ Future<bool> _sendLineContextAwarenessNotification({
       alerts: alerts,
       suggestions: suggestions,
       backupPlans: backupPlans,
+      upcomingReminder: shouldPushReminder ? upcomingReminder : null,
     );
     await _notificationService.sendLinePush(to: lineUserId, text: message);
     _lineContextPushCooldown[cooldownKey] = now;
@@ -1879,33 +2455,58 @@ String _buildLineContextAwarenessSummary({
   required List<Map<String, dynamic>> alerts,
   required List<String> suggestions,
   required List<Map<String, dynamic>> backupPlans,
+  Map<String, dynamic>? upcomingReminder,
 }) {
   final dateLabel = '${dayDate.month}/${dayDate.day}';
-  final lines = <String>[
-    'Smart Travel 情境提醒',
-    '$dateLabel 行程需留意以下狀況：',
-    for (final alert in alerts.take(3))
-      '• ${alert['title']}: ${alert['message']}',
-    if (suggestions.isNotEmpty) '建議：${suggestions.take(2).join(' / ')}',
-    if (backupPlans.isNotEmpty) ...[
-      for (final plan in backupPlans.take(1))
-        () {
-          final replacements =
-              (plan['replacements'] as List?)
+  final lines = <String>['Smart Travel 即時提醒'];
+  if (upcomingReminder != null) {
+    final target = upcomingReminder['targetPlaceName']?.toString() ?? '下一站';
+    final scheduled = upcomingReminder['scheduledTime']?.toString() ?? '';
+    final transitLabel = upcomingReminder['transitLabel']?.toString() ?? '';
+    final transitMinutes = _asIntValue(upcomingReminder['transitMinutes']);
+    final notes =
+        (upcomingReminder['notes'] as List?)?.map((e) => e.toString()).toList() ??
+            const <String>[];
+    lines.add(
+      '$dateLabel 即將前往：$target${scheduled.isNotEmpty ? '（預計 $scheduled）' : ''}',
+    );
+    if (transitLabel.isNotEmpty || transitMinutes != null) {
+      lines.add(
+        '建議交通：${transitLabel.isNotEmpty ? transitLabel : '依目前路況出發'}'
+        '${transitMinutes != null ? '，約 $transitMinutes 分鐘' : ''}',
+      );
+    }
+    for (final note in notes.take(2)) {
+      if (note.trim().isNotEmpty) {
+        lines.add('• 注意：$note');
+      }
+    }
+  }
+  if (alerts.isNotEmpty) {
+    lines.add('$dateLabel 行程需留意以下狀況：');
+    for (final alert in alerts.take(3)) {
+      lines.add('• ${alert['title']}: ${alert['message']}');
+    }
+  }
+  if (suggestions.isNotEmpty) {
+    lines.add('建議：${suggestions.take(2).join(' / ')}');
+  }
+  if (backupPlans.isNotEmpty) {
+    for (final plan in backupPlans.take(1)) {
+      final replacements =
+          (plan['replacements'] as List?)
                   ?.whereType<Map>()
                   .map((e) => e['name']?.toString() ?? '')
                   .where((e) => e.isNotEmpty)
                   .take(2)
                   .join(' / ') ??
               '';
-          if (replacements.isEmpty) {
-            return '';
-          }
-          return '雨備建議：${plan['targetPlaceName']} 可改為 $replacements';
-        }(),
-    ],
-    '打開 App 可查看今日最新調整建議。',
-  ].where((line) => line.trim().isNotEmpty).toList();
+      if (replacements.isNotEmpty) {
+        lines.add('雨備建議：${plan['targetPlaceName']} 可改為 $replacements');
+      }
+    }
+  }
+  lines.add('打開 App 可查看今日最新調整建議。');
   return lines.join('\n');
 }
 
@@ -2296,6 +2897,10 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
   if (candidates.isEmpty) {
     candidates = places.where(matchesLocation).toList();
   }
+  candidates = _filterCandidatesByTripPurpose(
+    candidates,
+    normalizedTripPurpose,
+  );
 
   final plannerAssist = await _buildAiPlannerAssist(
     allPlaces: places,
@@ -2323,6 +2928,22 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
       .map(_normalizeLocationText)
       .where((e) => e.isNotEmpty)
       .toSet();
+  final feasibilityDecision = _evaluateRouteFeasibilityDecision(
+    allPlaces: places,
+    totalDays: totalDays,
+    originCity: originCity,
+    destinationCities: destinationCities,
+    tripPurpose: normalizedTripPurpose,
+    travelBehavior: normalizedTravelBehavior,
+    plannerAssist: plannerAssist,
+  );
+  if (feasibilityDecision.shouldBlock) {
+    throw ApiException(
+      422,
+      feasibilityDecision.message,
+      details: feasibilityDecision.toJson(),
+    );
+  }
 
   final targetPrice = _budgetToPriceCategory(budget);
   final weights = _PlannerWeights.fromInputs(
@@ -2356,7 +2977,13 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
     originCity: normalizedOriginCity,
   );
 
-  final basePerDay = totalDays <= 2 ? 4 : 3;
+  final basePerDay = switch (normalizedTripPurpose) {
+    'relax' => totalDays <= 2 ? 3 : 2,
+    'explore' => totalDays <= 2 ? 5 : 4,
+    'couple' => totalDays <= 2 ? 4 : 3,
+    'family' => totalDays <= 2 ? 3 : 2,
+    _ => totalDays <= 2 ? 4 : 3,
+  };
   final extraSpotsClamped = (extraSpots ?? 0).clamp(0, 3);
   final aiDailyStopCap = (plannerAssist['dailyStopCap'] as num?)?.toInt();
   final aiRecommendedStartMinute = _parseHmToMinute(
@@ -2380,18 +3007,33 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
   if (preferredEndMinute <= preferredStartMinute) {
     preferredEndMinute = preferredStartMinute + 8 * 60;
   }
-  final timeWindowMinutes = max(180, preferredEndMinute - preferredStartMinute);
-  final dailyMinutesBudget = min(weights.dayMinutesBudget, timeWindowMinutes);
-  final stayMinutesBudget = max(
-    180,
-    (dailyMinutesBudget * weights.stayBudgetRatio).round(),
-  );
 
   final days = <Map<String, dynamic>>[];
   final globallyPicked = <Place>[];
   var remaining = List<Place>.from(candidates);
   for (var dayIndex = 0; dayIndex < totalDays; dayIndex++) {
     final dayDate = (startDate ?? DateTime.now()).add(Duration(days: dayIndex));
+    var dayPreferredStartMinute = preferredStartMinute;
+    var dayPreferredEndMinute = preferredEndMinute;
+    if ((dayStartTime == null || dayStartTime.trim().isEmpty) && dayIndex == 0) {
+      dayPreferredStartMinute = _effectiveStartMinuteForToday(
+        dayDate: dayDate,
+        fallbackStartMinute: preferredStartMinute,
+        dayEndMinute: dayPreferredEndMinute,
+      );
+      if (dayPreferredEndMinute <= dayPreferredStartMinute) {
+        dayPreferredEndMinute = dayPreferredStartMinute + 3 * 60;
+      }
+    }
+    final dayTimeWindowMinutes = max(
+      180,
+      dayPreferredEndMinute - dayPreferredStartMinute,
+    );
+    final dayDailyMinutesBudget = min(weights.dayMinutesBudget, dayTimeWindowMinutes);
+    final dayStayMinutesBudget = max(
+      180,
+      (dayDailyMinutesBudget * weights.stayBudgetRatio).round(),
+    );
     final items = <Map<String, dynamic>>[];
     Map<String, dynamic>? dayOriginTransit;
     if (remaining.isNotEmpty) {
@@ -2427,7 +3069,8 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
         candidates: remaining,
         scores: adjustedScores,
         maxStops: perDay,
-        stayBudgetMinutes: stayMinutesBudget,
+        stayBudgetMinutes: dayStayMinutesBudget,
+        weights: weights,
         plannerAssist: plannerAssist,
       );
       if (dayPicked.isEmpty) {
@@ -2440,11 +3083,11 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
         scores: adjustedScores,
         startAnchor: dayStartAnchor,
       );
-      var routeBudget = dailyMinutesBudget;
+      var routeBudget = dayDailyMinutesBudget;
       if (dayStartAnchor != null && ordered.isNotEmpty) {
         routeBudget = max(
           120,
-          dailyMinutesBudget -
+          dayDailyMinutesBudget -
               _estimateTransitMinutesFromAnchor(
                 dayStartAnchor,
                 ordered.first,
@@ -2464,14 +3107,14 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
         ordered,
         scores: adjustedScores,
         weights: weights,
-        dayStartMinute: preferredStartMinute,
-        dayEndMinute: preferredEndMinute,
+        dayStartMinute: dayPreferredStartMinute,
+        dayEndMinute: dayPreferredEndMinute,
         dayDate: dayDate,
         startAnchor: dayStartAnchor,
         plannerAssist: plannerAssist,
       );
 
-      var currentMinute = preferredStartMinute;
+      var currentMinute = dayPreferredStartMinute;
       Map<String, dynamic>? originTransit;
       if (dayIndex == 0 && dayStartAnchor != null && ordered.isNotEmpty) {
         originTransit = await _buildOriginTransitSegment(
@@ -2479,11 +3122,11 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
           originLabel: originCity ?? '出發地',
           to: ordered.first,
           dayDate: dayDate,
-          departureMinute: preferredStartMinute,
+          departureMinute: dayPreferredStartMinute,
           weights: weights,
         );
         final originMinutes = originTransit['minutes'] as int? ?? 0;
-        currentMinute = preferredStartMinute + originMinutes;
+        currentMinute = dayPreferredStartMinute + originMinutes;
         dayOriginTransit = originTransit;
       }
       var hadLunchBreak = false;
@@ -2602,8 +3245,8 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
           );
           items.last['transitToNext'] = transit;
           currentMinute = nextMinute + (transit['minutes'] as int? ?? 0);
-          if (currentMinute > preferredEndMinute) {
-            currentMinute = preferredEndMinute;
+          if (currentMinute > dayPreferredEndMinute) {
+            currentMinute = dayPreferredEndMinute;
           }
         } else {
           currentMinute = nextMinute;
@@ -2736,6 +3379,7 @@ List<Place> _selectDayPlacesByBackpacker({
   required Map<String, double> scores,
   required int maxStops,
   required int stayBudgetMinutes,
+  required _PlannerWeights weights,
   Map<String, dynamic>? plannerAssist,
 }) {
   if (candidates.isEmpty || maxStops <= 0) {
@@ -2744,10 +3388,27 @@ List<Place> _selectDayPlacesByBackpacker({
 
   final ranked = List<Place>.from(candidates)
     ..sort((a, b) => (scores[b.id] ?? 0).compareTo(scores[a.id] ?? 0));
-  final pool = ranked.take(min(36, ranked.length)).toList();
+  final purposeMatched = ranked
+      .where((place) => _placeMatchesTripPurpose(place, weights.tripPurpose))
+      .toList();
+  final purposeOthers = ranked
+      .where((place) => !_placeMatchesTripPurpose(place, weights.tripPurpose))
+      .toList();
+  final pool = switch (weights.tripPurpose) {
+    'explore' => ranked.take(min(40, ranked.length)).toList(),
+    _ when purposeMatched.length >= 4 => [
+      ...purposeMatched.take(min(28, purposeMatched.length)),
+      ...purposeOthers.take(min(10, purposeOthers.length)),
+    ],
+    _ => ranked.take(min(36, ranked.length)).toList(),
+  };
   final stays = [
     for (final place in pool)
       _estimateStayMinutes(place, plannerAssist: plannerAssist),
+  ];
+  final purposeMatchedFlags = [
+    for (final place in pool)
+      _placeMatchesTripPurpose(place, weights.tripPurpose),
   ];
 
   var bestScore = -999999.0;
@@ -2756,7 +3417,18 @@ List<Place> _selectDayPlacesByBackpacker({
 
   void evaluate(List<int> picked, int usedMinutes, double score) {
     if (picked.isEmpty) return;
-    final scoreWithCountBonus = score + picked.length * 0.12;
+    final matchedCount = picked.where((idx) => purposeMatchedFlags[idx]).length;
+    final mismatchCount = picked.length - matchedCount;
+    final purposeBonus = switch (weights.tripPurpose) {
+      'relax' => matchedCount * 2.1 - mismatchCount * 1.5,
+      'couple' => matchedCount * 2.3 - mismatchCount * 1.6,
+      'family' => matchedCount * 2.5 - mismatchCount * 1.9,
+      'explore' => _exploreSelectionBonus([
+        for (final idx in picked) pool[idx],
+      ]),
+      _ => 0.0,
+    };
+    final scoreWithCountBonus = score + picked.length * 0.12 + purposeBonus;
     if (scoreWithCountBonus > bestScore ||
         (scoreWithCountBonus == bestScore && usedMinutes < bestMinutes)) {
       bestScore = scoreWithCountBonus;
@@ -2786,6 +3458,15 @@ List<Place> _selectDayPlacesByBackpacker({
     return pool.isEmpty ? const [] : [pool.first];
   }
   return [for (final idx in bestChoice) pool[idx]];
+}
+
+double _exploreSelectionBonus(List<Place> picked) {
+  if (picked.isEmpty) return 0;
+  final uniqueTags = <String>{};
+  for (final place in picked) {
+    uniqueTags.addAll(place.tags.map((tag) => tag.toLowerCase()));
+  }
+  return uniqueTags.length * 0.28;
 }
 
 List<Place> _orderPlacesByRoute(
@@ -3478,6 +4159,31 @@ int _clampInt(int value, int minValue, int maxValue) {
   return value.clamp(minValue, maxValue);
 }
 
+int _effectiveStartMinuteForToday({
+  required DateTime dayDate,
+  required int fallbackStartMinute,
+  required int dayEndMinute,
+}) {
+  final now = DateTime.now();
+  final isSameDay =
+      now.year == dayDate.year &&
+      now.month == dayDate.month &&
+      now.day == dayDate.day;
+  if (!isSameDay) {
+    return fallbackStartMinute;
+  }
+
+  final nowMinute = now.hour * 60 + now.minute;
+  final bufferedNowMinute = nowMinute + 30;
+  final roundedUp = ((bufferedNowMinute + 14) ~/ 15) * 15;
+  final latestAllowedStart = max(fallbackStartMinute, dayEndMinute - 180);
+  return _clampInt(
+    max(fallbackStartMinute, roundedUp),
+    fallbackStartMinute,
+    latestAllowedStart,
+  );
+}
+
 int? _parseHmToMinute(String? raw) {
   if (raw == null || raw.trim().isEmpty) return null;
   final parts = raw.trim().split(':');
@@ -3502,6 +4208,7 @@ Future<Map<String, dynamic>> _buildTransitSegment({
     to: to,
     dayDate: dayDate,
     departureMinute: departureMinute,
+    weights: weights,
   );
   if (apiResult != null) {
     return apiResult;
@@ -3552,6 +4259,7 @@ Future<Map<String, dynamic>?> _fetchTransitSegmentFromGoogle({
   required Place to,
   required DateTime dayDate,
   required int departureMinute,
+  required _PlannerWeights weights,
 }) async {
   final key = Platform.environment['GOOGLE_MAPS_API_KEY'] ?? '';
   if (key.isEmpty) {
@@ -3614,6 +4322,11 @@ Future<Map<String, dynamic>?> _fetchTransitSegmentFromGoogle({
     final depTime = (leg['departure_time'] as Map?)?['text']?.toString();
     final arrTime = (leg['arrival_time'] as Map?)?['text']?.toString();
     final distanceText = (leg['distance'] as Map?)?['text']?.toString() ?? '';
+    final distanceKm =
+        ((leg['distance'] as Map?)?['value'] as num?)?.toDouble() == null
+        ? _distanceKm(from.lat, from.lng, to.lat, to.lng)
+        : (((leg['distance'] as Map?)?['value'] as num?)!.toDouble() / 1000.0);
+    final estimatedMinutes = _estimateTransitMinutes(from, to, weights);
 
     final steps = leg['steps'];
     final lineParts = <String>[];
@@ -3656,6 +4369,14 @@ Future<Map<String, dynamic>?> _fetchTransitSegmentFromGoogle({
     }
 
     final uniqueLines = lineParts.toSet().take(4).toList();
+    if (!_isTransitResultTourismReasonable(
+      durationMinutes: durationMinutes,
+      estimatedMinutes: estimatedMinutes,
+      distanceKm: distanceKm,
+      transferLineCount: uniqueLines.length,
+    )) {
+      return null;
+    }
     final lineText = uniqueLines.join(' / ');
     final detailText = stepTexts.take(2).join('；');
     return {
@@ -3674,6 +4395,30 @@ Future<Map<String, dynamic>?> _fetchTransitSegmentFromGoogle({
   } finally {
     client.close(force: true);
   }
+}
+
+bool _isTransitResultTourismReasonable({
+  required int durationMinutes,
+  required int estimatedMinutes,
+  required double distanceKm,
+  required int transferLineCount,
+}) {
+  if (durationMinutes <= 0) return false;
+  if (durationMinutes >= 8 * 60) {
+    return false;
+  }
+
+  final ratio = estimatedMinutes <= 0 ? 99.0 : durationMinutes / estimatedMinutes;
+  if (distanceKm >= 80 && durationMinutes >= 5 * 60) {
+    return false;
+  }
+  if (distanceKm >= 40 && ratio >= 2.8 && durationMinutes - estimatedMinutes >= 120) {
+    return false;
+  }
+  if (transferLineCount >= 3 && durationMinutes >= 4 * 60) {
+    return false;
+  }
+  return true;
 }
 
 Map<String, dynamic> _buildEstimatedTransitSegment({
@@ -4179,6 +4924,169 @@ List<String> _buildRouteFeasibilityTips({
   }
 
   return tips.take(4).toList();
+}
+
+_RouteFeasibilityDecision _evaluateRouteFeasibilityDecision({
+  required List<Place> allPlaces,
+  required int totalDays,
+  required String? originCity,
+  required List<String> destinationCities,
+  required String? tripPurpose,
+  required String? travelBehavior,
+  required Map<String, dynamic> plannerAssist,
+}) {
+  final normalizedDestinationCities = destinationCities
+      .map(_normalizeLocationText)
+      .where((city) => city.isNotEmpty)
+      .toSet()
+      .toList();
+  if (normalizedDestinationCities.length <= 1) {
+    return const _RouteFeasibilityDecision(
+      shouldBlock: false,
+      message: '',
+      suggestions: [],
+    );
+  }
+
+  final prioritizedCities = _stringListFromJson(
+    plannerAssist['prioritizedCities'],
+    maxItems: 6,
+  )
+      .map(_normalizeLocationText)
+      .where((city) => normalizedDestinationCities.contains(city))
+      .toList();
+  final warnings = _stringListFromJson(plannerAssist['warnings'], maxItems: 4);
+  final improvements = _stringListFromJson(
+    plannerAssist['improvements'],
+    maxItems: 4,
+  );
+  final alternativePlan =
+      plannerAssist['alternativePlan']?.toString().trim() ?? '';
+
+  double maxPairKm = 0;
+  for (var i = 0; i < normalizedDestinationCities.length; i++) {
+    final a = _resolveCityAnchor(
+      places: allPlaces,
+      city: normalizedDestinationCities[i],
+    );
+    if (a == null) continue;
+    for (var j = i + 1; j < normalizedDestinationCities.length; j++) {
+      final b = _resolveCityAnchor(
+        places: allPlaces,
+        city: normalizedDestinationCities[j],
+      );
+      if (b == null) continue;
+      maxPairKm = max(maxPairKm, _distanceKm(a.$1, a.$2, b.$1, b.$2));
+    }
+  }
+
+  final normalizedOriginCity = originCity == null
+      ? null
+      : _normalizeLocationText(originCity);
+  final originAnchor = _resolveCityAnchor(
+    places: allPlaces,
+    city: normalizedOriginCity,
+  );
+  double nearestOriginKm = 0;
+  if (originAnchor != null) {
+    var nearest = double.infinity;
+    for (final city in normalizedDestinationCities) {
+      final cityAnchor = _resolveCityAnchor(places: allPlaces, city: city);
+      if (cityAnchor == null) continue;
+      nearest = min(
+        nearest,
+        _distanceKm(originAnchor.$1, originAnchor.$2, cityAnchor.$1, cityAnchor.$2),
+      );
+    }
+    if (nearest.isFinite) {
+      nearestOriginKm = nearest;
+    }
+  }
+
+  var severity = 0;
+  if (normalizedDestinationCities.length >= 3 && totalDays <= 2) {
+    severity += 2;
+  }
+  if (normalizedDestinationCities.length > totalDays + 1) {
+    severity += 1;
+  }
+  if (maxPairKm >= 220) {
+    severity += 3;
+  } else if (maxPairKm >= 160 && totalDays <= 3) {
+    severity += 2;
+  } else if (maxPairKm >= 120 && totalDays <= 2) {
+    severity += 2;
+  } else if (maxPairKm >= 90 && totalDays <= 1) {
+    severity += 2;
+  }
+  if (nearestOriginKm >= 160 && totalDays <= 2) {
+    severity += 1;
+  }
+
+  final normalizedTripPurpose = _normalizeTripPurpose(tripPurpose);
+  final normalizedTravelBehavior = _normalizeTravelBehavior(travelBehavior);
+  if ((normalizedTripPurpose == 'relax' || normalizedTripPurpose == 'family') &&
+      normalizedDestinationCities.length >= 2 &&
+      maxPairKm >= 80) {
+    severity += 1;
+  }
+  if (normalizedTravelBehavior == 'family' &&
+      normalizedDestinationCities.length >= 2 &&
+      maxPairKm >= 80) {
+    severity += 1;
+  }
+
+  final shouldBlock = severity >= 3;
+  if (!shouldBlock) {
+    return _RouteFeasibilityDecision(
+      shouldBlock: false,
+      message: '',
+      suggestions: improvements,
+      metrics: {
+        'selectedCityCount': normalizedDestinationCities.length,
+        'totalDays': totalDays,
+        'maxPairKm': maxPairKm.round(),
+        'nearestOriginKm': nearestOriginKm.round(),
+      },
+    );
+  }
+
+  final recommendedCities = prioritizedCities.isNotEmpty
+      ? prioritizedCities.take(min(prioritizedCities.length, max(1, totalDays))).toList()
+      : normalizedDestinationCities.take(min(normalizedDestinationCities.length, max(1, totalDays))).toList();
+  final reasons = <String>[
+    if (normalizedDestinationCities.length >= 3 && totalDays <= 2)
+      '$totalDays 天內安排 ${normalizedDestinationCities.length} 個城市，跨城切換次數過多。',
+    if (maxPairKm >= 90)
+      '你選的城市最遠相隔約 ${maxPairKm.toStringAsFixed(0)} 公里，移動成本過高。',
+    if (nearestOriginKm >= 160)
+      '從出發地到最近旅遊城市也約 ${nearestOriginKm.toStringAsFixed(0)} 公里，第一天會先被長距離移動吃掉。',
+  ];
+  final suggestions = <String>[
+    if (recommendedCities.isNotEmpty)
+      '這次先集中在 ${recommendedCities.join('、')}，其餘城市拆到下次。',
+    if (normalizedDestinationCities.length > totalDays + 1)
+      '$totalDays 天建議最多先安排 ${max(1, totalDays)} 到 ${totalDays + 1} 個相鄰城市。',
+    if (alternativePlan.isNotEmpty) alternativePlan,
+    ...warnings,
+    ...improvements,
+  ].where((text) => text.trim().isNotEmpty).toSet().take(5).toList();
+
+  return _RouteFeasibilityDecision(
+    shouldBlock: true,
+    message: '目前選擇的城市組合距離過遠或天數不足，不建議直接排出行程。',
+    reasons: reasons,
+    suggestions: suggestions,
+    metrics: {
+      'selectedCityCount': normalizedDestinationCities.length,
+      'totalDays': totalDays,
+      'maxPairKm': maxPairKm.round(),
+      'nearestOriginKm': nearestOriginKm.round(),
+      'recommendedCities': recommendedCities,
+      'tripPurpose': normalizedTripPurpose,
+      'travelBehavior': normalizedTravelBehavior,
+    },
+  );
 }
 
 Future<Map<String, dynamic>> _buildAiPlannerAssist({
@@ -4892,6 +5800,8 @@ Map<String, dynamic> _buildRuleBasedStopExplanation(
   Map<String, dynamic> body,
   Map<String, dynamic> place,
 ) {
+  final explanationContext = body['explanationContext']?.toString().trim();
+  final isMealSelection = explanationContext == 'meal_selection';
   final name = place['name']?.toString() ?? '此景點';
   final city = place['city']?.toString() ?? '';
   final tags =
@@ -4910,12 +5820,19 @@ Map<String, dynamic> _buildRuleBasedStopExplanation(
   final matchTags = tags.where(
     (tag) => interests.map((e) => e.toLowerCase()).contains(tag.toLowerCase()),
   );
-  final includeReason = [
-    if (city.isNotEmpty) '位於$city',
-    if (matchTags.isNotEmpty) '符合偏好類型（${matchTags.take(3).join('、')}）',
-    if (matchTags.isEmpty && tags.isNotEmpty)
-      '景點類型多元（${tags.take(3).join('、')}）',
-  ].join('，');
+  final includeReason = isMealSelection
+      ? [
+          if (city.isNotEmpty) '位於$city',
+          if (prevName.isNotEmpty && nextName.isNotEmpty) '落在「$prevName」與「$nextName」之間，順路性較高',
+          if (prevName.isEmpty && nextName.isNotEmpty) '方便接續下一站「$nextName」',
+          if (prevName.isNotEmpty && nextName.isEmpty) '方便從前一站「$prevName」銜接過來',
+        ].join('，')
+      : [
+          if (city.isNotEmpty) '位於$city',
+          if (matchTags.isNotEmpty) '符合偏好類型（${matchTags.take(3).join('、')}）',
+          if (matchTags.isEmpty && tags.isNotEmpty)
+            '景點類型多元（${tags.take(3).join('、')}）',
+        ].join('，');
 
   final timingReason = [
     if (start.isNotEmpty && end.isNotEmpty) '安排在 $start-$end 時段',
@@ -4936,7 +5853,15 @@ Map<String, dynamic> _buildRuleBasedStopExplanation(
       })();
 
   String durationReason;
-  if (duration >= 160) {
+  if (isMealSelection) {
+    if (duration >= 90) {
+      durationReason = '用餐停留時間較充裕，可保留點餐、候位與休息彈性。';
+    } else if (duration >= 60) {
+      durationReason = '用餐停留時間設定為常見餐期長度，兼顧休息與後續移動效率。';
+    } else {
+      durationReason = '此餐期安排較精簡，適合快速用餐後銜接下一站。';
+    }
+  } else if (duration >= 160) {
     durationReason = '此站停留時間較長，代表包含較完整的參觀/休憩與移動緩衝。';
   } else if (duration >= 100) {
     durationReason = '停留時間設定為中等偏充裕，兼顧拍照、步行與休息。';
@@ -4945,9 +5870,11 @@ Map<String, dynamic> _buildRuleBasedStopExplanation(
   }
 
   return {
-    'summary': '$name 是此日動線中的重點節點，用來平衡順路性與體驗完整度。',
+    'summary': isMealSelection
+        ? '$name 可作為這段行程中的餐期節點，重點是讓前後動線與用餐時間更順。'
+        : '$name 是此日動線中的重點節點，用來平衡順路性與體驗完整度。',
     'whyIncluded': includeReason.isEmpty
-        ? '此景點綜合評分高且與行程主題相符。'
+        ? (isMealSelection ? '這個餐廳位於路線附近，適合作為前後站之間的用餐安排。' : '此景點綜合評分高且與行程主題相符。')
         : '因為$includeReason。',
     'whyTiming': timingReason.isEmpty
         ? '此時段安排可讓整體動線更順，減少折返。'
@@ -4955,7 +5882,8 @@ Map<String, dynamic> _buildRuleBasedStopExplanation(
     'whyDuration': durationReason,
     'tips': <String>[
       if (weather.isNotEmpty) '留意天氣：$weather',
-      if (duration >= 120) '可預留拍照或用餐時間，避免太趕',
+      if (isMealSelection && duration >= 60) '若現場候位較久，可優先改選同區餐廳以免壓縮後續景點',
+      if (!isMealSelection && duration >= 120) '可預留拍照或用餐時間，避免太趕',
       '若臨時延誤，可優先縮短停留而非跨區折返',
     ].take(4).toList(),
     'source': 'rule',
@@ -4966,10 +5894,12 @@ String _buildStopExplanationPrompt(
   Map<String, dynamic> body,
   Map<String, dynamic> place,
 ) {
+  final explanationContext = body['explanationContext']?.toString().trim();
+  final isMealSelection = explanationContext == 'meal_selection';
   final tags =
       (place['tags'] as List?)?.map((e) => e.toString()).join(', ') ?? '';
   return '''
-請解釋單一景點在旅遊行程中的安排理由，用繁體中文，且只回傳 JSON。
+請解釋單一${isMealSelection ? '餐廳' : '景點'}在旅遊行程中的安排理由，用繁體中文，且只回傳 JSON。
 
 欄位固定：
 {
@@ -4981,12 +5911,11 @@ String _buildStopExplanationPrompt(
 }
 
 使用者條件：
-- 興趣：${(body['interests'] as List?)?.join(', ') ?? '未提供'}
 - 城市/地點：${body['location']?.toString() ?? '未提供'}
 - 預算：${body['budget']?.toString() ?? '未提供'}
 - 人數：${body['people']?.toString() ?? '未提供'}
 
-景點資訊：
+${isMealSelection ? '餐廳資訊' : '景點資訊'}：
 - 名稱：${place['name']?.toString() ?? ''}
 - 城市：${place['city']?.toString() ?? ''}
 - 地址：${place['address']?.toString() ?? ''}
@@ -5003,6 +5932,8 @@ String _buildStopExplanationPrompt(
 - 前段交通：${body['transitFromPrev']?.toString() ?? '未提供'}
 - 後段交通：${body['transitToNext']?.toString() ?? '未提供'}
 - 天氣：${body['weatherSummary']?.toString() ?? '未提供'} ${body['weatherTempRange']?.toString() ?? ''}
+
+${isMealSelection ? '重點：不要用「符合偏好類型」或興趣匹配當理由。餐廳說明只聚焦順路性、餐期時段、前後站銜接、交通與天氣，避免把餐廳講成景點主題的一部分。' : '重點：可考慮興趣、景點類型、時間安排與前後站銜接。'}
 ''';
 }
 
@@ -5320,6 +6251,93 @@ String _travelBehaviorLabel(String? behavior) {
   };
 }
 
+bool _placeMatchesTripPurpose(
+  Place place,
+  String purpose,
+) {
+  final score = _tripPurposeScore(
+    place,
+    _PlannerWeights.tripPurposeProbe(
+      tripPurpose: purpose,
+      travelBehavior: 'general',
+    ),
+  );
+  return score >= 0.85;
+}
+
+double _tripPurposePenalty(Place place, _PlannerWeights weights) {
+  final tags = place.tags.map((e) => e.toLowerCase()).toSet();
+  final text = _normalizeText(
+    '${place.name} ${place.description} ${place.address}',
+  );
+
+  bool textHas(List<String> needles) =>
+      needles.any((needle) => text.contains(_normalizeText(needle)));
+
+  var penalty = 0.0;
+  switch (weights.tripPurpose) {
+    case 'relax':
+      if ([
+        'amusement_park',
+        'arcade',
+        'night_market',
+        'street_food',
+      ].any(tags.contains)) {
+        penalty += 0.9;
+      }
+      if (textHas(['排隊', '夜市', '遊樂園', '人潮'])) {
+        penalty += 0.5;
+      }
+      break;
+    case 'explore':
+      break;
+    case 'couple':
+      if (['zoo', 'aquarium'].any(tags.contains)) {
+        penalty += 0.35;
+      }
+      if (textHas(['工業區', '行政', '批發'])) {
+        penalty += 0.75;
+      }
+      break;
+    case 'family':
+      if (['bar', 'pub', 'night_club'].any(tags.contains)) {
+        penalty += 1.2;
+      }
+      if (textHas(['酒吧', '夜店', '深夜'])) {
+        penalty += 0.9;
+      }
+      if (textHas(['登山口', '陡坡', '長距離步道'])) {
+        penalty += 0.6;
+      }
+      break;
+  }
+  return penalty;
+}
+
+List<Place> _filterCandidatesByTripPurpose(
+  List<Place> candidates,
+  String purpose,
+) {
+  if (candidates.length <= 6 || purpose == 'explore') {
+    return candidates;
+  }
+
+  final matched = candidates
+      .where((place) => _placeMatchesTripPurpose(place, purpose))
+      .toList();
+  if (matched.length >= max(4, (candidates.length * 0.28).round())) {
+    return matched;
+  }
+  if (matched.length >= 3) {
+    final extras = candidates
+        .where((place) => !matched.any((picked) => picked.id == place.id))
+        .take(max(2, candidates.length ~/ 7))
+        .toList();
+    return [...matched, ...extras];
+  }
+  return candidates;
+}
+
 double _tripPurposeScore(Place place, _PlannerWeights weights) {
   final tags = place.tags.map((e) => e.toLowerCase()).toSet();
   final text = _normalizeText(
@@ -5416,6 +6434,7 @@ class _PlannerWeights {
     required this.stayBudgetRatio,
     required this.tripPurpose,
     required this.travelBehavior,
+    required this.tripPurposeScoreWeight,
     required this.preferLowBudget,
     required this.preferTransitFriendly,
     required this.preferHotspot,
@@ -5433,6 +6452,7 @@ class _PlannerWeights {
   final double stayBudgetRatio;
   final String tripPurpose;
   final String travelBehavior;
+  final double tripPurposeScoreWeight;
 
   final bool preferLowBudget;
   final bool preferTransitFriendly;
@@ -5464,6 +6484,7 @@ class _PlannerWeights {
     var stayBudgetRatio = 0.72;
     var qualityWeight = 1.8;
     var cityCoherenceWeight = 1.0;
+    var tripPurposeScoreWeight = 2.3;
     var preferTransitFriendly =
         transport == 'public' || (people != null && people <= 2);
     if (pace == 'relaxed') {
@@ -5479,22 +6500,26 @@ class _PlannerWeights {
         distancePenaltyWeight = max(distancePenaltyWeight, 0.12);
         dayMinutesBudget = min(dayMinutesBudget, 520);
         stayBudgetRatio = 0.80;
+        tripPurposeScoreWeight = 3.0;
         break;
       case 'explore':
         dayMinutesBudget = max(dayMinutesBudget, 620);
         stayBudgetRatio = 0.68;
         cityCoherenceWeight = 1.15;
+        tripPurposeScoreWeight = 2.0;
         break;
       case 'couple':
         dayMinutesBudget = min(dayMinutesBudget, 560);
         stayBudgetRatio = 0.76;
         qualityWeight = 1.95;
+        tripPurposeScoreWeight = 3.1;
         break;
       case 'family':
         distancePenaltyWeight = max(distancePenaltyWeight, 0.12);
         dayMinutesBudget = min(dayMinutesBudget, 520);
         stayBudgetRatio = 0.76;
         preferTransitFriendly = true;
+        tripPurposeScoreWeight = 3.2;
         break;
     }
     switch (normalizedTravelBehavior) {
@@ -5503,10 +6528,12 @@ class _PlannerWeights {
         dayMinutesBudget = min(dayMinutesBudget, 520);
         stayBudgetRatio = max(stayBudgetRatio, 0.78);
         preferTransitFriendly = true;
+        tripPurposeScoreWeight = max(tripPurposeScoreWeight, 3.1);
         break;
       case 'couple':
         qualityWeight = max(qualityWeight, 1.9);
         cityCoherenceWeight = max(cityCoherenceWeight, 1.05);
+        tripPurposeScoreWeight = max(tripPurposeScoreWeight, 3.0);
         break;
       case 'solo':
         preferTransitFriendly = true;
@@ -5525,10 +6552,35 @@ class _PlannerWeights {
       stayBudgetRatio: stayBudgetRatio,
       tripPurpose: normalizedTripPurpose,
       travelBehavior: normalizedTravelBehavior,
+      tripPurposeScoreWeight: tripPurposeScoreWeight,
       preferLowBudget: lowBudget,
       preferTransitFriendly: preferTransitFriendly,
       preferHotspot: hotspot,
       preferHiddenGems: hidden,
+    );
+  }
+
+  factory _PlannerWeights.tripPurposeProbe({
+    required String tripPurpose,
+    required String travelBehavior,
+  }) {
+    return _PlannerWeights(
+      interestWeight: 0,
+      qualityWeight: 0,
+      backpackerWeight: 0,
+      priceWeight: 0,
+      distancePenaltyWeight: 0,
+      diversityPenaltyWeight: 0,
+      cityCoherenceWeight: 0,
+      dayMinutesBudget: 0,
+      stayBudgetRatio: 0,
+      tripPurpose: _normalizeTripPurpose(tripPurpose),
+      travelBehavior: _normalizeTravelBehavior(travelBehavior),
+      tripPurposeScoreWeight: 1,
+      preferLowBudget: false,
+      preferTransitFriendly: false,
+      preferHotspot: false,
+      preferHiddenGems: false,
     );
   }
 
@@ -5544,6 +6596,7 @@ class _PlannerWeights {
     'stayBudgetRatio': stayBudgetRatio,
     'tripPurpose': tripPurpose,
     'travelBehavior': travelBehavior,
+    'tripPurposeScoreWeight': tripPurposeScoreWeight,
     'preferLowBudget': preferLowBudget,
     'preferTransitFriendly': preferTransitFriendly,
     'preferHotspot': preferHotspot,
@@ -5587,7 +6640,8 @@ double _scorePlace(
     score += matchRatio * weights.interestWeight * 4.0;
   }
 
-  score += _tripPurposeScore(place, weights) * 1.1;
+  score += _tripPurposeScore(place, weights) * weights.tripPurposeScoreWeight;
+  score -= _tripPurposePenalty(place, weights) * 2.2;
 
   score += _backpackerSignalScore(place, weights) * weights.backpackerWeight;
 
@@ -6010,6 +7064,277 @@ Map<String, dynamic> _placeToPlanJson(Place place) {
     'openingHours': place.openingHours,
     'kind': 'place',
   };
+}
+
+Future<List<Map<String, dynamic>>> _fetchLiveMealSuggestions({
+  required Map<String, dynamic> previous,
+  required Map<String, dynamic> next,
+  required String query,
+  required String mealType,
+  required String city,
+  required int limit,
+}) async {
+  final key = Platform.environment['GOOGLE_MAPS_API_KEY'] ?? '';
+  if (key.isEmpty) {
+    throw ApiException(400, '需要設定 GOOGLE_MAPS_API_KEY 才能即時搜尋餐廳');
+  }
+
+  final previousLat = _asDoubleValue(previous['lat']);
+  final previousLng = _asDoubleValue(previous['lng']);
+  final nextLat = _asDoubleValue(next['lat']);
+  final nextLng = _asDoubleValue(next['lng']);
+  final hasPrevious = previousLat != null && previousLng != null;
+  final hasNext = nextLat != null && nextLng != null;
+  if (!hasPrevious && !hasNext) {
+    throw ApiException(400, '缺少前後站座標，無法搜尋附近餐廳');
+  }
+
+  late final double anchorLat;
+  late final double anchorLng;
+  if (hasPrevious && hasNext) {
+    anchorLat = (previousLat + nextLat) / 2;
+    anchorLng = (previousLng + nextLng) / 2;
+  } else {
+    anchorLat = previousLat ?? nextLat!;
+    anchorLng = previousLng ?? nextLng!;
+  }
+  final prevName = _asString(previous, 'name').trim();
+  final nextName = _asString(next, 'name').trim();
+  final resolvedCity = city.trim().isNotEmpty
+      ? city.trim()
+      : _extractCityHint(_asString(previous, 'city')) ??
+            _extractCityHint(_asString(next, 'city')) ??
+            _extractCityHint(_asString(previous, 'address')) ??
+            _extractCityHint(_asString(next, 'address')) ??
+            '';
+
+  final nearby = await _googlePlaceSearch(
+    key: key,
+    path: '/maps/api/place/nearbysearch/json',
+    params: {
+      'location': '$anchorLat,$anchorLng',
+      'radius': hasPrevious && hasNext ? '3500' : '5000',
+      'type': 'restaurant',
+      'language': 'zh-TW',
+      'region': 'tw',
+      if (query.isNotEmpty) 'keyword': query,
+    },
+  );
+
+  var candidates = _normalizeMealSearchResults(
+    nearby,
+    fallbackCity: resolvedCity,
+    key: key,
+    mealType: mealType,
+  );
+
+  if (candidates.length < max(5, limit ~/ 2)) {
+    final textQuery = query.isNotEmpty
+        ? '${query.trim()} ${resolvedCity.isNotEmpty ? resolvedCity : ''} 餐廳'
+        : [
+            if (resolvedCity.isNotEmpty) resolvedCity,
+            if (prevName.isNotEmpty) prevName,
+            if (nextName.isNotEmpty) nextName,
+            mealType == 'dinner' ? '晚餐 餐廳' : '午餐 餐廳',
+          ].join(' ').trim();
+    if (textQuery.isNotEmpty) {
+      final textSearch = await _googlePlaceSearch(
+        key: key,
+        path: '/maps/api/place/textsearch/json',
+        params: {
+          'query': textQuery,
+          'language': 'zh-TW',
+          'region': 'tw',
+          'location': '$anchorLat,$anchorLng',
+          'radius': '6000',
+        },
+      );
+      candidates = [
+        ...candidates,
+        ..._normalizeMealSearchResults(
+          textSearch,
+          fallbackCity: resolvedCity,
+          key: key,
+          mealType: mealType,
+        ),
+      ];
+    }
+  }
+
+  final unique = <String, Map<String, dynamic>>{};
+  for (final candidate in candidates) {
+    final lat = _asDoubleValue(candidate['lat']);
+    final lng = _asDoubleValue(candidate['lng']);
+    final distancePenalty =
+        lat != null && lng != null
+        ? _distanceKm(anchorLat, anchorLng, lat, lng)
+        : 9999.0;
+    candidate['fitDistanceKm'] = distancePenalty;
+    candidate['fitScore'] =
+        ((_asDoubleValue(candidate['rating']) ?? 0) * 10) - distancePenalty;
+    final name = candidate['name']?.toString().trim() ?? '';
+    final address = candidate['address']?.toString().trim() ?? '';
+    if (name.isEmpty || address.isEmpty) continue;
+    unique.putIfAbsent('$name|$address', () => candidate);
+  }
+
+  final sorted = unique.values.toList()
+    ..sort((a, b) {
+      final scoreA = _asDoubleValue(a['fitScore']) ?? 0;
+      final scoreB = _asDoubleValue(b['fitScore']) ?? 0;
+      return scoreB.compareTo(scoreA);
+    });
+  return sorted.take(limit).toList();
+}
+
+Future<List<Map<String, dynamic>>> _googlePlaceSearch({
+  required String key,
+  required String path,
+  required Map<String, String> params,
+}) async {
+  final uri = Uri.https('maps.googleapis.com', path, {
+    ...params,
+    'key': key,
+  });
+  final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+  try {
+    final request = await client.getUrl(uri);
+    final response = await request.close().timeout(const Duration(seconds: 10));
+    if (response.statusCode != 200) {
+      return const <Map<String, dynamic>>[];
+    }
+    final body = await utf8.decodeStream(response);
+    final decoded = jsonDecode(body);
+    if (decoded is! Map) {
+      return const <Map<String, dynamic>>[];
+    }
+    final status = decoded['status']?.toString() ?? '';
+    if (status != 'OK' && status != 'ZERO_RESULTS') {
+      _log.warning('Google Places search failed: $status');
+      return const <Map<String, dynamic>>[];
+    }
+    final results = decoded['results'];
+    if (results is! List) {
+      return const <Map<String, dynamic>>[];
+    }
+    return results.whereType<Map>().map(Map<String, dynamic>.from).toList();
+  } catch (error) {
+    _log.warning('Google Places request error: $error');
+    return const <Map<String, dynamic>>[];
+  } finally {
+    client.close(force: true);
+  }
+}
+
+List<Map<String, dynamic>> _normalizeMealSearchResults(
+  List<Map<String, dynamic>> results, {
+  required String fallbackCity,
+  required String key,
+  required String mealType,
+}) {
+  final normalized = <Map<String, dynamic>>[];
+  for (final result in results) {
+    final types = (result['types'] as List?)
+            ?.map((e) => e.toString().trim().toLowerCase())
+            .where((e) => e.isNotEmpty)
+            .toSet() ??
+        <String>{};
+    const allowedMealTypes = <String>{
+      'restaurant',
+      'cafe',
+      'bakery',
+      'meal_takeaway',
+      'meal_delivery',
+      'bar',
+    };
+    final name = result['name']?.toString().trim() ?? '';
+    final address =
+        result['formatted_address']?.toString().trim() ??
+        result['vicinity']?.toString().trim() ??
+        '';
+    final text = _normalizeLocationText('$name $address ${types.join(' ')}');
+    final hasAllowedMealType = types.any(allowedMealTypes.contains);
+    final hasNonMealSignal =
+        types.contains('museum') ||
+        types.contains('art_gallery') ||
+        types.contains('tourist_attraction') ||
+        types.contains('park') ||
+        text.contains(_normalizeLocationText('博物館')) ||
+        text.contains(_normalizeLocationText('紀念館')) ||
+        text.contains(_normalizeLocationText('公園')) ||
+        text.contains(_normalizeLocationText('步道'));
+    if (!hasAllowedMealType || hasNonMealSignal) {
+      continue;
+    }
+
+    final location = result['geometry'] is Map
+        ? Map<String, dynamic>.from(result['geometry'] as Map)
+        : const <String, dynamic>{};
+    final locationMap = location['location'] is Map
+        ? Map<String, dynamic>.from(location['location'] as Map)
+        : const <String, dynamic>{};
+    final lat = _asDoubleValue(locationMap['lat']);
+    final lng = _asDoubleValue(locationMap['lng']);
+    if (lat == null || lng == null) {
+      continue;
+    }
+
+    final photos = result['photos'];
+    String imageUrl = '';
+    if (photos is List && photos.isNotEmpty && photos.first is Map) {
+      final photoRef = (photos.first as Map)['photo_reference']?.toString();
+      if (photoRef != null && photoRef.isNotEmpty) {
+        imageUrl = Uri.https(
+          'maps.googleapis.com',
+          '/maps/api/place/photo',
+          {
+            'maxwidth': '800',
+            'photo_reference': photoRef,
+            'key': key,
+          },
+        ).toString();
+      }
+    }
+
+    normalized.add({
+      'id': result['place_id']?.toString() ?? const Uuid().v4(),
+      'name': name,
+      'kind': 'place',
+      'city': _extractCityHint(address) ?? fallbackCity,
+      'address': address,
+      'description':
+          mealType == 'dinner'
+          ? '即時搜尋到的晚餐候選，會依前後景點重算時間與交通。'
+          : '即時搜尋到的午餐候選，會依前後景點重算時間與交通。',
+      'imageUrl': imageUrl,
+      'tags': <String>{
+        if (types.contains('restaurant')) 'restaurant',
+        if (types.contains('cafe')) 'cafe',
+        if (types.contains('bakery')) 'bakery',
+        if (types.contains('meal_takeaway')) 'meal_takeaway',
+        if (types.contains('meal_delivery')) 'meal_delivery',
+        if (types.contains('bar')) 'bar',
+        'live_google_place',
+      }.toList(),
+      'rating': _asDoubleValue(result['rating']),
+      'userRatingsTotal': _asIntValue(result['user_ratings_total']),
+      'priceLevel': _asIntValue(result['price_level']),
+      'lat': lat,
+      'lng': lng,
+      'source': 'google_places_live',
+    });
+  }
+  return normalized;
+}
+
+String? _extractCityHint(String raw) {
+  final text = raw.trim();
+  if (text.isEmpty) return null;
+  final parts = _parseLocationParts(text);
+  if (parts.$1 != null && parts.$1!.trim().isNotEmpty) {
+    return parts.$1!.trim();
+  }
+  return null;
 }
 
 String _asString(Map<String, dynamic> body, String key) {

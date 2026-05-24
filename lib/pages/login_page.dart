@@ -5,6 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../services/backend_api.dart';
 import '../state/user_state.dart';
 import 'forgot_password_page.dart';
+import 'home_page.dart';
 import 'register_page.dart';
 import 'select_interest_page.dart'; // 之後下一頁
 
@@ -86,10 +87,26 @@ class _LoginPageState extends State<LoginPage> {
         linked: user['lineLinked'] == true,
         pushEnabled: user['linePushEnabled'] == true,
       );
+      final rawInterests = user['interests'];
+      if (rawInterests is List) {
+        final interests = rawInterests
+            .map((e) => e.toString().trim())
+            .where((e) => e.isNotEmpty)
+            .toList();
+        if (interests.isNotEmpty) {
+          await UserState.saveSelectedInterests(interests);
+        }
+      }
       if (!mounted) return;
+      final nextPage = UserState.hasSavedInterests
+          ? HomePage(
+              selectedInterestIds: UserState.selectedInterestIds,
+              displayName: UserState.displayName,
+            )
+          : const SelectInterestPage();
       Navigator.push(
         context,
-        MaterialPageRoute(builder: (_) => const SelectInterestPage()),
+        MaterialPageRoute(builder: (_) => nextPage),
       );
     } on ApiClientException catch (error) {
       _showMessage(error.message);
@@ -267,7 +284,7 @@ class _LoginPageState extends State<LoginPage> {
                                         ),
                                       )
                                     : Text(
-                                        'Log In',
+                                        'login',
                                         style: GoogleFonts.dancingScript(
                                           fontSize: 32,
                                           fontWeight: FontWeight.w600,

@@ -74,6 +74,16 @@ class _RegisterPageState extends State<RegisterPage> {
         linked: user['lineLinked'] == true,
         pushEnabled: user['linePushEnabled'] == true,
       );
+      final rawInterests = user['interests'];
+      if (rawInterests is List) {
+        final interests = rawInterests
+            .map((e) => e.toString().trim())
+            .where((e) => e.isNotEmpty)
+            .toList();
+        if (interests.isNotEmpty) {
+          await UserState.saveSelectedInterests(interests);
+        }
+      }
       _showMessage('註冊成功！');
       if (!mounted) return;
       Navigator.pop(context, displayName);

@@ -13,7 +13,10 @@ class User {
     this.lineUserId,
     this.lineLinkedAt,
     this.linePushEnabled = false,
-  });
+    List<String>? interests,
+    this.activePlan,
+    this.activePlanUpdatedAt,
+  }) : interests = interests ?? const <String>[];
 
   final String id;
   final String username;
@@ -24,6 +27,9 @@ class User {
   final String? lineUserId;
   final DateTime? lineLinkedAt;
   final bool linePushEnabled;
+  final List<String> interests;
+  final Map<String, dynamic>? activePlan;
+  final DateTime? activePlanUpdatedAt;
 
   User copyWith({
     String? username,
@@ -33,6 +39,9 @@ class User {
     Object? lineUserId = _noUserChange,
     Object? lineLinkedAt = _noUserChange,
     bool? linePushEnabled,
+    List<String>? interests,
+    Object? activePlan = _noUserChange,
+    Object? activePlanUpdatedAt = _noUserChange,
   }) {
     return User(
       id: id,
@@ -48,6 +57,13 @@ class User {
           ? this.lineLinkedAt
           : lineLinkedAt as DateTime?,
       linePushEnabled: linePushEnabled ?? this.linePushEnabled,
+      interests: interests ?? this.interests,
+      activePlan: identical(activePlan, _noUserChange)
+          ? this.activePlan
+          : activePlan as Map<String, dynamic>?,
+      activePlanUpdatedAt: identical(activePlanUpdatedAt, _noUserChange)
+          ? this.activePlanUpdatedAt
+          : activePlanUpdatedAt as DateTime?,
     );
   }
 
@@ -62,6 +78,9 @@ class User {
       'lineUserId': lineUserId,
       'lineLinkedAt': lineLinkedAt?.toIso8601String(),
       'linePushEnabled': linePushEnabled,
+      'interests': interests,
+      'activePlan': activePlan,
+      'activePlanUpdatedAt': activePlanUpdatedAt?.toIso8601String(),
     };
   }
 
@@ -75,6 +94,9 @@ class User {
       'lineLinked': lineUserId != null && lineUserId!.isNotEmpty,
       'lineLinkedAt': lineLinkedAt?.toIso8601String(),
       'linePushEnabled': linePushEnabled,
+      'interests': interests,
+      'activePlanSynced': activePlan != null,
+      'activePlanUpdatedAt': activePlanUpdatedAt?.toIso8601String(),
     };
   }
 
@@ -91,6 +113,19 @@ class User {
           ? null
           : DateTime.parse(json['lineLinkedAt'] as String),
       linePushEnabled: json['linePushEnabled'] == true,
+      interests: (json['interests'] as List?)
+              ?.map((e) => e.toString().trim())
+              .where((e) => e.isNotEmpty)
+              .toList() ??
+          const <String>[],
+      activePlan: json['activePlan'] is Map<String, dynamic>
+          ? Map<String, dynamic>.from(json['activePlan'] as Map<String, dynamic>)
+          : json['activePlan'] is Map
+          ? Map<String, dynamic>.from(json['activePlan'] as Map)
+          : null,
+      activePlanUpdatedAt: json['activePlanUpdatedAt'] == null
+          ? null
+          : DateTime.parse(json['activePlanUpdatedAt'] as String),
     );
   }
 }

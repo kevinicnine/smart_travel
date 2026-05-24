@@ -12,3 +12,18 @@ services:
         value: 8080
       - key: SMART_TRAVEL_EXPOSE_CODES
         value: "false"
+
+  - type: cron
+    name: smart-travel-reminder-cron
+    env: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    schedule: "*/5 * * * *"
+    dockerCommand: >-
+      python3 -c "import os, urllib.request; req = urllib.request.Request(os.environ['APP_BASE_URL'].rstrip('/') + '/api/line/run-upcoming-reminders', data=b'', headers={'x-reminder-token': os.environ['REMINDER_CRON_TOKEN']}, method='POST'); urllib.request.urlopen(req, timeout=30).read()"
+    envVars:
+      - key: APP_BASE_URL
+        value: https://smart-travel-6zsf.onrender.com
+      - key: REMINDER_CRON_TOKEN
+        sync: false
