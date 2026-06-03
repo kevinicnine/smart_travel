@@ -52,17 +52,24 @@ class _CrawlJob {
   _CrawlJob({
     required this.id,
     required this.mode,
-    required this.process,
     required this.startedAt,
     this.city,
-  });
+    List<String>? cities,
+  }) : cities = List<String>.unmodifiable(cities ?? const []);
 
   final String id;
   final String mode;
-  final Process process;
   final DateTime startedAt;
   final String? city;
+  final List<String> cities;
   final List<String> logs = [];
+  final List<Map<String, dynamic>> cityRuns = [];
+  Process? process;
+  String? currentCity;
+  bool stopRequested = false;
+  int completedCities = 0;
+  int succeededCities = 0;
+  int failedCities = 0;
   DateTime? finishedAt;
   int? exitCode;
   DateTime? syncStartedAt;
@@ -71,12 +78,21 @@ class _CrawlJob {
   String? syncMessage;
   int? syncedPlaces;
 
-  bool get running => exitCode == null;
+  bool get running => finishedAt == null;
+  bool get batchMode => cities.length > 1;
+  int get totalCities => cities.length;
 
   Map<String, dynamic> toJson() => {
     'id': id,
     'mode': mode,
     'city': city,
+    'cities': cities,
+    'batch_mode': batchMode,
+    'current_city': currentCity,
+    'completed_cities': completedCities,
+    'succeeded_cities': succeededCities,
+    'failed_cities': failedCities,
+    'stop_requested': stopRequested,
     'started_at': startedAt.toIso8601String(),
     'finished_at': finishedAt?.toIso8601String(),
     'exit_code': exitCode,
@@ -86,6 +102,7 @@ class _CrawlJob {
     'sync_ok': syncOk,
     'sync_message': syncMessage,
     'synced_places': syncedPlaces,
+    'city_runs': cityRuns,
     'logs': logs,
   };
 }
@@ -765,60 +782,67 @@ Future<void> main(List<String> args) async {
         final body = await parseJsonBody(req);
         final mode = _asString(body, 'mode');
         final crawlCity = _asString(body, 'city').trim();
+        final batchCities = _crawlCitiesFromBody(body);
         final maxRequests = _asInt(body, 'maxRequests');
         final maxPages = _asInt(body, 'maxPages');
         final queryScope = _asString(body, 'queryScope').trim().toLowerCase();
         if (_crawlJob != null && _crawlJob!.running) {
           throw ApiException(409, '已有爬取進行中');
         }
-        final script = switch (mode) {
-          'places' => 'fetch_places.py',
-          'reviews' => 'fetch_places_with_reviews.py',
-          'merge_tags' => 'merge_tags_from_reviews.py',
-          'google_places' => 'fetch_places_from_google.py',
-          'merge_ratings' => 'merge_ratings_from_reviews.py',
-          _ => throw ApiException(400, '未知的爬取模式'),
-        };
-        if (mode == 'reviews' || mode == 'google_places') {
+        final script = _crawlScriptForMode(mode);
+        if (_crawlModeNeedsGoogleKey(mode)) {
           final googleKey = Platform.environment['GOOGLE_MAPS_API_KEY'] ?? '';
           if (googleKey.isEmpty) {
             throw ApiException(400, '需要設定 GOOGLE_MAPS_API_KEY');
           }
         }
+        if (mode != 'google_places' && batchCities.length > 1) {
+          throw ApiException(400, '目前只有 Google 抓景點支援批次多縣市');
+        }
         final scriptPath = p.join(_dataDir, '..', 'scripts', script);
         if (!File(scriptPath).existsSync()) {
           throw ApiException(404, '找不到爬取腳本');
         }
-        final process = await Process.start(
-          'python3',
-          [scriptPath],
-          workingDirectory: p.dirname(scriptPath),
-          environment: {
-            ...Platform.environment,
-            'PYTHONUNBUFFERED': '1',
-            'PYTHONIOENCODING': 'utf-8',
-            if (mode == 'google_places' && crawlCity.isNotEmpty)
-              'GOOGLE_PLACE_CITY': crawlCity,
-            if (mode == 'google_places' &&
-                maxRequests != null &&
-                maxRequests > 0)
-              'MAX_REQUESTS': maxRequests.clamp(50, 1000).toString(),
-            if (mode == 'google_places' && maxPages != null && maxPages > 0)
-              'TEXTSEARCH_MAX_PAGES': maxPages.clamp(1, 5).toString(),
-            if (mode == 'google_places' &&
-                (queryScope == 'standard' || queryScope == 'expanded'))
-              'GOOGLE_QUERY_SCOPE': queryScope,
-          },
-        );
+        final cities = batchCities.length > 1
+            ? batchCities
+            : crawlCity.isEmpty
+            ? const <String>[]
+            : <String>[crawlCity];
         final job = _CrawlJob(
           id: const Uuid().v4(),
           mode: mode,
-          process: process,
           startedAt: DateTime.now(),
           city: crawlCity.isEmpty ? null : crawlCity,
+          cities: cities,
         );
         _crawlJob = job;
-        _captureProcessLogs(job, process);
+        if (cities.length > 1) {
+          unawaited(
+            _runBatchCrawlJob(
+              job: job,
+              scriptPath: scriptPath,
+              maxRequests: maxRequests,
+              maxPages: maxPages,
+              queryScope: queryScope,
+            ),
+          );
+          return jsonResponse(
+            200,
+            successBody(
+              message: '已開始批次爬取，共 ${cities.length} 個縣市',
+              data: job.toJson(),
+            ),
+          );
+        }
+        final process = await _startCrawlProcess(
+          scriptPath: scriptPath,
+          mode: mode,
+          city: crawlCity.isEmpty ? null : crawlCity,
+          maxRequests: maxRequests,
+          maxPages: maxPages,
+          queryScope: queryScope,
+        );
+        unawaited(_runSingleCrawlJob(job, process));
         return jsonResponse(
           200,
           successBody(message: '已開始爬取', data: job.toJson()),
@@ -832,7 +856,8 @@ Future<void> main(List<String> args) async {
         if (job == null || !job.running) {
           return jsonResponse(200, successBody(message: '目前沒有爬取進行中'));
         }
-        job.process.kill(ProcessSignal.sigterm);
+        job.stopRequested = true;
+        job.process?.kill(ProcessSignal.sigterm);
         return jsonResponse(200, successBody(message: '已送出停止指令'));
       }),
     )
@@ -1232,59 +1257,228 @@ Future<int> _importDbJsonToStore() async {
   return _mergePlacesToStore(_store, places);
 }
 
-void _captureProcessLogs(_CrawlJob job, Process process) {
-  const maxLines = 200;
-  void addLine(String line) {
-    if (line.trim().isEmpty) return;
-    job.logs.add(line);
-    if (job.logs.length > maxLines) {
-      job.logs.removeAt(0);
+const _crawlModesToSync = {
+  'places',
+  'reviews',
+  'merge_tags',
+  'google_places',
+  'merge_ratings',
+};
+
+void _appendCrawlLog(_CrawlJob job, String line) {
+  const maxLines = 400;
+  if (line.trim().isEmpty) return;
+  job.logs.add(line);
+  if (job.logs.length > maxLines) {
+    job.logs.removeAt(0);
+  }
+}
+
+String _crawlScriptForMode(String mode) => switch (mode) {
+  'places' => 'fetch_places.py',
+  'reviews' => 'fetch_places_with_reviews.py',
+  'merge_tags' => 'merge_tags_from_reviews.py',
+  'google_places' => 'fetch_places_from_google.py',
+  'merge_ratings' => 'merge_ratings_from_reviews.py',
+  _ => throw ApiException(400, '未知的爬取模式'),
+};
+
+bool _crawlModeNeedsGoogleKey(String mode) =>
+    mode == 'reviews' || mode == 'google_places';
+
+List<String> _crawlCitiesFromBody(Map<String, dynamic> body) {
+  final raw = body['cities'];
+  if (raw is! List) {
+    return const [];
+  }
+  return raw
+      .map((item) => item?.toString().trim() ?? '')
+      .where((item) => item.isNotEmpty)
+      .toSet()
+      .toList();
+}
+
+Future<Process> _startCrawlProcess({
+  required String scriptPath,
+  required String mode,
+  String? city,
+  int? maxRequests,
+  int? maxPages,
+  String? queryScope,
+}) {
+  return Process.start(
+    'python3',
+    [scriptPath],
+    workingDirectory: p.dirname(scriptPath),
+    environment: {
+      ...Platform.environment,
+      'PYTHONUNBUFFERED': '1',
+      'PYTHONIOENCODING': 'utf-8',
+      if (mode == 'google_places' && city != null && city.trim().isNotEmpty)
+        'GOOGLE_PLACE_CITY': city.trim(),
+      if (mode == 'google_places' && maxRequests != null && maxRequests > 0)
+        'MAX_REQUESTS': maxRequests.clamp(50, 1000).toString(),
+      if (mode == 'google_places' && maxPages != null && maxPages > 0)
+        'TEXTSEARCH_MAX_PAGES': maxPages.clamp(1, 5).toString(),
+      if (mode == 'google_places' &&
+          (queryScope == 'standard' || queryScope == 'expanded'))
+        'GOOGLE_QUERY_SCOPE': queryScope!,
+    },
+  );
+}
+
+Future<int> _watchCrawlProcess(
+  _CrawlJob job,
+  Process process, {
+  String? linePrefix,
+}) async {
+  String decorate(String line) {
+    if (linePrefix == null || linePrefix.isEmpty) {
+      return line;
     }
+    return '[$linePrefix] $line';
   }
 
+  final stdoutDone = Completer<void>();
+  final stderrDone = Completer<void>();
   process.stdout
       .transform(utf8.decoder)
       .transform(const LineSplitter())
-      .listen(addLine);
+      .listen(
+        (line) => _appendCrawlLog(job, decorate(line)),
+        onDone: stdoutDone.complete,
+      );
   process.stderr
       .transform(utf8.decoder)
       .transform(const LineSplitter())
-      .listen((line) => addLine('[ERR] $line'));
+      .listen(
+        (line) => _appendCrawlLog(job, decorate('[ERR] $line')),
+        onDone: stderrDone.complete,
+      );
 
-  process.exitCode.then((code) async {
-    job.exitCode = code;
-    job.finishedAt = DateTime.now();
-    _log.info('Crawl job ${job.id} finished with exit code $code');
-    if (code == 0) {
-      const modesToSync = {
-        'places',
-        'reviews',
-        'merge_tags',
-        'google_places',
-        'merge_ratings',
-      };
-      if (modesToSync.contains(job.mode)) {
-        try {
-          job.syncStartedAt = DateTime.now();
-          final count = await _importDbJsonToStore();
-          final message = '已同步到資料庫（places=$count）';
-          job.syncOk = true;
-          job.syncedPlaces = count;
-          job.syncFinishedAt = DateTime.now();
-          job.syncMessage = message;
-          addLine(message);
-          _log.info('Crawl sync: $message');
-        } catch (error, stack) {
-          final message = '同步到資料庫失敗：$error';
-          job.syncOk = false;
-          job.syncFinishedAt = DateTime.now();
-          job.syncMessage = message;
-          addLine(message);
-          _log.severe(message, error, stack);
-        }
-      }
+  final code = await process.exitCode;
+  await Future.wait([stdoutDone.future, stderrDone.future]);
+  _log.info('Crawl job ${job.id} process finished with exit code $code');
+  return code;
+}
+
+Future<void> _syncCrawlJobResults(_CrawlJob job) async {
+  if (!_crawlModesToSync.contains(job.mode)) {
+    return;
+  }
+  try {
+    job.syncStartedAt = DateTime.now();
+    final beforeCount = (await _store.read()).places.length;
+    final count = await _importDbJsonToStore();
+    final afterCount = (await _store.read()).places.length;
+    final netDelta = afterCount - beforeCount;
+    final message =
+        '已同步到資料庫（處理 $count 筆，景點總數 $beforeCount -> $afterCount，淨增 $netDelta）';
+    job.syncOk = true;
+    job.syncedPlaces = count;
+    job.syncFinishedAt = DateTime.now();
+    job.syncMessage = message;
+    _appendCrawlLog(job, message);
+    _log.info('Crawl sync: $message');
+  } catch (error, stack) {
+    final message = '同步到資料庫失敗：$error';
+    job.syncOk = false;
+    job.syncFinishedAt = DateTime.now();
+    job.syncMessage = message;
+    _appendCrawlLog(job, message);
+    _log.severe(message, error, stack);
+  }
+}
+
+Future<void> _runSingleCrawlJob(_CrawlJob job, Process process) async {
+  job.process = process;
+  job.currentCity = job.city;
+  final code = await _watchCrawlProcess(
+    job,
+    process,
+    linePrefix: job.city?.trim().isNotEmpty == true ? job.city : null,
+  );
+  job.exitCode = code;
+  job.finishedAt = DateTime.now();
+  job.process = null;
+  job.currentCity = null;
+  if (code == 0) {
+    await _syncCrawlJobResults(job);
+  }
+}
+
+Future<void> _runBatchCrawlJob({
+  required _CrawlJob job,
+  required String scriptPath,
+  int? maxRequests,
+  int? maxPages,
+  String? queryScope,
+}) async {
+  _appendCrawlLog(job, '開始批次爬取，共 ${job.totalCities} 個縣市');
+  for (final city in job.cities) {
+    if (job.stopRequested) {
+      _appendCrawlLog(job, '收到停止指令，批次作業提前結束');
+      break;
     }
-  });
+    final run = <String, dynamic>{
+      'city': city,
+      'started_at': DateTime.now().toIso8601String(),
+      'status': 'running',
+    };
+    job.cityRuns.add(run);
+    job.currentCity = city;
+    _appendCrawlLog(job, '開始處理 $city');
+    try {
+      final process = await _startCrawlProcess(
+        scriptPath: scriptPath,
+        mode: job.mode,
+        city: city,
+        maxRequests: maxRequests,
+        maxPages: maxPages,
+        queryScope: queryScope,
+      );
+      job.process = process;
+      final code = await _watchCrawlProcess(job, process, linePrefix: city);
+      run['finished_at'] = DateTime.now().toIso8601String();
+      run['exit_code'] = code;
+      if (code == 0) {
+        run['status'] = 'success';
+        job.succeededCities += 1;
+      } else {
+        run['status'] = job.stopRequested ? 'stopped' : 'failed';
+        job.failedCities += 1;
+      }
+    } catch (error) {
+      run['finished_at'] = DateTime.now().toIso8601String();
+      run['exit_code'] = -1;
+      run['status'] = 'failed';
+      run['error'] = error.toString();
+      job.failedCities += 1;
+      _appendCrawlLog(job, '[$city] 啟動失敗：$error');
+    } finally {
+      job.completedCities += 1;
+      job.process = null;
+      job.currentCity = null;
+      _appendCrawlLog(
+        job,
+        '$city 完成，累積 ${job.completedCities}/${job.totalCities}，成功 ${job.succeededCities}，失敗 ${job.failedCities}',
+      );
+    }
+  }
+
+  if (job.succeededCities > 0) {
+    await _syncCrawlJobResults(job);
+  }
+  job.finishedAt = DateTime.now();
+  if (job.stopRequested) {
+    job.exitCode = job.failedCities > 0 ? 1 : 130;
+  } else {
+    job.exitCode = job.failedCities > 0 ? 1 : 0;
+  }
+  final summary =
+      '批次爬取結束：完成 ${job.completedCities}/${job.totalCities}，成功 ${job.succeededCities}，失敗 ${job.failedCities}';
+  _appendCrawlLog(job, summary);
+  _log.info('Crawl job ${job.id} finished: $summary');
 }
 
 Middleware _metricsMiddleware() {

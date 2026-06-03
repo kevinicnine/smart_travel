@@ -707,6 +707,12 @@
                   <option value="連江縣">連江縣</option>
                 </select>
               </label>
+              <label id="crawlBatchCitiesWrap" class="full" style="display:none;">批次縣市
+                <textarea
+                  id="crawlBatchCities"
+                  placeholder="一行一個縣市，或用逗號分隔。填了這裡就會用批次模式，例如：&#10;臺中市&#10;彰化縣&#10;南投縣"
+                ></textarea>
+              </label>
               <label id="crawlScopeWrap" style="display:none;">查詢範圍
                 <select id="crawlQueryScope">
                   <option value="standard" selected>標準</option>
@@ -734,6 +740,7 @@
               <button class="primary" onclick="startCrawl()">開始爬取</button>
               <button onclick="stopCrawl()">停止</button>
             </div>
+            <p class="muted" style="margin-top:12px;">大量模式建議用 Google 抓景點 + 批次縣市。系統會依序逐縣市執行，避免單次全台任務過大。</p>
             <div id="crawlStatus" class="muted" style="margin-top:12px;"></div>
             <pre id="crawlLogs">尚未開始爬取。</pre>
           </div>
@@ -1608,6 +1615,7 @@
         const mode = document.getElementById('crawlMode').value;
         const google = mode === 'google_places';
         document.getElementById('crawlCityWrap').style.display = google ? '' : 'none';
+        document.getElementById('crawlBatchCitiesWrap').style.display = google ? '' : 'none';
         document.getElementById('crawlScopeWrap').style.display = google ? '' : 'none';
         document.getElementById('crawlRequestsWrap').style.display = google ? '' : 'none';
         document.getElementById('crawlPagesWrap').style.display = google ? '' : 'none';
@@ -1615,9 +1623,16 @@
 
       async function startCrawl() {
         try {
+          const batchCities = document
+            .getElementById('crawlBatchCities')
+            .value
+            .split(/\n|,/)
+            .map((item) => item.trim())
+            .filter(Boolean);
           const body = {
             mode: document.getElementById('crawlMode').value,
             city: document.getElementById('crawlCity').value,
+            cities: batchCities,
             maxRequests: Number(document.getElementById('crawlMaxRequests').value || 0),
             maxPages: Number(document.getElementById('crawlMaxPages').value || 0),
             queryScope: document.getElementById('crawlQueryScope').value,
@@ -1656,7 +1671,19 @@
             return;
           }
           const parts = [];
-          parts.push(`模式：${job.mode || '-'}${job.city ? ` / ${job.city}` : ''}`);
+          parts.push(`模式：${job.mode || '-'}`);
+          if (job.batch_mode) {
+            parts.push(`批次進度：${job.completed_cities || 0}/${(job.cities || []).length}`);
+            parts.push(`成功：${job.succeeded_cities || 0}`);
+            if ((job.failed_cities || 0) > 0) {
+              parts.push(`失敗：${job.failed_cities || 0}`);
+            }
+            if (job.current_city) {
+              parts.push(`目前：${job.current_city}`);
+            }
+          } else if (job.city) {
+            parts.push(`縣市：${job.city}`);
+          }
           parts.push(job.running ? '狀態：執行中' : `狀態：已結束（exitCode=${job.exit_code}）`);
           if (job.sync_message) {
             parts.push(`同步：${job.sync_message}`);
