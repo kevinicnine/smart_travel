@@ -1540,7 +1540,7 @@ void _recordRequestMetric({
   _appendBounded(
     _recentRequestLogs,
     {
-      'timestamp': startedAt.toIso8601String(),
+      'timestamp': startedAt.toUtc().toIso8601String(),
       'method': request.method,
       'path': '/${request.url.path}',
       'status': statusCode,
@@ -1565,7 +1565,7 @@ void _recordAppEvent({
   _appendBounded(
     _appEventHistory,
     {
-      'timestamp': DateTime.now().toIso8601String(),
+      'timestamp': DateTime.now().toUtc().toIso8601String(),
       'event': event,
       'page': page,
       'userId': userId,
@@ -1588,7 +1588,7 @@ Future<void> _sendTrackedLinePush({
   String? username,
 }) async {
   final entry = <String, dynamic>{
-    'timestamp': DateTime.now().toIso8601String(),
+    'timestamp': DateTime.now().toUtc().toIso8601String(),
     'category': category,
     'userId': userId,
     'username': username,
@@ -1614,7 +1614,7 @@ void _recordReminderRun({
   _appendBounded(
     _reminderRunHistory,
     {
-      'timestamp': DateTime.now().toIso8601String(),
+      'timestamp': DateTime.now().toUtc().toIso8601String(),
       'source': source,
       ...result,
     },
@@ -1683,7 +1683,7 @@ Future<Map<String, dynamic>> _buildAdminMetricsSnapshot() async {
           (Platform.environment['GOOGLE_MAPS_API_KEY'] ?? '').isNotEmpty,
       'cronConfigured': _reminderCronToken != null && _reminderCronToken!.isNotEmpty,
       'crawlRunning': _crawlJob?.running == true,
-      'timestamp': now.toIso8601String(),
+      'timestamp': now.toUtc().toIso8601String(),
     },
     'topRoutes': topRoutes
         .take(12)
