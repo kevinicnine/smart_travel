@@ -6,341 +6,1129 @@
     <title>Smart Travel 後台管理</title>
     <style>
       :root {
-        --bg: #f4efe7;
+        --bg: #efe9e1;
+        --panel: #fffdf9;
         --card: #ffffff;
-        --ink: #1f1f1f;
-        --muted: #6d6d6d;
-        --accent: #7a91c9;
+        --border: #e8e0d4;
+        --ink: #231f1b;
+        --muted: #7b7268;
+        --accent: #6f87c6;
+        --accent-soft: #edf2ff;
+        --ok: #2d8a57;
+        --warn: #b7791f;
+        --danger: #c05656;
+        --shadow: 0 16px 44px rgba(45, 38, 30, 0.08);
+      }
+      * {
+        box-sizing: border-box;
       }
       body {
         margin: 0;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        background: var(--bg);
+        background: linear-gradient(180deg, #f6f1eb 0%, #ece5dd 100%);
         color: var(--ink);
       }
-      header {
-        padding: 16px 24px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
+      button,
+      input,
+      select,
+      textarea {
+        font: inherit;
+      }
+      button {
+        border: 1px solid var(--border);
         background: #fff;
-        border-bottom: 1px solid #eee;
-      }
-      header h1 {
-        margin: 0;
-        font-size: 18px;
-      }
-      .container {
-        padding: 20px 24px 40px;
-      }
-      .tabs {
-        display: flex;
-        gap: 10px;
-        margin-bottom: 16px;
-      }
-      .tab {
-        padding: 8px 14px;
+        color: var(--ink);
         border-radius: 12px;
-        background: #fff;
-        border: 1px solid #e6e6e6;
+        padding: 10px 14px;
         cursor: pointer;
-      }
-      .tab.active {
-        background: var(--accent);
-        color: #fff;
-        border-color: var(--accent);
-      }
-      .card {
-        background: var(--card);
-        border-radius: 14px;
-        padding: 16px;
-        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06);
-      }
-      .row {
-        display: flex;
-        gap: 12px;
-        flex-wrap: wrap;
-      }
-      input, select, textarea, button {
-        font-size: 14px;
-        padding: 8px 10px;
-        border: 1px solid #ddd;
-        border-radius: 10px;
       }
       button.primary {
         background: var(--accent);
         color: #fff;
-        border: none;
+        border-color: var(--accent);
+      }
+      button.danger {
+        color: #fff;
+        background: var(--danger);
+        border-color: var(--danger);
+      }
+      button.ghost {
+        background: transparent;
+      }
+      input,
+      select,
+      textarea {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 10px 12px;
+        background: #fff;
+        color: var(--ink);
+      }
+      textarea {
+        min-height: 100px;
+        resize: vertical;
+      }
+      .login-shell {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 32px;
+      }
+      .login-card {
+        width: min(480px, 100%);
+        background: rgba(255, 255, 255, 0.96);
+        border: 1px solid rgba(255, 255, 255, 0.6);
+        box-shadow: var(--shadow);
+        border-radius: 24px;
+        padding: 28px;
+      }
+      .login-card h1 {
+        margin: 0 0 8px;
+        font-size: 28px;
+      }
+      .login-card p {
+        margin: 0 0 20px;
+        color: var(--muted);
+      }
+      .login-card .stack {
+        display: grid;
+        gap: 12px;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: 264px minmax(0, 1fr);
+        min-height: 100vh;
+      }
+      .sidebar {
+        background: rgba(255, 253, 249, 0.94);
+        border-right: 1px solid var(--border);
+        padding: 24px 18px;
+        position: sticky;
+        top: 0;
+        height: 100vh;
+      }
+      .brand {
+        margin-bottom: 24px;
+      }
+      .brand h1 {
+        margin: 0;
+        font-size: 22px;
+      }
+      .brand p {
+        margin: 6px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      .nav-group {
+        display: grid;
+        gap: 8px;
+      }
+      .nav-item {
+        width: 100%;
+        text-align: left;
+        border-radius: 14px;
+        padding: 12px 14px;
+        background: transparent;
+      }
+      .nav-item.active {
+        background: var(--accent-soft);
+        border-color: #d9e2ff;
+        color: #37539a;
+      }
+      .sidebar-footer {
+        margin-top: 24px;
+        padding-top: 18px;
+        border-top: 1px solid var(--border);
+        display: grid;
+        gap: 10px;
+      }
+      .sidebar-footer .meta {
+        font-size: 12px;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+      .content {
+        padding: 24px;
+        display: grid;
+        gap: 20px;
+      }
+      .toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        background: rgba(255, 255, 255, 0.9);
+        border: 1px solid rgba(255, 255, 255, 0.75);
+        box-shadow: var(--shadow);
+        border-radius: 22px;
+        padding: 18px 20px;
+      }
+      .toolbar h2 {
+        margin: 0;
+        font-size: 24px;
+      }
+      .toolbar .meta {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .section {
+        display: none;
+        gap: 20px;
+      }
+      .section.active {
+        display: grid;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid rgba(255, 255, 255, 0.7);
+        box-shadow: var(--shadow);
+        border-radius: 22px;
+        padding: 18px;
+      }
+      .card h3 {
+        margin: 0 0 14px;
+        font-size: 18px;
+      }
+      .card h4 {
+        margin: 0 0 10px;
+        font-size: 15px;
+      }
+      .grid {
+        display: grid;
+        gap: 16px;
+      }
+      .grid.stats {
+        grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      }
+      .stat {
+        background: linear-gradient(180deg, #fff, #f9f6f2);
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 16px;
+      }
+      .stat .label {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .stat .value {
+        margin-top: 10px;
+        font-size: 28px;
+        font-weight: 700;
+      }
+      .pill-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        background: #f6f3ee;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 8px 12px;
+        font-size: 13px;
+      }
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: #c6bfb7;
+      }
+      .dot.ok {
+        background: var(--ok);
+      }
+      .dot.warn {
+        background: var(--warn);
+      }
+      .dot.danger {
+        background: var(--danger);
+      }
+      .filters,
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+      .filters label,
+      .field label {
+        display: grid;
+        gap: 6px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .field-grid {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      }
+      .field-grid .full {
+        grid-column: 1 / -1;
+      }
+      .table-wrap {
+        overflow: auto;
       }
       table {
         width: 100%;
+        min-width: 1000px;
         border-collapse: collapse;
-        margin-top: 12px;
-        min-width: 1280px;
       }
-      th, td {
+      th,
+      td {
         text-align: left;
-        padding: 10px;
-        border-bottom: 1px solid #eee;
-        font-size: 13px;
+        padding: 12px 10px;
+        border-bottom: 1px solid #efe7dd;
         vertical-align: top;
-        line-height: 1.45;
-        word-break: break-word;
+        font-size: 13px;
+        line-height: 1.5;
       }
-      .table-scroll {
-        overflow-x: auto;
-        overflow-y: visible;
-        width: 100%;
-      }
-      .muted { color: var(--muted); }
-      .hidden { display: none; }
-      .token {
-        display: flex;
-        gap: 8px;
-        align-items: center;
-      }
-      .notice { margin-top: 8px; color: var(--muted); font-size: 12px; }
-      .stack {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-      }
-      .meta {
-        font-size: 12px;
+      th {
         color: var(--muted);
+        font-weight: 600;
+      }
+      code,
+      pre {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      pre {
+        background: #171717;
+        color: #e8e8e8;
+        border-radius: 16px;
+        padding: 14px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 12px;
       }
       .badge {
         display: inline-flex;
         align-items: center;
-        gap: 4px;
-        padding: 2px 8px;
+        gap: 6px;
+        padding: 4px 8px;
         border-radius: 999px;
         font-size: 12px;
         font-weight: 600;
-        white-space: nowrap;
       }
-      .badge.google { background: #eef4ff; color: #3d5caa; }
-      .badge.admin { background: #f4f0ff; color: #6951ba; }
-      .badge.recent { background: #ecf9ee; color: #207245; }
-      .badge.warn { background: #fff4e5; color: #9b5b00; }
-      .badge.ok { background: #edf8f1; color: #1a7f4b; }
-      .missing-list {
-        font-size: 12px;
+      .badge.ok {
+        color: var(--ok);
+        background: #ebf8f0;
+      }
+      .badge.warn {
+        color: var(--warn);
+        background: #fff7ea;
+      }
+      .badge.danger {
+        color: var(--danger);
+        background: #fdeeee;
+      }
+      .badge.info {
+        color: #3558a6;
+        background: #eef3ff;
+      }
+      .muted {
         color: var(--muted);
-        line-height: 1.4;
+      }
+      .empty {
+        color: var(--muted);
+        padding: 18px 0;
+      }
+      .modal {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: rgba(21, 17, 13, 0.38);
+        z-index: 50;
+      }
+      .modal.open {
+        display: flex;
+      }
+      .modal-card {
+        width: min(920px, 100%);
+        max-height: 88vh;
+        overflow: auto;
+        background: #fff;
+        border-radius: 24px;
+        box-shadow: var(--shadow);
+        padding: 22px;
+      }
+      .modal-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      .modal-header h3 {
+        margin: 0;
+      }
+      .kv {
+        display: grid;
+        gap: 6px;
+        grid-template-columns: 140px minmax(0, 1fr);
+        font-size: 13px;
+        margin-bottom: 10px;
+      }
+      .kv strong {
+        color: var(--muted);
+        font-weight: 600;
+      }
+      .inline-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .section-grid {
+        display: grid;
+        gap: 20px;
+        grid-template-columns: 1.2fr 1fr;
+      }
+      @media (max-width: 1100px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+        .sidebar {
+          position: static;
+          height: auto;
+        }
+        .section-grid {
+          grid-template-columns: 1fr;
+        }
       }
     </style>
   </head>
   <body>
-    <header>
-      <h1>Smart Travel 後台管理</h1>
-      <div class="token">
-        <button id="logoutBtn" class="primary hidden" onclick="logout()">登出</button>
-      </div>
-    </header>
-    <div id="loginCard" class="card" style="max-width:420px;margin:40px auto;">
-      <h2>管理員登入</h2>
-      <div class="row">
-        <input id="adminUser" placeholder="帳號" />
-        <input id="adminPass" type="password" placeholder="密碼" />
-        <button class="primary" onclick="login()">登入</button>
+    <div id="loginShell" class="login-shell">
+      <div class="login-card">
+        <h1>Smart Travel 後台</h1>
+        <p>統一管理景點、使用者、匯入流程、LINE 推播與即時監控。</p>
+        <div class="stack">
+          <input id="adminUser" placeholder="管理員帳號" />
+          <input id="adminPass" type="password" placeholder="管理員密碼" />
+          <button class="primary" onclick="login()">登入</button>
+        </div>
       </div>
     </div>
 
-    <div id="adminApp" class="container hidden">
-      <div class="tabs">
-        <div class="tab active" data-tab="places" onclick="showTab('places')">景點管理</div>
-        <div class="tab" data-tab="users" onclick="showTab('users')">使用者</div>
-        <div class="tab" data-tab="import" onclick="showTab('import')">匯入/匯出</div>
-      </div>
+    <div id="adminLayout" class="layout" style="display:none;">
+      <aside class="sidebar">
+        <div class="brand">
+          <h1>Smart Travel</h1>
+          <p>即時監控、推播掃描、景點資料與使用者行程管理。</p>
+        </div>
+        <div class="nav-group">
+          <button class="nav-item active" data-view="overview" onclick="showView('overview')">儀表板</button>
+          <button class="nav-item" data-view="push" onclick="showView('push')">推播與提醒</button>
+          <button class="nav-item" data-view="events" onclick="showView('events')">App 事件</button>
+          <button class="nav-item" data-view="places" onclick="showView('places')">景點管理</button>
+          <button class="nav-item" data-view="users" onclick="showView('users')">使用者</button>
+          <button class="nav-item" data-view="import" onclick="showView('import')">匯入、同步與爬蟲</button>
+        </div>
+        <div class="sidebar-footer">
+          <div class="meta">監控資料採即時輪詢，每 5 秒更新一次。使用者有效行程與 LINE 推播紀錄會即時反映在此頁。</div>
+          <button onclick="logout()">登出</button>
+        </div>
+      </aside>
 
-      <section id="places" class="card">
-        <div class="row">
-          <input id="q" placeholder="搜尋名稱/地址/城市" />
-          <input id="category" placeholder="tag (例如 museum)" />
-          <select id="sort" onchange="loadPlaces()">
-            <option value="latest" selected>最新優先</option>
-            <option value="oldest">最舊優先</option>
-            <option value="name">名稱排序</option>
-            <option value="city">城市排序</option>
-          </select>
-          <label style="display:flex; align-items:center; gap:6px; color:var(--muted); font-size:13px;">
-            <input id="onlyRecent" type="checkbox" onchange="loadPlaces()" />
-            只看剛更新
-          </label>
-          <label style="display:flex; align-items:center; gap:6px; color:var(--muted); font-size:13px;">
-            <input id="onlyIncomplete" type="checkbox" onchange="loadPlaces()" />
-            只看資料不完整
-          </label>
-          <button class="primary" onclick="loadPlaces()">查詢</button>
-          <button onclick="openEditor()">新增景點</button>
+      <main class="content">
+        <div class="toolbar">
+          <div>
+            <h2 id="viewTitle">儀表板</h2>
+            <div class="meta" id="toolbarMeta">監控服務狀態、資料流量、推播結果與近期請求。</div>
+          </div>
+          <div class="actions">
+            <button onclick="refreshCurrentView()">重新整理</button>
+          </div>
         </div>
-        <div class="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th style="min-width:160px;">名稱</th>
-                <th style="min-width:160px;">來源 / 更新</th>
-                <th style="min-width:150px;">完整度</th>
-                <th style="min-width:180px;">標籤</th>
-                <th style="min-width:90px;">評分</th>
-                <th style="min-width:70px;">價格</th>
-                <th style="min-width:150px;">營業時間</th>
-                <th style="min-width:90px;">城市</th>
-                <th style="min-width:220px;">地址</th>
-                <th style="min-width:120px;">操作</th>
-              </tr>
-            </thead>
-            <tbody id="placesBody"></tbody>
-          </table>
-        </div>
-      </section>
 
-      <section id="users" class="card hidden">
-        <button class="primary" onclick="loadUsers()">重新整理</button>
-        <table>
-          <thead>
-            <tr>
-              <th>使用者</th>
-              <th>Email</th>
-              <th>電話</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody id="usersBody"></tbody>
-        </table>
-      </section>
+        <section id="overviewView" class="section active">
+          <div class="grid stats" id="statsGrid"></div>
+          <div class="card">
+            <h3>服務健康狀態</h3>
+            <div id="healthPills" class="pill-list"></div>
+          </div>
+          <div class="section-grid">
+            <div class="card">
+              <h3>熱門路由</h3>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>Route</th><th>請求次數</th></tr>
+                  </thead>
+                  <tbody id="topRoutesBody"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="card">
+              <h3>近期提醒掃描</h3>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>時間</th><th>來源</th><th>掃描</th><th>推播</th></tr>
+                  </thead>
+                  <tbody id="overviewReminderBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <h3>近期請求</h3>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>時間</th>
+                    <th>Method</th>
+                    <th>Path</th>
+                    <th>Status</th>
+                    <th>Latency</th>
+                    <th>Query</th>
+                  </tr>
+                </thead>
+                <tbody id="recentRequestsBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
 
-      <section id="import" class="card hidden">
-        <div class="row">
-          <button class="primary" onclick="exportDb()">匯出 db.json</button>
-          <input type="file" id="importFile" />
-          <button onclick="importPlaces()">匯入 places</button>
-        </div>
-        <p class="notice">匯入格式需為 { "places": [ ... ] }</p>
-        <div class="row" style="margin-top:10px;">
-          <button class="primary" onclick="syncFromRemote()">一鍵同步雲端資料</button>
-          <button onclick="importFromFile()">匯入雲端爬取結果</button>
-          <button onclick="syncToLocal()">一鍵同步到本機</button>
-        </div>
-        <hr style="margin:16px 0; border:none; border-top:1px solid #eee;" />
-        <h3>自動爬取</h3>
-        <div class="row">
-          <select id="crawlMode" onchange="onCrawlModeChange()">
-            <option value="places">抓景點 (fetch_places.py)</option>
-            <option value="reviews">抓評論+標籤 (fetch_places_with_reviews.py)</option>
-            <option value="merge_tags">合併標籤 (merge_tags_from_reviews.py)</option>
-            <option value="merge_ratings">合併評分 (merge_ratings_from_reviews.py)</option>
-            <option value="google_places">Google 抓景點 (fetch_places_from_google.py)</option>
-          </select>
-          <select id="crawlCity" class="hidden">
-            <option value="">全部縣市（預設）</option>
-            <option value="臺北市">臺北市</option>
-            <option value="新北市">新北市</option>
-            <option value="基隆市">基隆市</option>
-            <option value="桃園市">桃園市</option>
-            <option value="新竹市">新竹市</option>
-            <option value="新竹縣">新竹縣</option>
-            <option value="苗栗縣">苗栗縣</option>
-            <option value="臺中市">臺中市</option>
-            <option value="彰化縣">彰化縣</option>
-            <option value="南投縣">南投縣</option>
-            <option value="雲林縣">雲林縣</option>
-            <option value="嘉義市">嘉義市</option>
-            <option value="嘉義縣">嘉義縣</option>
-            <option value="臺南市">臺南市</option>
-            <option value="高雄市">高雄市</option>
-            <option value="屏東縣">屏東縣</option>
-            <option value="宜蘭縣">宜蘭縣</option>
-            <option value="花蓮縣">花蓮縣</option>
-            <option value="臺東縣">臺東縣</option>
-            <option value="澎湖縣">澎湖縣</option>
-            <option value="金門縣">金門縣</option>
-            <option value="連江縣">連江縣</option>
-          </select>
-          <button class="primary" onclick="startCrawl()">開始爬取</button>
-          <button onclick="stopCrawl()">停止</button>
-        </div>
-        <div id="crawlGoogleOptions" class="row hidden" style="margin-top:8px;">
-          <label style="display:flex; flex-direction:column; gap:4px; color:var(--muted); font-size:12px;">
-            查詢範圍
-            <select id="crawlQueryScope">
-              <option value="standard" selected>標準</option>
-              <option value="expanded">擴充（更多景點）</option>
-            </select>
-          </label>
-          <label style="display:flex; flex-direction:column; gap:4px; color:var(--muted); font-size:12px;">
-            最大用量
-            <select id="crawlMaxRequests">
-              <option value="100" selected>100</option>
-              <option value="150">150</option>
-              <option value="200">200</option>
-              <option value="300">300</option>
-              <option value="500">500</option>
-            </select>
-          </label>
-          <label style="display:flex; flex-direction:column; gap:4px; color:var(--muted); font-size:12px;">
-            每查詢頁數
-            <select id="crawlMaxPages">
-              <option value="2" selected>2</option>
-              <option value="3">3</option>
-              <option value="4">4</option>
-            </select>
-          </label>
-        </div>
-        <div class="notice">Google 抓景點可選單一縣市，並可調高用量與頁數；抓評論需要設定 GOOGLE_MAPS_API_KEY。</div>
-        <div id="crawlStatus" class="notice"></div>
-        <pre id="crawlLogs" style="background:#111; color:#eaeaea; padding:12px; border-radius:10px; max-height:200px; overflow:auto; font-size:12px;"></pre>
-      </section>
+        <section id="pushView" class="section">
+          <div class="card">
+            <div class="actions">
+              <button class="primary" onclick="runReminderScan()">手動執行提醒掃描</button>
+              <span id="manualReminderStatus" class="muted"></span>
+            </div>
+          </div>
+          <div class="section-grid">
+            <div class="card">
+              <h3>最近 LINE 推播</h3>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>時間</th>
+                      <th>類型</th>
+                      <th>使用者</th>
+                      <th>狀態</th>
+                      <th>內容摘要</th>
+                    </tr>
+                  </thead>
+                  <tbody id="linePushBody"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="card">
+              <h3>提醒掃描紀錄</h3>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>時間</th>
+                      <th>來源</th>
+                      <th>有效行程</th>
+                      <th>實際掃描</th>
+                      <th>已推播</th>
+                    </tr>
+                  </thead>
+                  <tbody id="reminderRunsBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="eventsView" class="section">
+          <div class="grid stats" id="eventStatsGrid"></div>
+          <div class="section-grid">
+            <div class="card">
+              <h3>熱門事件</h3>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>事件名稱</th><th>次數</th></tr>
+                  </thead>
+                  <tbody id="topEventsBody"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="card">
+              <h3>熱門頁面</h3>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>頁面</th><th>次數</th></tr>
+                  </thead>
+                  <tbody id="topPagesBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <h3>近期 App 事件</h3>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>時間</th>
+                    <th>事件</th>
+                    <th>頁面</th>
+                    <th>使用者</th>
+                    <th>Payload</th>
+                  </tr>
+                </thead>
+                <tbody id="recentEventsBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section id="placesView" class="section">
+          <div class="card">
+            <div class="filters">
+              <label>關鍵字<input id="q" placeholder="名稱 / 地址 / 城市" /></label>
+              <label>tag<input id="category" placeholder="例如 museum" /></label>
+              <label>排序
+                <select id="sort">
+                  <option value="latest" selected>最新優先</option>
+                  <option value="oldest">最舊優先</option>
+                  <option value="name">名稱</option>
+                  <option value="city">城市</option>
+                  <option value="rating">評分</option>
+                </select>
+              </label>
+              <label><span>只看剛更新</span><input id="onlyRecent" type="checkbox" /></label>
+              <label><span>只看資料不完整</span><input id="onlyIncomplete" type="checkbox" /></label>
+            </div>
+            <div class="actions" style="margin-top:12px;">
+              <button class="primary" onclick="loadPlaces()">查詢</button>
+              <button onclick="openPlaceEditor()">新增景點</button>
+            </div>
+          </div>
+          <div class="card">
+            <h3>景點列表</h3>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>名稱</th>
+                    <th>來源 / 更新</th>
+                    <th>完整度</th>
+                    <th>標籤</th>
+                    <th>評分</th>
+                    <th>價格</th>
+                    <th>營業時間</th>
+                    <th>城市</th>
+                    <th>地址</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="placesBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section id="usersView" class="section">
+          <div class="card">
+            <div class="actions">
+              <button class="primary" onclick="loadUsers()">重新整理</button>
+            </div>
+          </div>
+          <div class="card">
+            <h3>使用者列表</h3>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>使用者</th>
+                    <th>聯絡資訊</th>
+                    <th>興趣偏好</th>
+                    <th>LINE / 有效行程</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="usersBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section id="importView" class="section">
+          <div class="card">
+            <h3>匯入與同步</h3>
+            <div class="actions">
+              <button class="primary" onclick="exportDb()">匯出 db.json</button>
+              <input type="file" id="importFile" />
+              <button onclick="importPlaces()">匯入 places</button>
+              <button onclick="importFromFile()">匯入 db.json 到資料庫</button>
+              <button onclick="syncFromRemote()">同步雲端資料到目前環境</button>
+              <button onclick="syncToLocal()">同步目前環境到本機</button>
+            </div>
+            <p class="muted">匯入格式需為 <code>{ "places": [ ... ] }</code>。同步功能依後端環境變數設定而定。</p>
+          </div>
+          <div class="card">
+            <h3>自動爬取</h3>
+            <div class="filters">
+              <label>模式
+                <select id="crawlMode" onchange="onCrawlModeChange()">
+                  <option value="places">抓景點 (fetch_places.py)</option>
+                  <option value="reviews">抓評論 + 標籤 (fetch_places_with_reviews.py)</option>
+                  <option value="merge_tags">合併標籤 (merge_tags_from_reviews.py)</option>
+                  <option value="merge_ratings">合併評分 (merge_ratings_from_reviews.py)</option>
+                  <option value="google_places">Google 抓景點 (fetch_places_from_google.py)</option>
+                </select>
+              </label>
+              <label id="crawlCityWrap" style="display:none;">縣市
+                <select id="crawlCity">
+                  <option value="">全部縣市（預設）</option>
+                  <option value="臺北市">臺北市</option>
+                  <option value="新北市">新北市</option>
+                  <option value="基隆市">基隆市</option>
+                  <option value="桃園市">桃園市</option>
+                  <option value="新竹市">新竹市</option>
+                  <option value="新竹縣">新竹縣</option>
+                  <option value="苗栗縣">苗栗縣</option>
+                  <option value="臺中市">臺中市</option>
+                  <option value="彰化縣">彰化縣</option>
+                  <option value="南投縣">南投縣</option>
+                  <option value="雲林縣">雲林縣</option>
+                  <option value="嘉義市">嘉義市</option>
+                  <option value="嘉義縣">嘉義縣</option>
+                  <option value="臺南市">臺南市</option>
+                  <option value="高雄市">高雄市</option>
+                  <option value="屏東縣">屏東縣</option>
+                  <option value="宜蘭縣">宜蘭縣</option>
+                  <option value="花蓮縣">花蓮縣</option>
+                  <option value="臺東縣">臺東縣</option>
+                  <option value="澎湖縣">澎湖縣</option>
+                  <option value="金門縣">金門縣</option>
+                  <option value="連江縣">連江縣</option>
+                </select>
+              </label>
+              <label id="crawlScopeWrap" style="display:none;">查詢範圍
+                <select id="crawlQueryScope">
+                  <option value="standard" selected>標準</option>
+                  <option value="expanded">擴充</option>
+                </select>
+              </label>
+              <label id="crawlRequestsWrap" style="display:none;">最大用量
+                <select id="crawlMaxRequests">
+                  <option value="100" selected>100</option>
+                  <option value="150">150</option>
+                  <option value="200">200</option>
+                  <option value="300">300</option>
+                  <option value="500">500</option>
+                </select>
+              </label>
+              <label id="crawlPagesWrap" style="display:none;">每查詢頁數
+                <select id="crawlMaxPages">
+                  <option value="2" selected>2</option>
+                  <option value="3">3</option>
+                  <option value="4">4</option>
+                </select>
+              </label>
+            </div>
+            <div class="actions" style="margin-top:12px;">
+              <button class="primary" onclick="startCrawl()">開始爬取</button>
+              <button onclick="stopCrawl()">停止</button>
+            </div>
+            <div id="crawlStatus" class="muted" style="margin-top:12px;"></div>
+            <pre id="crawlLogs">尚未開始爬取。</pre>
+          </div>
+        </section>
+      </main>
     </div>
 
-    <div id="editor" class="hidden">
-      <div class="card" style="position:fixed; right:20px; top:80px; width:360px; z-index:10; max-height:80vh; overflow:auto;">
-        <h3 id="editorTitle">新增景點</h3>
-        <input id="eid" placeholder="id (留空自動產生)" />
-        <input id="ename" placeholder="name" />
-        <input id="etags" placeholder="tags (逗號分隔)" />
-        <input id="ecity" placeholder="city" />
-        <input id="eaddress" placeholder="address" />
-        <input id="elat" placeholder="lat" />
-        <input id="elng" placeholder="lng" />
-        <input id="eimage" placeholder="imageUrl" />
-        <input id="erating" placeholder="rating (例如 4.5)" />
-        <input id="eratingTotal" placeholder="userRatingsTotal (例如 123)" />
-        <input id="epriceLevel" placeholder="priceLevel (0-4)" />
-        <input id="epriceCategory" placeholder="priceCategory (low/mid/high)" />
-        <textarea id="eopeningHours" rows="5" placeholder="openingHours (JSON，可留空)"></textarea>
-        <textarea id="edesc" rows="3" placeholder="description"></textarea>
-        <div class="row" style="margin-top:8px;">
-          <button class="primary" type="button" onclick="loadReviews()">查看評論</button>
+    <div id="placeModal" class="modal">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <h3 id="placeModalTitle">新增景點</h3>
+            <p class="muted" style="margin:8px 0 0;">支援手動修正景點、價格、營業時間與評論查看。</p>
+          </div>
+          <button onclick="closePlaceEditor()">關閉</button>
         </div>
-        <div id="reviewsPanel" class="hidden">
-          <p class="muted">評論/簡介</p>
+        <div class="field-grid" style="margin-top:18px;">
+          <label class="field">ID<input id="eid" placeholder="留空自動產生" /></label>
+          <label class="field">名稱<input id="ename" placeholder="name" /></label>
+          <label class="field full">tags<input id="etags" placeholder="逗號分隔，例如 museum, heritage" /></label>
+          <label class="field">城市<input id="ecity" placeholder="city" /></label>
+          <label class="field">地址<input id="eaddress" placeholder="address" /></label>
+          <label class="field">Lat<input id="elat" placeholder="lat" /></label>
+          <label class="field">Lng<input id="elng" placeholder="lng" /></label>
+          <label class="field full">圖片 URL<input id="eimage" placeholder="imageUrl" /></label>
+          <label class="field">評分<input id="erating" placeholder="例如 4.5" /></label>
+          <label class="field">評論數<input id="eratingTotal" placeholder="例如 1234" /></label>
+          <label class="field">priceLevel<input id="epriceLevel" placeholder="0 - 4" /></label>
+          <label class="field">priceCategory<input id="epriceCategory" placeholder="free / low / mid / high" /></label>
+          <label class="field full">openingHours JSON<textarea id="eopeningHours" placeholder='{"open_now":true,"weekday_text":["星期一: 09:00–17:00"]}'></textarea></label>
+          <label class="field full">描述<textarea id="edesc" placeholder="description"></textarea></label>
+        </div>
+        <div class="actions" style="margin-top:18px;">
+          <button class="primary" onclick="savePlace()">儲存</button>
+          <button onclick="loadReviews()">查看評論</button>
+        </div>
+        <div id="reviewsPanel" class="card" style="margin-top:18px; display:none;">
+          <h4>評論 / Google 簡介</h4>
           <div id="reviewsSummary" class="muted"></div>
           <ul id="reviewsList"></ul>
         </div>
-        <div class="row" style="margin-top:12px;">
-          <button class="primary" onclick="savePlace()">儲存</button>
-          <button onclick="closeEditor()">關閉</button>
+      </div>
+    </div>
+
+    <div id="planModal" class="modal">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <h3 id="planModalTitle">使用者有效行程</h3>
+            <p id="planModalMeta" class="muted" style="margin:8px 0 0;"></p>
+          </div>
+          <button onclick="closePlanModal()">關閉</button>
         </div>
+        <div id="planSummary" style="margin-top:18px;"></div>
+        <pre id="planJson" style="margin-top:18px;"></pre>
       </div>
     </div>
 
     <script>
       const api = '/api/admin';
-      function getToken() { return localStorage.getItem('adminToken') || ''; }
-      function setToken(token) { localStorage.setItem('adminToken', token); }
+      const state = {
+        currentView: 'overview',
+        metrics: null,
+        metricsTimer: null,
+      };
+
+      function getToken() {
+        return localStorage.getItem('adminToken') || '';
+      }
+
+      function setToken(token) {
+        localStorage.setItem('adminToken', token);
+      }
+
+      function clearToken() {
+        localStorage.removeItem('adminToken');
+      }
 
       function headers() {
-        return { 'Content-Type': 'application/json', 'x-admin-token': getToken() };
+        return {
+          'Content-Type': 'application/json',
+          'x-admin-token': getToken(),
+        };
       }
+
+      async function apiFetch(path, options = {}) {
+        const res = await fetch(`${api}${path}`, {
+          headers: headers(),
+          ...options,
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.message || data.error || `Request failed (${res.status})`);
+        }
+        return data;
+      }
+
+      function formatDateTime(value) {
+        if (!value) return '-';
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return '-';
+        return date.toLocaleString('zh-TW', {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        });
+      }
+
+      function escapeHtml(value) {
+        return String(value ?? '')
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+          .replaceAll("'", '&#39;');
+      }
+
+      function badge(label, cls = 'info') {
+        return `<span class="badge ${cls}">${label}</span>`;
+      }
+
+      function statusBadge(ok, okText = '正常', badText = '未設定') {
+        return ok
+          ? `<span class="badge ok">${okText}</span>`
+          : `<span class="badge warn">${badText}</span>`;
+      }
+
+      function showView(name) {
+        state.currentView = name;
+        document.querySelectorAll('.nav-item').forEach((button) => {
+          button.classList.toggle('active', button.dataset.view === name);
+        });
+        const titleMap = {
+          overview: ['儀表板', '監控服務狀態、資料流量、推播結果與近期請求。'],
+          push: ['推播與提醒', '查看 LINE 推播歷史、提醒掃描紀錄，並手動觸發下一輪掃描。'],
+          events: ['App 事件', '追蹤 Flutter 前端頁面瀏覽、登入、行程生成與編輯操作。'],
+          places: ['景點管理', '維護景點資料、查看完整度、價格與營業時間，並快速修正內容。'],
+          users: ['使用者', '查看興趣偏好、LINE 綁定、有效行程，並執行測試推播。'],
+          import: ['匯入、同步與爬蟲', '匯出資料、合併同步、控制爬蟲與檢查最後同步結果。'],
+        };
+        document.getElementById('viewTitle').innerText = titleMap[name][0];
+        document.getElementById('toolbarMeta').innerText = titleMap[name][1];
+        document.querySelectorAll('.section').forEach((section) => section.classList.remove('active'));
+        document.getElementById(`${name}View`).classList.add('active');
+        refreshCurrentView();
+      }
+
+      function startMetricsPolling() {
+        stopMetricsPolling();
+        loadMetrics();
+        state.metricsTimer = setInterval(loadMetrics, 5000);
+      }
+
+      function stopMetricsPolling() {
+        if (state.metricsTimer) {
+          clearInterval(state.metricsTimer);
+          state.metricsTimer = null;
+        }
+      }
+
+      async function login() {
+        const username = document.getElementById('adminUser').value.trim();
+        const password = document.getElementById('adminPass').value;
+        try {
+          const res = await fetch(`${api}/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            throw new Error(data.message || '登入失敗');
+          }
+          setToken(data.data.token);
+          bootstrapAdmin();
+        } catch (error) {
+          alert(error.message || '登入失敗');
+        }
+      }
+
+      function logout() {
+        stopMetricsPolling();
+        clearToken();
+        document.getElementById('loginShell').style.display = '';
+        document.getElementById('adminLayout').style.display = 'none';
+      }
+
+      async function bootstrapAdmin() {
+        if (!getToken()) {
+          logout();
+          return;
+        }
+        document.getElementById('loginShell').style.display = 'none';
+        document.getElementById('adminLayout').style.display = '';
+        startMetricsPolling();
+        await Promise.allSettled([loadPlaces(), loadUsers(), refreshCrawlStatus()]);
+        showView(state.currentView);
+      }
+
+      async function refreshCurrentView() {
+        if (state.currentView === 'overview' || state.currentView === 'push') {
+          await loadMetrics();
+        }
+        if (state.currentView === 'events') {
+          await loadMetrics();
+        }
+        if (state.currentView === 'places') {
+          await loadPlaces();
+        }
+        if (state.currentView === 'users') {
+          await loadUsers();
+        }
+        if (state.currentView === 'import') {
+          await refreshCrawlStatus();
+        }
+      }
+
+      async function loadMetrics() {
+        try {
+          const data = await apiFetch('/metrics');
+          state.metrics = data.data;
+          renderMetrics(data.data);
+        } catch (error) {
+          if (String(error.message).includes('未授權')) {
+            logout();
+            return;
+          }
+          console.error(error);
+        }
+      }
+
+      function renderMetrics(snapshot) {
+        if (!snapshot) return;
+        const stats = snapshot.stats || {};
+        const health = snapshot.health || {};
+        document.getElementById('statsGrid').innerHTML = [
+          ['總請求數', stats.totalRequests ?? 0],
+          ['近 5 分鐘請求', stats.requestsLast5Min ?? 0],
+          ['總錯誤數', stats.totalErrors ?? 0],
+          ['近 5 分鐘平均延遲 (ms)', stats.avgLatencyMsLast5Min ?? 0],
+          ['使用者數', stats.userCount ?? 0],
+          ['已綁 LINE', stats.lineLinkedUsers ?? 0],
+          ['已同步有效行程', stats.activePlanUsers ?? 0],
+          ['景點數', stats.placeCount ?? 0],
+        ].map(([label, value]) => `
+          <div class="stat">
+            <div class="label">${label}</div>
+            <div class="value">${value}</div>
+          </div>
+        `).join('');
+
+        document.getElementById('healthPills').innerHTML = [
+          ['資料儲存', health.dataStore || '-', health.dataStore ? 'ok' : 'warn'],
+          ['OpenAI', health.openAiConfigured, null],
+          ['LINE', health.lineConfigured, null],
+          ['Google Maps', health.googleMapsConfigured, null],
+          ['提醒 Cron', health.cronConfigured, null],
+          ['爬蟲執行中', health.crawlRunning, null],
+        ].map(([label, value, cls]) => {
+          const isBool = typeof value === 'boolean';
+          const dotClass = isBool ? (value ? 'ok' : 'warn') : 'ok';
+          const text = isBool ? (value ? '已啟用' : '未啟用') : value;
+          return `<div class="pill"><span class="dot ${cls || dotClass}"></span>${label}：${text}</div>`;
+        }).join('');
+
+        document.getElementById('topRoutesBody').innerHTML = renderRows(
+          snapshot.topRoutes || [],
+          (row) => `<tr><td>${escapeHtml(row.route)}</td><td>${row.count ?? 0}</td></tr>`,
+          2,
+          '尚無請求資料',
+        );
+
+        document.getElementById('recentRequestsBody').innerHTML = renderRows(
+          snapshot.recentRequests || [],
+          (row) => `
+            <tr>
+              <td>${formatDateTime(row.timestamp)}</td>
+              <td>${escapeHtml(row.method)}</td>
+              <td>${escapeHtml(row.path)}</td>
+              <td>${row.status >= 400 ? badge(row.status, 'danger') : badge(row.status, 'ok')}</td>
+              <td>${row.durationMs ?? 0} ms</td>
+              <td><code>${escapeHtml(JSON.stringify(row.query || {}))}</code></td>
+            </tr>
+          `,
+          6,
+          '尚無近期請求',
+        );
+
+        document.getElementById('linePushBody').innerHTML = renderRows(
+          snapshot.linePushHistory || [],
+          (row) => `
+            <tr>
+              <td>${formatDateTime(row.timestamp)}</td>
+              <td>${escapeHtml(row.category || '-')}</td>
+              <td>${escapeHtml(row.username || row.userId || '-')}</td>
+              <td>${row.status === 'success' ? badge('成功', 'ok') : badge('失敗', 'danger')}</td>
+              <td>${escapeHtml(row.preview || row.error || '-')}</td>
+            </tr>
+          `,
+          5,
+          '尚無 LINE 推播紀錄',
+        );
+
+        document.getElementById('reminderRunsBody').innerHTML = renderRows(
+          snapshot.reminderRuns || [],
+          (row) => `
+            <tr>
+              <td>${formatDateTime(row.timestamp)}</td>
+              <td>${escapeHtml(row.source || '-')}</td>
+              <td>${row.syncedPlans ?? 0}</td>
+              <td>${row.scannedUsers ?? 0}</td>
+              <td>${row.linePushed ?? 0}</td>
+            </tr>
+          `,
+          5,
+          '尚無提醒掃描紀錄',
+        );
+        document.getElementById('overviewReminderBody').innerHTML = renderRows(
+          snapshot.reminderRuns || [],
+          (row) => `
+            <tr>
+              <td>${formatDateTime(row.timestamp)}</td>
+              <td>${escapeHtml(row.source || '-')}</td>
+              <td>${row.scannedUsers ?? 0}</td>
+              <td>${row.linePushed ?? 0}</td>
+            </tr>
+          `,
+          4,
+          '尚無提醒掃描紀錄',
+        );
+
+        renderAppEvents(snapshot.appEvents || {});
+      }
+
+      function renderAppEvents(snapshot) {
+        document.getElementById('eventStatsGrid').innerHTML = [
+          ['總事件數', snapshot.totalEvents ?? 0],
+          ['近 5 分鐘事件', snapshot.eventsLast5Min ?? 0],
+          ['事件類型數', Array.isArray(snapshot.topEvents) ? snapshot.topEvents.length : 0],
+          ['頁面數', Array.isArray(snapshot.topPages) ? snapshot.topPages.length : 0],
+        ].map(([label, value]) => `
+          <div class="stat">
+            <div class="label">${label}</div>
+            <div class="value">${value}</div>
+          </div>
+        `).join('');
+
+        document.getElementById('topEventsBody').innerHTML = renderRows(
+          snapshot.topEvents || [],
+          (row) => `<tr><td>${escapeHtml(row.event)}</td><td>${row.count ?? 0}</td></tr>`,
+          2,
+          '尚無事件資料',
+        );
+
+        document.getElementById('topPagesBody').innerHTML = renderRows(
+          snapshot.topPages || [],
+          (row) => `<tr><td>${escapeHtml(row.page)}</td><td>${row.count ?? 0}</td></tr>`,
+          2,
+          '尚無頁面資料',
+        );
+
+        document.getElementById('recentEventsBody').innerHTML = renderRows(
+          snapshot.recentEvents || [],
+          (row) => `
+            <tr>
+              <td>${formatDateTime(row.timestamp)}</td>
+              <td>${escapeHtml(row.event || '-')}</td>
+              <td>${escapeHtml(row.page || '-')}</td>
+              <td>${escapeHtml(row.userId || '-')}</td>
+              <td><code>${escapeHtml(JSON.stringify(row.payload || {}))}</code></td>
+            </tr>
+          `,
+          5,
+          '尚無近期 App 事件',
+        );
+      }
+
+      function renderRows(items, renderer, columns, emptyText) {
+        if (!items || !items.length) {
+          return `<tr><td colspan="${columns}" class="empty">${emptyText}</td></tr>`;
+        }
+        return items.map(renderer).join('');
+      }
+
       function getTodayWeekdayKeys() {
-        const d = new Date().getDay(); // 0 Sun
-        const zh = ['星期日','星期一','星期二','星期三','星期四','星期五','星期六'];
-        const zhShort = ['週日','週一','週二','週三','週四','週五','週六'];
-        const en = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+        const d = new Date().getDay();
+        const zh = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+        const zhShort = ['週日', '週一', '週二', '週三', '週四', '週五', '週六'];
+        const en = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
         return [zh[d], zhShort[d], en[d]];
       }
+
       function summarizeOpeningHours(openingHours) {
         if (!openingHours || typeof openingHours !== 'object') return '-';
         const parts = [];
@@ -350,15 +1138,16 @@
         const lines = Array.isArray(openingHours.weekday_text) ? openingHours.weekday_text : [];
         if (lines.length) {
           const keys = getTodayWeekdayKeys();
-          const todayLine = lines.find(line => keys.some(k => String(line).startsWith(k)));
+          const todayLine = lines.find((line) => keys.some((k) => String(line).startsWith(k)));
           if (todayLine) {
-            parts.push(todayLine.replace(/\s+/g, ' ').trim());
+            parts.push(String(todayLine).replace(/\s+/g, ' ').trim());
           } else {
             parts.push(String(lines[0]).replace(/\s+/g, ' ').trim());
           }
         }
         return parts.join(' / ') || '有資料';
       }
+
       function formatOpeningHoursJson(openingHours) {
         if (!openingHours || typeof openingHours !== 'object') return '';
         try {
@@ -367,6 +1156,7 @@
           return '';
         }
       }
+
       function formatSource(source) {
         const value = String(source || '').trim();
         if (!value) return '未知來源';
@@ -374,37 +1164,19 @@
         if (value === 'admin') return '後台手動';
         return value;
       }
-      function formatUpdatedAt(updatedAt) {
-        if (!updatedAt) return '未記錄';
-        const date = new Date(updatedAt);
-        if (Number.isNaN(date.getTime())) return '未記錄';
-        return date.toLocaleString('zh-TW', {
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit',
-        });
-      }
+
       function isRecentUpdate(updatedAt) {
         if (!updatedAt) return false;
         const time = new Date(updatedAt).getTime();
         if (!Number.isFinite(time)) return false;
         return Date.now() - time <= 24 * 60 * 60 * 1000;
       }
+
       function inferPriceCategory(place) {
-        const tags = Array.isArray(place.tags)
-          ? place.tags.map(tag => String(tag || '').trim().toLowerCase())
-          : [];
-        const haystack = [
-          place.name,
-          place.city,
-          place.address,
-          place.description,
-          tags.join(' '),
-        ].join(' ').toLowerCase();
-        const hasAny = (keywords) => keywords.some(keyword => haystack.includes(keyword));
-        const hasTag = (values) => tags.some(tag => values.includes(tag));
+        const tags = Array.isArray(place.tags) ? place.tags.map((tag) => String(tag || '').trim().toLowerCase()) : [];
+        const haystack = [place.name, place.city, place.address, place.description, tags.join(' ')].join(' ').toLowerCase();
+        const hasAny = (keywords) => keywords.some((keyword) => haystack.includes(keyword));
+        const hasTag = (values) => tags.some((tag) => values.includes(tag));
         const extractExplicitTicketAmount = () => {
           const patterns = [
             /(?:nt\$|twd|\$)\s*(\d{2,5})/i,
@@ -416,71 +1188,23 @@
             const match = haystack.match(pattern);
             if (!match) continue;
             const amount = Number(match[1]);
-            if (Number.isFinite(amount) && amount > 0) {
-              return amount;
-            }
+            if (Number.isFinite(amount) && amount > 0) return amount;
           }
           return null;
         };
         const explicitAmount = extractExplicitTicketAmount();
-        if (explicitAmount != null) {
-          return explicitAmount >= 300 ? 'high' : 'low';
-        }
-        if (hasAny([
-          '免門票',
-          '免收門票',
-          '免費入場',
-          '免費參觀',
-          '自由入場',
-          '入場免費',
-          '門票免費',
-          '票價免費',
-          '參觀免費',
-          'free admission',
-          'free entry',
-        ])) {
+        if (explicitAmount != null) return explicitAmount >= 300 ? 'high' : 'low';
+        if (hasAny(['免門票', '免收門票', '免費入場', '免費參觀', '自由入場', '入場免費', '門票免費', '票價免費', '參觀免費', 'free admission', 'free entry'])) {
           return 'free';
         }
-        const hasExplicitPaidSignal = hasAny([
-          '門票',
-          '票價',
-          '全票',
-          '優待票',
-          '成人票',
-          '兒童票',
-          '入園費',
-          '入館費',
-          '入場費',
-          '購票',
-          '售票',
-          '售價',
-          '收費',
-        ]);
+        const hasExplicitPaidSignal = hasAny(['門票', '票價', '全票', '優待票', '成人票', '兒童票', '入園費', '入館費', '入場費', '購票', '售票', '售價', '收費']);
         if (!hasExplicitPaidSignal) {
-          if (
-            hasTag(['amusement_park', 'aquarium', 'zoo', 'rv_park', 'campground', 'spa']) ||
-            hasAny(['遊樂園', '主題樂園', '樂園', '水族館', '動物園', '海洋公園', '纜車', '渡假村', '觀景台', '摩天輪', '台北101', '臺北101'])
-          ) {
-            return 'high';
-          }
-          if (
-            hasTag(['lake_river', 'beach', 'national_park', 'waterfall', 'temple', 'night_market']) ||
-            hasAny(['公園', '老街', '步道', '古道', '海灘', '沙灘', '海岸', '湖', '溪', '瀑布', '河濱', '濕地', '夜市', '廟', '寺'])
-          ) {
-            return 'free';
-          }
-          if (
-            hasTag(['museum', 'heritage', 'creative_park', 'handcraft_shop']) ||
-            hasAny(['博物館', '美術館', '文學館', '文化館', '故事館', '紀念館', '教育園區', '園區', '展覽館', '古蹟', '觀光工廠', '文創'])
-          ) {
-            return 'low';
-          }
+          if (hasTag(['amusement_park', 'aquarium', 'zoo', 'rv_park', 'campground', 'spa']) || hasAny(['遊樂園', '主題樂園', '樂園', '水族館', '動物園', '海洋公園', '纜車', '渡假村', '觀景台', '摩天輪', '台北101', '臺北101'])) return 'high';
+          if (hasTag(['lake_river', 'beach', 'national_park', 'waterfall', 'temple', 'night_market']) || hasAny(['公園', '老街', '步道', '古道', '海灘', '沙灘', '海岸', '湖', '溪', '瀑布', '河濱', '濕地', '夜市', '廟', '寺'])) return 'free';
+          if (hasTag(['museum', 'heritage', 'creative_park', 'handcraft_shop']) || hasAny(['博物館', '美術館', '文學館', '文化館', '故事館', '紀念館', '教育園區', '園區', '展覽館', '古蹟', '觀光工廠', '文創'])) return 'low';
           return null;
         }
-        if (
-          hasTag(['amusement_park', 'aquarium', 'zoo', 'rv_park', 'campground', 'spa']) ||
-          hasAny(['遊樂園', '主題樂園', '樂園', '水族館', '動物園', '海洋公園', '纜車', '渡假村', '觀景台', '摩天輪', '台北101', '臺北101'])
-        ) {
+        if (hasTag(['amusement_park', 'aquarium', 'zoo', 'rv_park', 'campground', 'spa']) || hasAny(['遊樂園', '主題樂園', '樂園', '水族館', '動物園', '海洋公園', '纜車', '渡假村', '觀景台', '摩天輪', '台北101', '臺北101'])) {
           return 'high';
         }
         return 'low';
@@ -489,14 +1213,11 @@
       function effectivePriceCategory(place) {
         const inferred = inferPriceCategory(place);
         if (inferred) return inferred;
-        if (place.priceCategory === 'free' || place.priceLevel === 0) {
-          return null;
-        }
-        if (typeof place.priceCategory === 'string' && place.priceCategory.trim()) {
-          return place.priceCategory.trim();
-        }
+        if (place.priceCategory === 'free' || place.priceLevel === 0) return null;
+        if (typeof place.priceCategory === 'string' && place.priceCategory.trim()) return place.priceCategory.trim();
         return null;
       }
+
       function computeCompleteness(place) {
         const hasPrice = !!effectivePriceCategory(place);
         const checks = [
@@ -516,162 +1237,162 @@
           missing,
         };
       }
+
       function renderSourceMeta(place) {
-        const source = formatSource(place.source);
-        const updated = formatUpdatedAt(place.updatedAt);
-        const sourceClass = place.source === 'google_places' ? 'google' : (place.source === 'admin' ? 'admin' : '');
-        const chips = [`<span class="badge ${sourceClass}">${source}</span>`];
+        const chips = [badge(formatSource(place.source), place.source === 'google_places' ? 'info' : 'ok')];
         if (isRecentUpdate(place.updatedAt)) {
-          chips.push('<span class="badge recent">剛更新</span>');
+          chips.push(badge('剛更新', 'ok'));
         }
-        return `<div class="stack">${chips.join('')}<span class="meta">${updated}</span></div>`;
+        return `<div>${chips.join(' ')}<div class="muted" style="margin-top:6px;">${formatDateTime(place.updatedAt)}</div></div>`;
       }
+
       function renderCompleteness(place) {
         const info = computeCompleteness(place);
-        const stateClass = info.missing.length ? 'warn' : 'ok';
-        const stateLabel = info.missing.length ? '待補資料' : '完整';
-        const missingText = info.missing.length
-          ? `<div class="missing-list">缺：${info.missing.join('、')}</div>`
-          : `<div class="missing-list">圖片、評分、價格、營業時間皆完整</div>`;
-        return `<div class="stack"><span class="badge ${stateClass}">${info.score}/${info.total} ${stateLabel}</span>${missingText}</div>`;
+        const cls = info.missing.length ? 'warn' : 'ok';
+        const label = info.missing.length ? `待補 ${info.missing.join('、')}` : '欄位完整';
+        return `<div>${badge(`${info.score}/${info.total}`, cls)}<div class="muted" style="margin-top:6px;">${escapeHtml(label)}</div></div>`;
       }
+
       function formatPrice(place) {
         const category = effectivePriceCategory(place);
         if (category === 'free') return '免費';
         if (category === 'low') return '$';
         if (category === 'mid' || category === 'high') return '$$';
         if (place.priceLevel != null) {
-          if (place.priceLevel === 0 && !category) return '-';
-          if (Number(place.priceLevel) <= 0) return '免費';
+          if (Number(place.priceLevel) <= 0) return '-';
           if (Number(place.priceLevel) <= 1) return '$';
           return '$$';
         }
         return '-';
       }
-      function showTab(name) {
-        for (const sec of ['places','users','import']) {
-          document.getElementById(sec).classList.toggle('hidden', sec !== name);
-        }
-        document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
-      }
+
       async function loadPlaces() {
-        const q = document.getElementById('q').value;
-        const category = document.getElementById('category').value;
-        const sort = document.getElementById('sort').value;
-        const recent = document.getElementById('onlyRecent').checked;
-        const incomplete = document.getElementById('onlyIncomplete').checked;
-        const url = `${api}/places?q=${encodeURIComponent(q)}&category=${encodeURIComponent(category)}&sort=${encodeURIComponent(sort)}&recent=${recent ? '1' : '0'}&incomplete=${incomplete ? '1' : '0'}`;
-        const res = await fetch(url, { headers: headers() });
-        const data = await res.json().catch(() => ({}));
-        const body = document.getElementById('placesBody');
-        body.innerHTML = '';
-        if (!res.ok) {
-          const msg = data.message || data.error || '查詢失敗，請稍後再試';
-          body.innerHTML = `<tr><td colspan="10" class="muted">${msg}</td></tr>`;
-          return;
+        try {
+          const q = document.getElementById('q').value;
+          const category = document.getElementById('category').value;
+          const sort = document.getElementById('sort').value;
+          const recent = document.getElementById('onlyRecent').checked;
+          const incomplete = document.getElementById('onlyIncomplete').checked;
+          const data = await apiFetch(`/places?q=${encodeURIComponent(q)}&category=${encodeURIComponent(category)}&sort=${encodeURIComponent(sort)}&recent=${recent ? '1' : '0'}&incomplete=${incomplete ? '1' : '0'}`);
+          const places = data.data?.places || [];
+          document.getElementById('placesBody').innerHTML = renderRows(
+            places,
+            (p) => `
+              <tr>
+                <td>${escapeHtml(p.name)}</td>
+                <td>${renderSourceMeta(p)}</td>
+                <td>${renderCompleteness(p)}</td>
+                <td>${escapeHtml((p.tags || []).join(', '))}</td>
+                <td>${p.rating ? `${p.rating}★ ${p.userRatingsTotal ? `(${p.userRatingsTotal})` : ''}` : '-'}</td>
+                <td>${formatPrice(p)}</td>
+                <td>${escapeHtml(summarizeOpeningHours(p.openingHours))}</td>
+                <td>${escapeHtml(p.city || '-')}</td>
+                <td>${escapeHtml(p.address || '-')}</td>
+                <td>
+                  <div class="inline-actions">
+                    <button onclick='editPlace(${JSON.stringify(p)})'>編輯</button>
+                    <button class="danger" onclick='deletePlace("${p.id}")'>刪除</button>
+                  </div>
+                </td>
+              </tr>
+            `,
+            10,
+            '沒有符合條件的景點',
+          );
+        } catch (error) {
+          document.getElementById('placesBody').innerHTML = `<tr><td colspan="10" class="empty">${escapeHtml(error.message || '查詢失敗')}</td></tr>`;
         }
-        const places = data.data?.places || [];
-        if (!places.length) {
-          body.innerHTML = `<tr><td colspan="10" class="muted">沒有符合條件的資料</td></tr>`;
-          return;
-        }
-        places.forEach(p => {
-          const tr = document.createElement('tr');
-          const tags = (p.tags || []).join(', ');
-          const rating = p.rating ? `${p.rating}★` : '-';
-          const total = p.userRatingsTotal ? `(${p.userRatingsTotal})` : '';
-          const price = formatPrice(p);
-          const openingHours = summarizeOpeningHours(p.openingHours);
-          tr.innerHTML = `<td>${p.name}</td><td>${renderSourceMeta(p)}</td><td>${renderCompleteness(p)}</td><td>${tags}</td><td>${rating} ${total}</td><td>${price}</td><td>${openingHours}</td><td>${p.city}</td><td>${p.address}</td>
-            <td><button onclick='editPlace(${JSON.stringify(p)})'>編輯</button>
-            <button onclick='deletePlace("${p.id}")'>刪除</button></td>`;
-          body.appendChild(tr);
-        });
       }
+
       async function loadUsers() {
-        const res = await fetch(`${api}/users`, { headers: headers() });
-        const data = await res.json();
-        const body = document.getElementById('usersBody');
-        body.innerHTML = '';
-        (data.data?.users || []).forEach(u => {
-          const tr = document.createElement('tr');
-          tr.innerHTML = `<td>${u.username}</td><td>${u.email}</td><td>${u.phone}</td>
-            <td><button onclick='deleteUser("${u.id}")'>刪除</button></td>`;
-          body.appendChild(tr);
-        });
+        try {
+          const data = await apiFetch('/users');
+          const users = data.data?.users || [];
+          document.getElementById('usersBody').innerHTML = renderRows(
+            users,
+            (u) => `
+              <tr>
+                <td>
+                  <strong>${escapeHtml(u.username || '-')}</strong>
+                  <div class="muted">${escapeHtml(u.id || '-')}</div>
+                </td>
+                <td>
+                  <div>${escapeHtml(u.email || '-')}</div>
+                  <div class="muted">${escapeHtml(u.phone || '-')}</div>
+                </td>
+                <td>${u.interests?.length ? escapeHtml(u.interests.join(', ')) : '<span class="muted">尚未設定</span>'}</td>
+                <td>
+                  <div>${u.lineLinked ? badge('已綁定 LINE', 'ok') : badge('未綁定 LINE', 'warn')}</div>
+                  <div style="margin-top:8px;">${u.linePushEnabled ? badge('LINE 推播啟用', 'ok') : badge('LINE 推播關閉', 'warn')}</div>
+                  <div style="margin-top:8px;">${u.activePlanSynced ? badge('已同步有效行程', 'info') : badge('無有效行程', 'warn')}</div>
+                  <div class="muted" style="margin-top:8px;">${u.activePlanUpdatedAt ? `最後同步：${formatDateTime(u.activePlanUpdatedAt)}` : '尚未同步行程'}</div>
+                </td>
+                <td>
+                  <div class="inline-actions">
+                    <button onclick='viewActivePlan("${u.id}", "${escapeHtml(u.username || '')}")'>查看有效行程</button>
+                    <button onclick='sendAdminTestPush("${u.id}")'>測試 LINE 推播</button>
+                    <button class="danger" onclick='deleteUser("${u.id}")'>刪除</button>
+                  </div>
+                </td>
+              </tr>
+            `,
+            5,
+            '目前沒有使用者資料',
+          );
+        } catch (error) {
+          document.getElementById('usersBody').innerHTML = `<tr><td colspan="5" class="empty">${escapeHtml(error.message || '查詢失敗')}</td></tr>`;
+        }
       }
-      function openEditor() {
-        document.getElementById('editor').classList.remove('hidden');
-        document.getElementById('editorTitle').innerText = '新增景點';
-        ['eid','ename','etags','ecity','eaddress','elat','elng','eimage','erating','eratingTotal','epriceLevel','epriceCategory','eopeningHours','edesc'].forEach(id => document.getElementById(id).value = '');
-        document.getElementById('reviewsPanel').classList.add('hidden');
+
+      function openPlaceEditor() {
+        document.getElementById('placeModalTitle').innerText = '新增景點';
+        ['eid','ename','etags','ecity','eaddress','elat','elng','eimage','erating','eratingTotal','epriceLevel','epriceCategory','eopeningHours','edesc'].forEach((id) => {
+          document.getElementById(id).value = '';
+        });
+        document.getElementById('reviewsPanel').style.display = 'none';
         document.getElementById('reviewsSummary').innerText = '';
         document.getElementById('reviewsList').innerHTML = '';
+        document.getElementById('placeModal').classList.add('open');
       }
-      function closeEditor() { document.getElementById('editor').classList.add('hidden'); }
-      function editPlace(p) {
-        openEditor();
-        document.getElementById('editorTitle').innerText = '編輯景點';
-        document.getElementById('eid').value = p.id;
-        document.getElementById('ename').value = p.name;
-        document.getElementById('etags').value = (p.tags || []).join(', ');
-        document.getElementById('ecity').value = p.city;
-        document.getElementById('eaddress').value = p.address;
-        document.getElementById('elat').value = p.lat;
-        document.getElementById('elng').value = p.lng;
-        document.getElementById('eimage').value = p.imageUrl || '';
-        document.getElementById('erating').value = p.rating ?? '';
-        document.getElementById('eratingTotal').value = p.userRatingsTotal ?? '';
-        document.getElementById('epriceLevel').value = p.priceLevel ?? '';
-        document.getElementById('epriceCategory').value = p.priceCategory ?? '';
-        document.getElementById('eopeningHours').value = formatOpeningHoursJson(p.openingHours);
-        document.getElementById('edesc').value = p.description || '';
+
+      function closePlaceEditor() {
+        document.getElementById('placeModal').classList.remove('open');
       }
-      async function loadReviews() {
-        const name = document.getElementById('ename').value.trim();
-        const id = document.getElementById('eid').value.trim();
-        if (!name) {
-          alert('請先輸入景點名稱');
-          return;
-        }
-        try {
-          const qs = `name=${encodeURIComponent(name)}${id ? `&id=${encodeURIComponent(id)}` : ''}`;
-          const res = await fetch(`${api}/place-reviews?${qs}`, { headers: headers() });
-          const data = await res.json();
-          if (!res.ok) {
-            alert(data.message || '找不到評論');
-            return;
-          }
-          const panel = document.getElementById('reviewsPanel');
-          const summary = document.getElementById('reviewsSummary');
-          const list = document.getElementById('reviewsList');
-          panel.classList.remove('hidden');
-          summary.innerText = data.data?.editorial_summary || '';
-          list.innerHTML = '';
-          (data.data?.reviews || []).forEach(r => {
-            const li = document.createElement('li');
-            li.innerText = r;
-            list.appendChild(li);
-          });
-        } catch (err) {
-          alert('無法讀取評論，請確認後端已啟動');
-        }
+
+      function editPlace(place) {
+        openPlaceEditor();
+        document.getElementById('placeModalTitle').innerText = '編輯景點';
+        document.getElementById('eid').value = place.id || '';
+        document.getElementById('ename').value = place.name || '';
+        document.getElementById('etags').value = (place.tags || []).join(', ');
+        document.getElementById('ecity').value = place.city || '';
+        document.getElementById('eaddress').value = place.address || '';
+        document.getElementById('elat').value = place.lat ?? '';
+        document.getElementById('elng').value = place.lng ?? '';
+        document.getElementById('eimage').value = place.imageUrl || '';
+        document.getElementById('erating').value = place.rating ?? '';
+        document.getElementById('eratingTotal').value = place.userRatingsTotal ?? '';
+        document.getElementById('epriceLevel').value = place.priceLevel ?? '';
+        document.getElementById('epriceCategory').value = place.priceCategory ?? '';
+        document.getElementById('eopeningHours').value = formatOpeningHoursJson(place.openingHours);
+        document.getElementById('edesc').value = place.description || '';
       }
+
       async function savePlace() {
         let openingHours = null;
         const openingHoursRaw = document.getElementById('eopeningHours').value.trim();
         if (openingHoursRaw) {
           try {
             openingHours = JSON.parse(openingHoursRaw);
-          } catch (err) {
-            alert('openingHours JSON 格式錯誤，請確認格式後再儲存');
+          } catch (_) {
+            alert('openingHours JSON 格式錯誤');
             return;
           }
         }
         const payload = {
           id: document.getElementById('eid').value || undefined,
           name: document.getElementById('ename').value,
-          tags: document.getElementById('etags').value.split(',').map(t => t.trim()).filter(Boolean),
+          tags: document.getElementById('etags').value.split(',').map((item) => item.trim()).filter(Boolean),
           city: document.getElementById('ecity').value,
           address: document.getElementById('eaddress').value,
           lat: Number(document.getElementById('elat').value || 0),
@@ -685,215 +1406,258 @@
           description: document.getElementById('edesc').value,
         };
         const method = payload.id ? 'PUT' : 'POST';
-        const url = payload.id ? `${api}/places/${payload.id}` : `${api}/places`;
-        await fetch(url, { method, headers: headers(), body: JSON.stringify(payload) });
-        closeEditor();
-        loadPlaces();
+        const url = payload.id ? `/places/${payload.id}` : '/places';
+        try {
+          await apiFetch(url, {
+            method,
+            body: JSON.stringify(payload),
+          });
+          closePlaceEditor();
+          loadPlaces();
+        } catch (error) {
+          alert(error.message || '儲存失敗');
+        }
       }
+
+      async function loadReviews() {
+        const name = document.getElementById('ename').value.trim();
+        const id = document.getElementById('eid').value.trim();
+        if (!name) {
+          alert('請先輸入景點名稱');
+          return;
+        }
+        try {
+          const data = await apiFetch(`/place-reviews?name=${encodeURIComponent(name)}${id ? `&id=${encodeURIComponent(id)}` : ''}`);
+          document.getElementById('reviewsPanel').style.display = '';
+          document.getElementById('reviewsSummary').innerText = data.data?.editorial_summary || '';
+          document.getElementById('reviewsList').innerHTML = (data.data?.reviews || []).map((review) => `<li>${escapeHtml(review)}</li>`).join('');
+        } catch (error) {
+          alert(error.message || '讀取評論失敗');
+        }
+      }
+
       async function deletePlace(id) {
-        if (!confirm('確定刪除？')) return;
-        await fetch(`${api}/places/${id}`, { method: 'DELETE', headers: headers() });
-        loadPlaces();
+        if (!confirm('確定刪除這個景點？')) return;
+        try {
+          await apiFetch(`/places/${id}`, { method: 'DELETE' });
+          loadPlaces();
+        } catch (error) {
+          alert(error.message || '刪除失敗');
+        }
       }
+
+      async function viewActivePlan(userId, username) {
+        try {
+          const data = await apiFetch(`/users/${userId}/active-plan`);
+          const plan = data.data?.activePlan;
+          document.getElementById('planModalTitle').innerText = `${username || '使用者'} 的有效行程`;
+          document.getElementById('planModalMeta').innerText = data.data?.activePlanUpdatedAt
+            ? `最後同步：${formatDateTime(data.data.activePlanUpdatedAt)}`
+            : '尚未同步有效行程';
+          if (!plan || !Array.isArray(plan.days)) {
+            document.getElementById('planSummary').innerHTML = '<div class="empty">目前沒有有效行程資料。</div>';
+            document.getElementById('planJson').innerText = '';
+          } else {
+            const days = plan.days || [];
+            const totalStops = days.reduce((sum, day) => {
+              const items = Array.isArray(day.items) ? day.items : [];
+              return sum + items.length;
+            }, 0);
+            const summaryHtml = `
+              <div class="kv"><strong>地區</strong><div>${escapeHtml(plan.meta?.location || '-')}</div></div>
+              <div class="kv"><strong>日期</strong><div>${escapeHtml(plan.meta?.startDate || '-')} ~ ${escapeHtml(plan.meta?.endDate || '-')}</div></div>
+              <div class="kv"><strong>天數 / 景點數</strong><div>${days.length} 天 / ${totalStops} 站</div></div>
+            `;
+            document.getElementById('planSummary').innerHTML = summaryHtml;
+            document.getElementById('planJson').innerText = JSON.stringify(plan, null, 2);
+          }
+          document.getElementById('planModal').classList.add('open');
+        } catch (error) {
+          alert(error.message || '讀取有效行程失敗');
+        }
+      }
+
+      function closePlanModal() {
+        document.getElementById('planModal').classList.remove('open');
+      }
+
+      async function sendAdminTestPush(userId) {
+        try {
+          await apiFetch(`/users/${userId}/line-push-test`, { method: 'POST' });
+          alert('已送出 LINE 測試推播');
+          loadMetrics();
+        } catch (error) {
+          alert(error.message || '推播失敗');
+        }
+      }
+
       async function deleteUser(id) {
-        if (!confirm('確定刪除使用者？')) return;
-        await fetch(`${api}/users/${id}`, { method: 'DELETE', headers: headers() });
-        loadUsers();
+        if (!confirm('確定刪除這個使用者？')) return;
+        try {
+          await apiFetch(`/users/${id}`, { method: 'DELETE' });
+          loadUsers();
+          loadMetrics();
+        } catch (error) {
+          alert(error.message || '刪除失敗');
+        }
       }
+
+      async function runReminderScan() {
+        const status = document.getElementById('manualReminderStatus');
+        status.innerText = '提醒掃描執行中...';
+        try {
+          const data = await apiFetch('/reminders/run-now', { method: 'POST' });
+          status.innerText = `掃描完成：${data.data.scannedUsers || 0} 位，已推播 ${data.data.linePushed || 0} 則。`;
+          loadMetrics();
+        } catch (error) {
+          status.innerText = error.message || '提醒掃描失敗';
+        }
+      }
+
       async function exportDb() {
-        const res = await fetch(`${api}/export`, { headers: headers() });
-        const data = await res.json();
-        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'db.json';
-        a.click();
-        URL.revokeObjectURL(url);
+        try {
+          const res = await fetch(`${api}/export`, { headers: headers() });
+          const data = await res.json();
+          const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'db.json';
+          a.click();
+          URL.revokeObjectURL(url);
+        } catch (error) {
+          alert(error.message || '匯出失敗');
+        }
       }
+
       async function importPlaces() {
         const file = document.getElementById('importFile').files[0];
-        if (!file) return alert('請選擇檔案');
-        const text = await file.text();
-        const res = await fetch(`${api}/places/import`, { method: 'POST', headers: headers(), body: text });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          return alert(data.message || '匯入失敗');
+        if (!file) {
+          alert('請先選擇檔案');
+          return;
         }
-        alert(`匯入完成：${data.data?.count || 0} 筆`);
-        loadPlaces();
-      }
-      async function importFromFile() {
-        if (!confirm('將 /app/data/db.json 匯入資料庫，確定要執行？')) return;
-        const res = await fetch(`${api}/import-from-file`, { method: 'POST', headers: headers() });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          return alert(data.message || '匯入失敗');
-        }
-        alert(`匯入完成：${data.data?.count || 0} 筆`);
-        loadPlaces();
-      }
-      async function syncFromRemote() {
-        if (!confirm('會以雲端資料覆蓋本機景點，確定要同步？')) return;
-        const res = await fetch(`${api}/sync-from-remote`, { method: 'POST', headers: headers() });
-        const data = await res.json();
-        if (!res.ok) {
-          return alert(data.message || '同步失敗');
-        }
-        alert(`同步完成：${data.data?.count || 0} 筆`);
-        loadPlaces();
-      }
-      async function syncToLocal() {
-        if (!confirm('會把雲端資料同步到本機，確定要執行？')) return;
-        const res = await fetch(`${api}/sync-to-local`, { method: 'POST', headers: headers() });
-        const data = await res.json();
-        if (!res.ok) {
-          return alert(data.message || '同步失敗');
-        }
-        alert(`已同步到本機：${data.data?.count || 0} 筆`);
-      }
-      let crawlTimer = null;
-      async function startCrawl() {
-        const status = document.getElementById('crawlStatus');
-        const logs = document.getElementById('crawlLogs');
-        const mode = document.getElementById('crawlMode').value;
-        const city = document.getElementById('crawlCity').value;
-        const maxRequests = parseInt(document.getElementById('crawlMaxRequests').value, 10);
-        const maxPages = parseInt(document.getElementById('crawlMaxPages').value, 10);
-        const queryScope = document.getElementById('crawlQueryScope').value;
-        status.textContent = '啟動中...';
-        logs.textContent = '';
         try {
-          const res = await fetch(`${api}/crawl/start`, {
+          const text = await file.text();
+          const data = await apiFetch('/places/import', {
             method: 'POST',
-            headers: headers(),
-            body: JSON.stringify({
-              mode,
-              city,
-              maxRequests: mode === 'google_places' ? maxRequests : null,
-              maxPages: mode === 'google_places' ? maxPages : null,
-              queryScope: mode === 'google_places' ? queryScope : '',
-            }),
+            body: text,
           });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) {
-            const msg = data.message || data.error || '啟動失敗';
-            status.textContent = msg;
-            alert(msg);
-            return;
-          }
-          await refreshCrawlStatus();
-          if (!crawlTimer) {
-            crawlTimer = setInterval(refreshCrawlStatus, 2000);
-          }
-        } catch (err) {
-          status.textContent = '啟動失敗（無法連線）';
-          alert('無法連線到後端，請確認後端已啟動');
+          alert(`匯入完成：${data.data?.count || 0} 筆`);
+          loadPlaces();
+          loadMetrics();
+        } catch (error) {
+          alert(error.message || '匯入失敗');
         }
       }
+
+      async function importFromFile() {
+        if (!confirm('將目前 /app/data/db.json 合併到資料庫，確定要執行？')) return;
+        try {
+          const data = await apiFetch('/import-from-file', { method: 'POST' });
+          alert(`匯入完成：${data.data?.count || 0} 筆`);
+          loadPlaces();
+          loadMetrics();
+        } catch (error) {
+          alert(error.message || '匯入失敗');
+        }
+      }
+
+      async function syncFromRemote() {
+        if (!confirm('會以遠端管理後台匯出資料合併到目前環境，確定執行？')) return;
+        try {
+          const data = await apiFetch('/sync-from-remote', { method: 'POST' });
+          alert(`同步完成：${data.data?.count || 0} 筆`);
+          loadPlaces();
+          loadMetrics();
+        } catch (error) {
+          alert(error.message || '同步失敗');
+        }
+      }
+
+      async function syncToLocal() {
+        if (!confirm('會把目前環境的景點同步到本機 API，確定執行？')) return;
+        try {
+          const data = await apiFetch('/sync-to-local', { method: 'POST' });
+          alert(`同步到本機完成：${data.data?.count || 0} 筆`);
+        } catch (error) {
+          alert(error.message || '同步失敗');
+        }
+      }
+
       function onCrawlModeChange() {
         const mode = document.getElementById('crawlMode').value;
-        const citySelect = document.getElementById('crawlCity');
-        const googleOptions = document.getElementById('crawlGoogleOptions');
-        citySelect.classList.toggle('hidden', mode !== 'google_places');
-        googleOptions.classList.toggle('hidden', mode !== 'google_places');
+        const google = mode === 'google_places';
+        document.getElementById('crawlCityWrap').style.display = google ? '' : 'none';
+        document.getElementById('crawlScopeWrap').style.display = google ? '' : 'none';
+        document.getElementById('crawlRequestsWrap').style.display = google ? '' : 'none';
+        document.getElementById('crawlPagesWrap').style.display = google ? '' : 'none';
       }
-      async function stopCrawl() {
-        const status = document.getElementById('crawlStatus');
+
+      async function startCrawl() {
         try {
-          await fetch(`${api}/crawl/stop`, { method: 'POST', headers: headers() });
-          await refreshCrawlStatus();
-        } catch (err) {
-          status.textContent = '停止失敗（無法連線）';
-          alert('無法連線到後端，請確認後端已啟動');
-        }
-      }
-      async function refreshCrawlStatus() {
-        let data = {};
-        let res;
-        try {
-          res = await fetch(`${api}/crawl/status`, { headers: headers() });
-          data = await res.json().catch(() => ({}));
-        } catch (err) {
-          const status = document.getElementById('crawlStatus');
-          const logs = document.getElementById('crawlLogs');
-          status.textContent = '無法連線到後端';
-          logs.textContent = '';
-          if (crawlTimer) {
-            clearInterval(crawlTimer);
-            crawlTimer = null;
-          }
-          return;
-        }
-        const status = document.getElementById('crawlStatus');
-        const logs = document.getElementById('crawlLogs');
-        if (res && !res.ok) {
-          const msg = data.message || data.error || '讀取狀態失敗';
-          status.textContent = msg;
-          logs.textContent = '';
-          if (crawlTimer) {
-            clearInterval(crawlTimer);
-            crawlTimer = null;
-          }
-          return;
-        }
-        const job = data.data || {};
-        if (!job.running && !job.id) {
-          status.textContent = '目前沒有爬取任務。';
-          logs.textContent = '';
-          if (crawlTimer) {
-            clearInterval(crawlTimer);
-            crawlTimer = null;
-          }
-          return;
-        }
-        const cityText = job.city ? `, 縣市: ${job.city}` : '';
-        const endText = job.finished_at ? `, 結束 ${job.finished_at}` : '';
-        status.textContent = `狀態: ${job.running ? '進行中' : '已結束'} (模式: ${job.mode}${cityText}${endText})`;
-        logs.textContent = (job.logs || []).join('\n');
-        if (!job.running && crawlTimer) {
-          clearInterval(crawlTimer);
-          crawlTimer = null;
-        }
-      }
-
-      async function login() {
-        const username = document.getElementById('adminUser').value;
-        const password = document.getElementById('adminPass').value;
-        if (!username || !password) return alert('請輸入管理員帳密');
-        const res = await fetch(`${api}/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password }),
-        });
-        const data = await res.json();
-        if (!res.ok || !data.data?.token) {
-          return alert(data.message || '登入失敗');
-        }
-        setToken(data.data.token);
-        alert('登入成功');
-        toggleAuthUi();
-      }
-
-      function logout() {
-        localStorage.removeItem('adminToken');
-        toggleAuthUi();
-      }
-
-      function toggleAuthUi() {
-        const loggedIn = !!getToken();
-        document.getElementById('loginCard').classList.toggle('hidden', loggedIn);
-        document.getElementById('adminApp').classList.toggle('hidden', !loggedIn);
-        document.getElementById('logoutBtn').classList.toggle('hidden', !loggedIn);
-        if (loggedIn) {
-          onCrawlModeChange();
-          loadPlaces();
+          const body = {
+            mode: document.getElementById('crawlMode').value,
+            city: document.getElementById('crawlCity').value,
+            maxRequests: Number(document.getElementById('crawlMaxRequests').value || 0),
+            maxPages: Number(document.getElementById('crawlMaxPages').value || 0),
+            queryScope: document.getElementById('crawlQueryScope').value,
+          };
+          const data = await apiFetch('/crawl/start', {
+            method: 'POST',
+            body: JSON.stringify(body),
+          });
+          document.getElementById('crawlStatus').innerText = data.message || '已開始爬取';
           refreshCrawlStatus();
+        } catch (error) {
+          document.getElementById('crawlStatus').innerText = error.message || '啟動爬蟲失敗';
         }
       }
 
+      async function stopCrawl() {
+        try {
+          const data = await apiFetch('/crawl/stop', { method: 'POST' });
+          document.getElementById('crawlStatus').innerText = data.message || '已送出停止指令';
+          refreshCrawlStatus();
+        } catch (error) {
+          document.getElementById('crawlStatus').innerText = error.message || '停止爬蟲失敗';
+        }
+      }
+
+      async function refreshCrawlStatus() {
+        try {
+          const data = await apiFetch('/crawl/status');
+          const job = data.data;
+          const statusEl = document.getElementById('crawlStatus');
+          const logsEl = document.getElementById('crawlLogs');
+          if (!job || job.running === false && !job.id) {
+            statusEl.innerText = '目前沒有爬取進行中。';
+            logsEl.innerText = '尚未開始爬取。';
+            return;
+          }
+          const parts = [];
+          parts.push(`模式：${job.mode || '-'}${job.city ? ` / ${job.city}` : ''}`);
+          parts.push(job.running ? '狀態：執行中' : `狀態：已結束（exitCode=${job.exit_code}）`);
+          if (job.sync_message) {
+            parts.push(`同步：${job.sync_message}`);
+          }
+          statusEl.innerText = parts.join(' ｜ ');
+          logsEl.innerText = (job.logs || []).join('\n') || '尚無日誌';
+        } catch (error) {
+          document.getElementById('crawlStatus').innerText = error.message || '讀取爬蟲狀態失敗';
+        }
+      }
+
+      document.getElementById('placeModal').addEventListener('click', (event) => {
+        if (event.target.id === 'placeModal') closePlaceEditor();
+      });
+      document.getElementById('planModal').addEventListener('click', (event) => {
+        if (event.target.id === 'planModal') closePlanModal();
+      });
+
+      if (getToken()) {
+        bootstrapAdmin();
+      }
       onCrawlModeChange();
-      toggleAuthUi();
     </script>
   </body>
 </html>

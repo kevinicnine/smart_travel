@@ -222,6 +222,23 @@ class BackendApi {
     );
   }
 
+  Future<void> reportAppEvent({
+    required String event,
+    String? page,
+    String? userId,
+    String? sessionId,
+    Map<String, dynamic>? payload,
+  }) async {
+    await _post('/api/analytics/events', {
+      'event': event,
+      if (page != null && page.trim().isNotEmpty) 'page': page.trim(),
+      if (userId != null && userId.trim().isNotEmpty) 'userId': userId.trim(),
+      if (sessionId != null && sessionId.trim().isNotEmpty)
+        'sessionId': sessionId.trim(),
+      if (payload != null && payload.isNotEmpty) 'payload': payload,
+    }, timeout: const Duration(seconds: 8), timeoutMessage: '事件上報逾時');
+  }
+
   Future<List<Map<String, dynamic>>> fetchPlaces({
     List<String>? tags,
     String? query,

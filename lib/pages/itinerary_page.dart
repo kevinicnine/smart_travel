@@ -52,6 +52,17 @@ class _ItineraryPageState extends State<ItineraryPage> {
     unawaited(_loadContextAwarenessForSelectedDay());
     unawaited(_syncActivePlanToCloud());
     _refreshContextAwarenessPolling();
+    unawaited(
+      _reportEvent(
+        'page_view',
+        payload: {
+          'days': _plan.days.length,
+          'location': _planJson['meta'] is Map
+              ? (_planJson['meta'] as Map)['location']?.toString()
+              : null,
+        },
+      ),
+    );
   }
 
   @override
@@ -656,7 +667,14 @@ class _ItineraryPageState extends State<ItineraryPage> {
     }
     try {
       await _api.syncActivePlan(userId: userId, plan: _planJson);
+      unawaited(
+        _reportEvent(
+          'active_plan_sync_success',
+          payload: {'days': _plan.days.length},
+        ),
+      );
     } on ApiClientException {
+      unawaited(_reportEvent('active_plan_sync_failed'));
       // 保持前端可用；雲端同步失敗時不阻斷本地行程操作。
     }
   }
@@ -805,6 +823,17 @@ class _ItineraryPageState extends State<ItineraryPage> {
     }
     items.insert(insertIndex.clamp(0, items.length), moved);
     await _applyManualDayEdit(day, items);
+    unawaited(
+      _reportEvent(
+        'itinerary_stop_reordered',
+        payload: {
+          'day': day.day,
+          'fromIndex': fromIndex,
+          'toIndex': toIndex,
+          'place': fromItem.place.name,
+        },
+      ),
+    );
     _showTopMessage('已更新景點順序並重算時間');
   }
 
@@ -916,6 +945,17 @@ class _ItineraryPageState extends State<ItineraryPage> {
         .toList();
     items[itemIndex]['durationMinutes'] = result;
     await _applyManualDayEdit(day, items);
+    unawaited(
+      _reportEvent(
+        'itinerary_stop_duration_updated',
+        payload: {
+          'day': day.day,
+          'index': itemIndex,
+          'place': item.place.name,
+          'durationMinutes': result,
+        },
+      ),
+    );
     _showTopMessage('已更新 ${item.place.name} 的停留時間');
   }
 
@@ -1003,6 +1043,16 @@ class _ItineraryPageState extends State<ItineraryPage> {
         .toList();
     items.removeAt(itemIndex);
     await _applyManualDayEdit(day, items);
+    unawaited(
+      _reportEvent(
+        'itinerary_stop_deleted',
+        payload: {
+          'day': day.day,
+          'index': itemIndex,
+          'place': item.place.name,
+        },
+      ),
+    );
     _showTopMessage('已刪除 ${item.place.name}');
   }
 
@@ -1659,7 +1709,35 @@ class _ItineraryPageState extends State<ItineraryPage> {
     );
     if (confirmed != true) return;
     await _applyMealSelection(day, itemIndex, mealItem, candidate.raw);
+    unawaited(
+      _reportEvent(
+        'meal_break_place_applied',
+        payload: {
+          'day': day.day,
+          'mealType': mealItem.place.tags.contains('dinner') ? 'dinner' : 'lunch',
+          'place': candidate.place.name,
+          'fromPrevMinutes': candidate.fromPrevMinutes,
+          'toNextMinutes': candidate.toNextMinutes,
+        },
+      ),
+    );
     _showTopMessage('已套用 ${candidate.place.name} 並重算時間交通');
+  }
+
+  Future<void> _reportEvent(
+    String event, {
+    Map<String, dynamic>? payload,
+  }) async {
+    try {
+      await _api.reportAppEvent(
+        event: event,
+        page: 'itinerary',
+        userId: UserState.userId,
+        payload: payload,
+      );
+    } on ApiClientException {
+      // Ignore analytics failures.
+    }
   }
 
   Future<void> _applyMealSelection(

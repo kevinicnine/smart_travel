@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui';
@@ -72,6 +73,12 @@ class _HomePageState extends State<HomePage> {
     _loadFavorites();
     _loadSavedTrips();
     _loadPlacesFromBackend();
+    unawaited(
+      _reportEvent(
+        'page_view',
+        payload: {'interestCount': widget.selectedInterestIds.length},
+      ),
+    );
   }
 
   @override
@@ -279,23 +286,57 @@ class _HomePageState extends State<HomePage> {
     if (_generatingPlan) return;
 
     if (_startDate == null || _endDate == null) {
+      unawaited(
+        _reportEvent(
+          'itinerary_generate_validation_failed',
+          payload: {'reason': 'missing_dates'},
+        ),
+      );
       _showMessage('請先選擇開始與結束日期');
       return;
     }
     if (_endDate!.isBefore(_startDate!)) {
+      unawaited(
+        _reportEvent(
+          'itinerary_generate_validation_failed',
+          payload: {'reason': 'invalid_date_range'},
+        ),
+      );
       _showMessage('結束日期必須在開始日期之後');
       return;
     }
     if (_selectedOriginCity == null || _selectedOriginCity!.isEmpty) {
+      unawaited(
+        _reportEvent(
+          'itinerary_generate_validation_failed',
+          payload: {'reason': 'missing_origin_city'},
+        ),
+      );
       _showMessage('請先選擇出發地');
       return;
     }
     if (_selectedDestinationCities.isEmpty) {
+      unawaited(
+        _reportEvent(
+          'itinerary_generate_validation_failed',
+          payload: {'reason': 'missing_destination_cities'},
+        ),
+      );
       _showMessage('請至少選擇一個旅遊城市');
       return;
     }
     final localFeasibility = _evaluateLocalRouteFeasibility();
     if (localFeasibility != null) {
+      unawaited(
+        _reportEvent(
+          'itinerary_generate_blocked',
+          payload: {
+            'reason': 'local_feasibility',
+            'message': localFeasibility.message,
+            'destinationCount': _selectedDestinationCities.length,
+          },
+        ),
+      );
       await _showPlannerSuggestionDialogContent(
         title: '城市組合不建議直接排程',
         message: localFeasibility.message,
@@ -308,6 +349,16 @@ class _HomePageState extends State<HomePage> {
     setState(() {
       _generatingPlan = true;
     });
+    unawaited(
+      _reportEvent(
+        'itinerary_generate_attempt',
+        payload: {
+          'destinationCount': _selectedDestinationCities.length,
+          'tripPurpose': _selectedTripPurpose,
+          'budgetTier': _selectedBudgetTier,
+        },
+      ),
+    );
 
     try {
       final destinationLabel = _selectedDestinationCities.join('、');
@@ -324,6 +375,18 @@ class _HomePageState extends State<HomePage> {
         budget: _budgetToValue(_selectedBudgetTier),
       );
       await _saveGeneratedTrip(plan);
+      final rawDays = plan['days'];
+      final dayCount = rawDays is List ? rawDays.length : 0;
+      unawaited(
+        _reportEvent(
+          'itinerary_generate_success',
+          payload: {
+            'destinationCount': _selectedDestinationCities.length,
+            'tripPurpose': _selectedTripPurpose,
+            'days': dayCount,
+          },
+        ),
+      );
       if (!mounted) return;
       _showMessage('行程已儲存到「旅程」');
       Navigator.push(
@@ -331,6 +394,12 @@ class _HomePageState extends State<HomePage> {
         MaterialPageRoute(builder: (_) => ItineraryPage(plan: plan)),
       );
     } on ApiClientException catch (error) {
+      unawaited(
+        _reportEvent(
+          'itinerary_generate_failed',
+          payload: {'message': error.message, 'statusCode': error.statusCode},
+        ),
+      );
       if (_shouldShowPlannerSuggestionDialog(error)) {
         await _showPlannerSuggestionDialog(error);
       } else {
@@ -342,6 +411,22 @@ class _HomePageState extends State<HomePage> {
           _generatingPlan = false;
         });
       }
+    }
+  }
+
+  Future<void> _reportEvent(
+    String event, {
+    Map<String, dynamic>? payload,
+  }) async {
+    try {
+      await _api.reportAppEvent(
+        event: event,
+        page: 'home',
+        userId: UserState.userId,
+        payload: payload,
+      );
+    } on ApiClientException {
+      // Ignore analytics failures.
     }
   }
 

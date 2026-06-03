@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -23,6 +24,12 @@ class _LoginPageState extends State<LoginPage> {
 
   String captchaText = _generateCaptcha();
   bool _isLoggingIn = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_reportEvent('page_view'));
+  }
 
   static String _generateCaptcha({int length = 5}) {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
@@ -61,6 +68,9 @@ class _LoginPageState extends State<LoginPage> {
   Future<void> _onLoginPressed() async {
     final captchaInput = _normalizeCaptchaInput(captchaController.text);
     if (captchaInput != captchaText.toUpperCase()) {
+      unawaited(
+        _reportEvent('login_validation_failed', payload: {'reason': 'captcha'}),
+      );
       _showMessage('驗證碼錯誤');
       return;
     }
@@ -68,6 +78,12 @@ class _LoginPageState extends State<LoginPage> {
     final account = accountController.text.trim();
     final password = passwordController.text;
     if (account.isEmpty || password.isEmpty) {
+      unawaited(
+        _reportEvent(
+          'login_validation_failed',
+          payload: {'reason': 'missing_credentials'},
+        ),
+      );
       _showMessage('請輸入帳號與密碼');
       return;
     }
@@ -75,6 +91,7 @@ class _LoginPageState extends State<LoginPage> {
     setState(() {
       _isLoggingIn = true;
     });
+    unawaited(_reportEvent('login_attempt', payload: {'account': account}));
 
     try {
       final user = await BackendApi.instance.login(
@@ -97,6 +114,16 @@ class _LoginPageState extends State<LoginPage> {
           await UserState.saveSelectedInterests(interests);
         }
       }
+      unawaited(
+        _reportEvent(
+          'login_success',
+          userId: user['id']?.toString(),
+          payload: {
+            'hasSavedInterests': UserState.hasSavedInterests,
+            'lineLinked': user['lineLinked'] == true,
+          },
+        ),
+      );
       if (!mounted) return;
       final nextPage = UserState.hasSavedInterests
           ? HomePage(
@@ -109,6 +136,12 @@ class _LoginPageState extends State<LoginPage> {
         MaterialPageRoute(builder: (_) => nextPage),
       );
     } on ApiClientException catch (error) {
+      unawaited(
+        _reportEvent(
+          'login_failed',
+          payload: {'message': error.message, 'statusCode': error.statusCode},
+        ),
+      );
       _showMessage(error.message);
     } finally {
       if (mounted) {
@@ -116,6 +149,23 @@ class _LoginPageState extends State<LoginPage> {
           _isLoggingIn = false;
         });
       }
+    }
+  }
+
+  Future<void> _reportEvent(
+    String event, {
+    String? userId,
+    Map<String, dynamic>? payload,
+  }) async {
+    try {
+      await BackendApi.instance.reportAppEvent(
+        event: event,
+        page: 'login',
+        userId: userId ?? UserState.userId,
+        payload: payload,
+      );
+    } on ApiClientException {
+      // Ignore analytics failures.
     }
   }
 

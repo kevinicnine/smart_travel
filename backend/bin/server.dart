@@ -30,6 +30,7 @@ String? _openAiModel;
 String? _lineChannelSecret;
 String? _lineAddFriendUrl;
 String? _reminderCronToken;
+late final String _dataStoreLabel;
 late final String? _adminToken;
 late final String? _adminUser;
 late final String? _adminPass;
@@ -39,6 +40,13 @@ late final NotificationService _notificationService;
 _CrawlJob? _crawlJob;
 final Map<String, _LineLinkCode> _lineLinkCodes = {};
 final Map<String, DateTime> _lineContextPushCooldown = {};
+final Map<String, int> _requestPathCounts = {};
+final List<Map<String, dynamic>> _recentRequestLogs = [];
+final List<Map<String, dynamic>> _linePushHistory = [];
+final List<Map<String, dynamic>> _reminderRunHistory = [];
+final List<Map<String, dynamic>> _appEventHistory = [];
+int _totalRequestCount = 0;
+int _totalErrorCount = 0;
 
 class _CrawlJob {
   _CrawlJob({
@@ -175,14 +183,17 @@ Future<void> main(List<String> args) async {
   final postgresConfig = PostgresConfig.fromEnv();
   final mysqlConfig = MySqlConfig.fromEnv();
   if (postgresConfig != null) {
+    _dataStoreLabel = 'postgres';
     _log.info(
       'Data store: Postgres host=${postgresConfig.host} db=${postgresConfig.database} ssl=${postgresConfig.useSsl}',
     );
   } else if (mysqlConfig != null) {
+    _dataStoreLabel = 'mysql';
     _log.info(
       'Data store: MySQL host=${mysqlConfig.host}:${mysqlConfig.port} db=${mysqlConfig.database}',
     );
   } else {
+    _dataStoreLabel = 'json';
     _log.info('Data store: Local JSON (db.json)');
   }
   final store = DataStore.create(
@@ -299,6 +310,30 @@ Future<void> main(List<String> args) async {
           message: '已取得餐廳候選',
           data: {'places': suggestions},
         );
+      }),
+    )
+    ..post(
+      '/api/analytics/events',
+      (req) => _json(req, (body) async {
+        final event = _asString(body, 'event').trim();
+        final page = _asString(body, 'page').trim();
+        final userId = _asString(body, 'userId').trim();
+        final sessionId = _asString(body, 'sessionId').trim();
+        final payload = body['payload'] is Map
+            ? Map<String, dynamic>.from(body['payload'] as Map)
+            : <String, dynamic>{};
+        if (event.isEmpty) {
+          throw ApiException(400, '缺少事件名稱');
+        }
+        _recordAppEvent(
+          request: req,
+          event: event,
+          page: page.isEmpty ? null : page,
+          userId: userId.isEmpty ? null : userId,
+          sessionId: sessionId.isEmpty ? null : sessionId,
+          payload: payload,
+        );
+        return successBody(message: '事件已記錄');
       }),
     )
     ..post(
@@ -577,6 +612,36 @@ Future<void> main(List<String> args) async {
       }),
     )
     ..get(
+      '/api/admin/metrics',
+      (req) => _withAdmin(req, () async {
+        final snapshot = await _buildAdminMetricsSnapshot();
+        return jsonResponse(
+          200,
+          successBody(message: '已取得即時監控資料', data: snapshot),
+        );
+      }),
+    )
+    ..post(
+      '/api/admin/analytics/events',
+      (req) => _withAdmin(req, () async {
+        final snapshot = _buildAppEventSnapshot();
+        return jsonResponse(
+          200,
+          successBody(message: '已取得 App 事件監控資料', data: snapshot),
+        );
+      }),
+    )
+    ..post(
+      '/api/admin/reminders/run-now',
+      (req) => _withAdmin(req, () async {
+        final result = await _runUpcomingReminderScan(triggerSource: 'admin');
+        return jsonResponse(
+          200,
+          successBody(message: '已手動執行提醒掃描', data: result),
+        );
+      }),
+    )
+    ..get(
       '/api/admin/users',
       (req) => _withAdmin(req, () async {
         final data = await store.read();
@@ -586,6 +651,47 @@ Future<void> main(List<String> args) async {
             data: {'users': data.users.map((u) => u.toPublicJson()).toList()},
           ),
         );
+      }),
+    )
+    ..get(
+      '/api/admin/users/<id>/active-plan',
+      (req, String id) => _withAdmin(req, () async {
+        final user = await _store.findUserById(id);
+        if (user == null) {
+          throw ApiException(404, '找不到使用者');
+        }
+        return jsonResponse(
+          200,
+          successBody(
+            message: '已取得使用者有效行程',
+            data: {
+              'user': user.toPublicJson(),
+              'activePlan': user.activePlan,
+              'activePlanUpdatedAt': user.activePlanUpdatedAt?.toIso8601String(),
+            },
+          ),
+        );
+      }),
+    )
+    ..post(
+      '/api/admin/users/<id>/line-push-test',
+      (req, String id) => _withAdmin(req, () async {
+        final user = await _store.findUserById(id);
+        if (user == null) {
+          throw ApiException(404, '找不到使用者');
+        }
+        final lineUserId = user.lineUserId?.trim();
+        if (lineUserId == null || lineUserId.isEmpty) {
+          throw ApiException(400, '該使用者尚未綁定 LINE');
+        }
+        await _sendTrackedLinePush(
+          to: lineUserId,
+          text: 'Smart Travel 後台測試推播成功。你之後會在這裡收到下一站提醒與情境感知通知。',
+          category: 'admin_test',
+          userId: user.id,
+          username: user.username,
+        );
+        return jsonResponse(200, successBody(message: '已送出 LINE 測試推播'));
       }),
     )
     ..get(
@@ -810,9 +916,12 @@ Future<void> main(List<String> args) async {
         if (lineUserId == null || lineUserId.isEmpty) {
           throw ApiException(400, '尚未綁定 LINE');
         }
-        await _notificationService.sendLinePush(
+        await _sendTrackedLinePush(
           to: lineUserId,
           text: 'Smart Travel 測試推播成功。之後你會在這裡收到行程提醒。',
+          category: 'app_test',
+          userId: user.id,
+          username: user.username,
         );
         return successBody(message: '已送出 LINE 測試推播');
       }),
@@ -1063,7 +1172,7 @@ Future<void> main(List<String> args) async {
     ..post(
       '/api/line/run-upcoming-reminders',
       (req) => _withReminderCron(req, () async {
-        final result = await _runUpcomingReminderScan();
+        final result = await _runUpcomingReminderScan(triggerSource: 'cron');
         return jsonResponse(
           200,
           successBody(message: '已完成即時提醒掃描', data: result),
@@ -1072,6 +1181,7 @@ Future<void> main(List<String> args) async {
     );
 
   final pipeline = const Pipeline()
+      .addMiddleware(_metricsMiddleware())
       .addMiddleware(
         logRequests(
           logger: (message, isError) {
@@ -1177,6 +1287,243 @@ void _captureProcessLogs(_CrawlJob job, Process process) {
   });
 }
 
+Middleware _metricsMiddleware() {
+  return (Handler innerHandler) {
+    return (Request request) async {
+      final startedAt = DateTime.now();
+      Response response;
+      try {
+        response = await innerHandler(request);
+      } catch (error) {
+        _recordRequestMetric(
+          request: request,
+          startedAt: startedAt,
+          statusCode: 500,
+          error: error.toString(),
+        );
+        rethrow;
+      }
+      _recordRequestMetric(
+        request: request,
+        startedAt: startedAt,
+        statusCode: response.statusCode,
+      );
+      return response;
+    };
+  };
+}
+
+void _recordRequestMetric({
+  required Request request,
+  required DateTime startedAt,
+  required int statusCode,
+  String? error,
+}) {
+  final durationMs = DateTime.now().difference(startedAt).inMilliseconds;
+  final routeKey = '${request.method} /${request.url.path}';
+  _totalRequestCount += 1;
+  if (statusCode >= 400) {
+    _totalErrorCount += 1;
+  }
+  _requestPathCounts.update(routeKey, (value) => value + 1, ifAbsent: () => 1);
+  _appendBounded(
+    _recentRequestLogs,
+    {
+      'timestamp': startedAt.toIso8601String(),
+      'method': request.method,
+      'path': '/${request.url.path}',
+      'status': statusCode,
+      'durationMs': durationMs,
+      'query': request.url.queryParameters.isEmpty
+          ? null
+          : request.url.queryParameters,
+      if (error != null && error.isNotEmpty) 'error': error,
+    },
+    limit: 120,
+  );
+}
+
+void _recordAppEvent({
+  required Request request,
+  required String event,
+  String? page,
+  String? userId,
+  String? sessionId,
+  Map<String, dynamic>? payload,
+}) {
+  _appendBounded(
+    _appEventHistory,
+    {
+      'timestamp': DateTime.now().toIso8601String(),
+      'event': event,
+      'page': page,
+      'userId': userId,
+      'sessionId': sessionId,
+      'userAgent': request.headers['user-agent'],
+      'ip':
+          request.headers['x-forwarded-for'] ??
+          request.context['shelf.io.connection_info']?.toString(),
+      'payload': payload ?? <String, dynamic>{},
+    },
+    limit: 600,
+  );
+}
+
+Future<void> _sendTrackedLinePush({
+  required String to,
+  required String text,
+  required String category,
+  String? userId,
+  String? username,
+}) async {
+  final entry = <String, dynamic>{
+    'timestamp': DateTime.now().toIso8601String(),
+    'category': category,
+    'userId': userId,
+    'username': username,
+    'lineUserId': to,
+    'preview': text.length > 120 ? '${text.substring(0, 120)}…' : text,
+  };
+  try {
+    await _notificationService.sendLinePush(to: to, text: text);
+    entry['status'] = 'success';
+    _appendBounded(_linePushHistory, entry, limit: 80);
+  } catch (error) {
+    entry['status'] = 'failed';
+    entry['error'] = error.toString();
+    _appendBounded(_linePushHistory, entry, limit: 80);
+    rethrow;
+  }
+}
+
+void _recordReminderRun({
+  required String source,
+  required Map<String, dynamic> result,
+}) {
+  _appendBounded(
+    _reminderRunHistory,
+    {
+      'timestamp': DateTime.now().toIso8601String(),
+      'source': source,
+      ...result,
+    },
+    limit: 60,
+  );
+}
+
+void _appendBounded(
+  List<Map<String, dynamic>> target,
+  Map<String, dynamic> item, {
+  required int limit,
+}) {
+  target.add(item);
+  if (target.length > limit) {
+    target.removeRange(0, target.length - limit);
+  }
+}
+
+Future<Map<String, dynamic>> _buildAdminMetricsSnapshot() async {
+  final data = await _store.read();
+  final now = DateTime.now();
+  final recentFiveMinutes = now.subtract(const Duration(minutes: 5));
+  final recentWindow = _recentRequestLogs.where((entry) {
+    final timestamp = DateTime.tryParse(entry['timestamp']?.toString() ?? '');
+    return timestamp != null && timestamp.isAfter(recentFiveMinutes);
+  }).toList();
+  final recentErrors = recentWindow
+      .where((entry) => (entry['status'] as int? ?? 200) >= 400)
+      .length;
+  final avgLatency = recentWindow.isEmpty
+      ? 0
+      : recentWindow
+                .map((entry) => (entry['durationMs'] as int?) ?? 0)
+                .reduce((a, b) => a + b) ~/
+            recentWindow.length;
+  final users = data.users;
+  final places = data.places;
+  final lineLinkedUsers = users
+      .where((user) => (user.lineUserId?.trim().isNotEmpty ?? false))
+      .length;
+  final activePlanUsers = users.where((user) => user.activePlan != null).length;
+  final pushEnabledUsers = users.where((user) => user.linePushEnabled).length;
+  final topRoutes = _requestPathCounts.entries.toList()
+    ..sort((a, b) => b.value.compareTo(a.value));
+
+  return {
+    'stats': {
+      'totalRequests': _totalRequestCount,
+      'totalErrors': _totalErrorCount,
+      'requestsLast5Min': recentWindow.length,
+      'errorsLast5Min': recentErrors,
+      'avgLatencyMsLast5Min': avgLatency,
+      'userCount': users.length,
+      'placeCount': places.length,
+      'lineLinkedUsers': lineLinkedUsers,
+      'linePushEnabledUsers': pushEnabledUsers,
+      'activePlanUsers': activePlanUsers,
+    },
+    'health': {
+      'dataStore': _dataStoreLabel,
+      'openAiConfigured': _openAiApiKey != null && _openAiApiKey!.isNotEmpty,
+      'lineConfigured':
+          (_lineChannelSecret?.isNotEmpty ?? false) &&
+          ((Platform.environment['LINE_CHANNEL_ACCESS_TOKEN'] ?? '').isNotEmpty),
+      'googleMapsConfigured':
+          (Platform.environment['GOOGLE_MAPS_API_KEY'] ?? '').isNotEmpty,
+      'cronConfigured': _reminderCronToken != null && _reminderCronToken!.isNotEmpty,
+      'crawlRunning': _crawlJob?.running == true,
+      'timestamp': now.toIso8601String(),
+    },
+    'topRoutes': topRoutes
+        .take(12)
+        .map((entry) => {'route': entry.key, 'count': entry.value})
+        .toList(),
+    'recentRequests': _recentRequestLogs.reversed.take(30).toList(),
+    'linePushHistory': _linePushHistory.reversed.take(30).toList(),
+    'reminderRuns': _reminderRunHistory.reversed.take(20).toList(),
+    'appEvents': _buildAppEventSnapshot(),
+    'crawlJob': _crawlJob?.toJson(),
+  };
+}
+
+Map<String, dynamic> _buildAppEventSnapshot() {
+  final now = DateTime.now();
+  final recentFiveMinutes = now.subtract(const Duration(minutes: 5));
+  final recentEvents = _appEventHistory.where((entry) {
+    final timestamp = DateTime.tryParse(entry['timestamp']?.toString() ?? '');
+    return timestamp != null && timestamp.isAfter(recentFiveMinutes);
+  }).toList();
+  final eventCounts = <String, int>{};
+  final pageCounts = <String, int>{};
+  for (final entry in _appEventHistory) {
+    final event = entry['event']?.toString().trim();
+    if (event != null && event.isNotEmpty) {
+      eventCounts.update(event, (value) => value + 1, ifAbsent: () => 1);
+    }
+    final page = entry['page']?.toString().trim();
+    if (page != null && page.isNotEmpty) {
+      pageCounts.update(page, (value) => value + 1, ifAbsent: () => 1);
+    }
+  }
+  final topEvents = eventCounts.entries.toList()
+    ..sort((a, b) => b.value.compareTo(a.value));
+  final topPages = pageCounts.entries.toList()
+    ..sort((a, b) => b.value.compareTo(a.value));
+  return {
+    'totalEvents': _appEventHistory.length,
+    'eventsLast5Min': recentEvents.length,
+    'topEvents': topEvents
+        .take(12)
+        .map((entry) => {'event': entry.key, 'count': entry.value})
+        .toList(),
+    'topPages': topPages
+        .take(12)
+        .map((entry) => {'page': entry.key, 'count': entry.value})
+        .toList(),
+    'recentEvents': _appEventHistory.reversed.take(40).toList(),
+  };
+}
+
 Future<Response> _healthHandler(Request request) async {
   return jsonResponse(
     200,
@@ -1276,7 +1623,9 @@ Future<void> _syncUserActivePlan({
   );
 }
 
-Future<Map<String, dynamic>> _runUpcomingReminderScan() async {
+Future<Map<String, dynamic>> _runUpcomingReminderScan({
+  required String triggerSource,
+}) async {
   final users = (await _store.read()).users;
   final now = DateTime.now();
   final todayText = now.toIso8601String().substring(0, 10);
@@ -1323,13 +1672,15 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan() async {
     }
   }
 
-  return {
+  final result = {
     'scannedUsers': scanned,
     'syncedPlans': syncedPlans,
     'linePushed': pushed,
     'pushedUsers': pushedUsers,
     'checkedAt': now.toIso8601String(),
   };
+  _recordReminderRun(source: triggerSource, result: result);
+  return result;
 }
 
 Future<void> _sendLineItineraryGeneratedNotification({
@@ -1338,12 +1689,21 @@ Future<void> _sendLineItineraryGeneratedNotification({
 }) async {
   try {
     final user = await _store.findUserById(userId);
-    final lineUserId = user?.lineUserId?.trim();
+    if (user == null) {
+      return;
+    }
+    final lineUserId = user.lineUserId?.trim();
     if (lineUserId == null || lineUserId.isEmpty) {
       return;
     }
     final message = _buildLineItinerarySummary(plan);
-    await _notificationService.sendLinePush(to: lineUserId, text: message);
+    await _sendTrackedLinePush(
+      to: lineUserId,
+      text: message,
+      category: 'itinerary_generated',
+      userId: user.id,
+      username: user.username,
+    );
     _log.info('LINE 行程推播已送出：user=$userId lineUserId=$lineUserId');
   } catch (error, stack) {
     _log.warning('LINE 行程推播失敗：user=$userId error=$error');
@@ -2387,10 +2747,13 @@ Future<bool> _sendLineContextAwarenessNotification({
     }
 
     final user = await _store.findUserById(userId);
-    final lineUserId = user?.lineUserId?.trim();
+    if (user == null) {
+      return false;
+    }
+    final lineUserId = user.lineUserId?.trim();
     if (lineUserId == null ||
         lineUserId.isEmpty ||
-        user?.linePushEnabled != true) {
+        user.linePushEnabled != true) {
       return false;
     }
 
@@ -2439,7 +2802,13 @@ Future<bool> _sendLineContextAwarenessNotification({
       backupPlans: backupPlans,
       upcomingReminder: shouldPushReminder ? upcomingReminder : null,
     );
-    await _notificationService.sendLinePush(to: lineUserId, text: message);
+    await _sendTrackedLinePush(
+      to: lineUserId,
+      text: message,
+      category: shouldPushReminder ? 'upcoming_reminder' : 'context_awareness',
+      userId: user.id,
+      username: user.username,
+    );
     _lineContextPushCooldown[cooldownKey] = now;
     _log.info('LINE 情境感知提醒已送出：user=$userId lineUserId=$lineUserId');
     return true;
@@ -2672,15 +3041,21 @@ Future<void> _handleLineEvent(Map<String, dynamic> event) async {
     );
     _lineLinkCodes.remove(text);
     _log.info('LINE 綁定成功：user=${target.id} username=${target.username} lineUserId=$lineUserId code=$text');
-    await _notificationService.sendLinePush(
+    await _sendTrackedLinePush(
       to: lineUserId,
       text: 'LINE 綁定成功。之後你會在這裡收到 Smart Travel 的行程提醒與通知。回到 App 按「重新整理」即可看到最新狀態。',
+      category: 'line_linked',
+      userId: target.id,
+      username: target.username,
     );
   } catch (error, stack) {
     _log.severe('LINE 綁定處理失敗：code=$text user=${target.id} lineUserId=$lineUserId', error, stack);
-    await _notificationService.sendLinePush(
+    await _sendTrackedLinePush(
       to: lineUserId,
       text: 'LINE 綁定處理失敗，請回到 App 重新產生綁定碼後再試一次。',
+      category: 'line_link_failed',
+      userId: target.id,
+      username: target.username,
     );
   }
 }
