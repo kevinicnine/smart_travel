@@ -11,6 +11,7 @@ Optional env:
   MAX_REQUESTS=100
   TEXTSEARCH_MAX_PAGES=2
   GOOGLE_QUERY_SCOPE=standard|expanded
+  GOOGLE_CRAWL_PROFILE=balanced|fast_bulk|backfill
   MERGE_MODE=merge|replace
 """
 from __future__ import annotations
@@ -36,10 +37,14 @@ API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY")
 MAX_REQUESTS = int(os.environ.get("MAX_REQUESTS", "100"))
 TEXTSEARCH_MAX_PAGES = int(os.environ.get("TEXTSEARCH_MAX_PAGES", "2"))
 QUERY_SCOPE = os.environ.get("GOOGLE_QUERY_SCOPE", "standard").strip().lower()
+CRAWL_PROFILE = os.environ.get("GOOGLE_CRAWL_PROFILE", "balanced").strip().lower()
 SLEEP_BETWEEN = 0.2
 MERGE_MODE = os.environ.get("MERGE_MODE", "merge").strip().lower()
 REVIEWS_LIMIT = 5
 MIN_REVIEW_LEN = 12
+
+if CRAWL_PROFILE not in {"balanced", "fast_bulk", "backfill"}:
+    CRAWL_PROFILE = "balanced"
 
 TAIWAN_CITIES = [
     "臺北市",
@@ -1296,15 +1301,24 @@ def main() -> None:
     skipped_outside_city = 0
     selected_city = (os.environ.get("GOOGLE_PLACE_CITY") or "").strip()
     single_city_mode = bool(selected_city)
+    fast_bulk_mode = CRAWL_PROFILE == "fast_bulk"
+    backfill_only_mode = CRAWL_PROFILE == "backfill"
+    run_search_queries = not backfill_only_mode
+    enrich_existing_global = (not single_city_mode) and (not fast_bulk_mode)
+    fetch_search_details = not fast_bulk_mode
 
     print(
-        f"抓取設定: scope={QUERY_SCOPE}, max_requests={MAX_REQUESTS}, "
-        f"textsearch_pages={TEXTSEARCH_MAX_PAGES}"
+        f"抓取設定: profile={CRAWL_PROFILE}, scope={QUERY_SCOPE}, "
+        f"max_requests={MAX_REQUESTS}, textsearch_pages={TEXTSEARCH_MAX_PAGES}"
     )
     if queries:
         print(f"本次查詢目標: {', '.join(queries)}")
     if single_city_mode:
         print(f"單縣市模式啟用: {selected_city}（優先抓取該縣市，暫跳過全庫補資料）")
+    if fast_bulk_mode:
+        print("快速大量模式啟用：跳過全庫補資料，新增景點僅做基本抓取，不逐筆補 Details。")
+    if backfill_only_mode:
+        print("補資料模式啟用：不抓新景點，只補現有景點缺漏欄位。")
 
     def _build_query_from_place(place: Dict[str, Any]) -> str:
         name = (place.get("name") or "").strip()
@@ -1317,10 +1331,10 @@ def main() -> None:
             parts.append(address)
         return " ".join([p for p in parts if p]).strip()
 
-    if not single_city_mode:
+    if enrich_existing_global or backfill_only_mode:
         # Enrich existing places missing image/rating/price/city/address.
         # Reserve some quota for search queries so crawl doesn't end before query loop starts.
-        reserve_for_search = min(MAX_REQUESTS, max(20, len(queries) * 8))
+        reserve_for_search = 0 if backfill_only_mode else min(MAX_REQUESTS, max(20, len(queries) * 8))
         for place in existing_places:
             if request_count >= max(0, MAX_REQUESTS - reserve_for_search):
                 break
@@ -1451,171 +1465,174 @@ def main() -> None:
                 if place_id:
                     reviews_by_id[place_id] = review_item
 
-    for query_idx, query in enumerate(queries):
-        if request_count >= MAX_REQUESTS:
-            break
-        page_no = 0
-        page_token: str | None = None
-        while request_count < MAX_REQUESTS and page_no < max(1, TEXTSEARCH_MAX_PAGES):
-            params: Dict[str, Any]
-            token_attempts = 1
-            if page_token:
-                params = {"pagetoken": page_token, "language": "zh-TW"}
-                token_attempts = 4
-            else:
-                params = {"query": query, "language": "zh-TW"}
-
-            data: Dict[str, Any] = {}
-            status = "UNKNOWN"
-            for attempt in range(token_attempts):
-                if page_token:
-                    # next_page_token requires a short propagation delay.
-                    time.sleep(2.0 if attempt == 0 else 1.2)
-                data = _fetch_json(
-                    "https://maps.googleapis.com/maps/api/place/textsearch/json",
-                    params,
-                )
-                request_count += 1
-                status = data.get("status") or "UNKNOWN"
-                if status == "INVALID_REQUEST" and page_token and attempt < token_attempts - 1:
-                    continue
+    if run_search_queries:
+        for query_idx, query in enumerate(queries):
+            if request_count >= MAX_REQUESTS:
                 break
+            page_no = 0
+            page_token: str | None = None
+            while request_count < MAX_REQUESTS and page_no < max(1, TEXTSEARCH_MAX_PAGES):
+                params: Dict[str, Any]
+                token_attempts = 1
+                if page_token:
+                    params = {"pagetoken": page_token, "language": "zh-TW"}
+                    token_attempts = 4
+                else:
+                    params = {"query": query, "language": "zh-TW"}
 
-            if status not in {"OK", "ZERO_RESULTS"}:
-                print(f"查詢狀態: {query} page={page_no+1} -> {status}")
-
-            results = data.get("results") or []
-            for item in results:
-                place_id = item.get("place_id")
-                name = item.get("name") or ""
-                address = item.get("formatted_address") or ""
-                if not place_id or not name:
-                    continue
-                if place_id in seen or name in seen:
-                    continue
-                seen.add(place_id)
-                seen.add(name)
-
-                preview_address = item.get("formatted_address") or ""
-                preview_city = _normalize_city_name(_extract_city(preview_address))
-                merge_key = _place_merge_key(name, preview_city, preview_address)
-                existing_hit = existing_by_id.get(place_id) or existing_by_merge_key.get(merge_key)
-                if existing_hit and not _needs_enrich(existing_hit):
-                    skipped_complete += 1
-                    continue
-
-                details = {}
-                # Reserve quota for the remaining queries (at least 1 call each query).
-                remaining_queries = max(0, len(queries) - query_idx - 1)
-                reserve_quota = remaining_queries
-                if request_count < MAX_REQUESTS - reserve_quota:
-                    details = _place_details(place_id) or {}
-                    if details:
-                        request_count += 1
-
-                geometry = (details.get("geometry") or item.get("geometry") or {}).get("location", {})
-                lat = float(geometry.get("lat") or 0)
-                lng = float(geometry.get("lng") or 0)
-                types = details.get("types") or item.get("types") or []
-                rating = details.get("rating") or item.get("rating")
-                rating_total = details.get("user_ratings_total") or item.get("user_ratings_total")
-                price_level = details.get("price_level") or item.get("price_level")
-                editorial = (details.get("editorial_summary") or {}).get("overview") if details else None
-                details_address = details.get("formatted_address") or ""
-                components = details.get("address_components") or []
-                base_address = _pick_best_address(details_address, address)
-                rebuilt_address = _build_address_from_components(components, base_address)
-                city = _normalize_city_name(
-                    _extract_city_from_components(components)
-                    or _extract_city(base_address)
-                    or _extract_city(rebuilt_address)
-                )
-                if single_city_mode and not city:
-                    city = _normalize_city_name(selected_city)
-                full_address = _pick_best_address(base_address, rebuilt_address)
-                full_address = _ensure_address_with_city(full_address, city)
-                if single_city_mode and not _matches_selected_city(selected_city, city, full_address):
-                    skipped_outside_city += 1
-                    continue
-                photos = details.get("photos") or item.get("photos") or []
-                photo_ref = ""
-                if isinstance(photos, list) and photos:
-                    photo_ref = photos[0].get("photo_reference", "") if isinstance(photos[0], dict) else ""
-                image_url = _photo_url(photo_ref)
-                opening_hours = _normalize_opening_hours(details.get("opening_hours"))
-                raw_reviews = [r.get("text", "") for r in (details.get("reviews") or []) if isinstance(r, dict)]
-                reviews = _clean_reviews(raw_reviews)
-                text = f"{name} {full_address} {editorial or ''} {' '.join(reviews)}"
-                tags = _extract_tags(text, types)
-                category = tags[0] if tags else "other"
-                opening_hours = opening_hours or _infer_opening_hours(
-                    name,
-                    types,
-                    tags,
-                    editorial or "",
-                )
-                price_level_value = int(price_level) if price_level is not None else None
-                if price_level_value is None:
-                    price_level_value = _infer_price_level(
-                        name,
-                        types,
-                        city,
-                        full_address,
-                        editorial or "",
-                        " ".join(reviews),
+                data: Dict[str, Any] = {}
+                status = "UNKNOWN"
+                for attempt in range(token_attempts):
+                    if page_token:
+                        # next_page_token requires a short propagation delay.
+                        time.sleep(2.0 if attempt == 0 else 1.2)
+                    data = _fetch_json(
+                        "https://maps.googleapis.com/maps/api/place/textsearch/json",
+                        params,
                     )
-                price_category = _price_category(price_level_value)
-                output.append(
-                    Place(
-                        id=place_id,
-                        name=name,
-                        category=category,
-                        tags=tags,
-                        city=city,
-                        address=full_address,
-                        lat=lat,
-                        lng=lng,
-                        description=editorial or "",
-                        imageUrl=image_url,
-                        rating=float(rating) if rating is not None else None,
-                        userRatingsTotal=int(rating_total) if rating_total is not None else None,
-                        priceLevel=price_level_value,
-                        priceCategory=price_category,
-                        openingHours=opening_hours,
-                        source="google_places",
-                        updatedAt=_utc_now_iso(),
-                    )
-                )
-                reviews_out.append(
-                    {
-                        "place_id": place_id,
-                        "source_name": name,
-                        "name": name,
-                        "formatted_address": address,
-                        "rating": rating,
-                        "user_ratings_total": rating_total,
-                        "price_level": price_level,
-                        "types": types,
-                        "editorial_summary": editorial or "",
-                        "reviews": reviews,
-                        "image_url": image_url,
-                        "opening_hours": opening_hours,
-                    }
-                )
-                if request_count >= MAX_REQUESTS:
+                    request_count += 1
+                    status = data.get("status") or "UNKNOWN"
+                    if status == "INVALID_REQUEST" and page_token and attempt < token_attempts - 1:
+                        continue
                     break
 
-            page_token = data.get("next_page_token")
-            page_no += 1
-            if not page_token or status not in {"OK", "ZERO_RESULTS"}:
-                break
+                if status not in {"OK", "ZERO_RESULTS"}:
+                    print(f"查詢狀態: {query} page={page_no+1} -> {status}")
 
-        print(
-            f"完成查詢: {query}, 分頁 {page_no}/{max(1, TEXTSEARCH_MAX_PAGES)}, "
-            f"累積 {len(output)} 筆, 用量 {request_count}/{MAX_REQUESTS}, "
-            f"跳過完整資料 {skipped_complete} 筆, 跳過非目標縣市 {skipped_outside_city} 筆"
-        )
-        time.sleep(SLEEP_BETWEEN)
+                results = data.get("results") or []
+                for item in results:
+                    place_id = item.get("place_id")
+                    name = item.get("name") or ""
+                    address = item.get("formatted_address") or ""
+                    if not place_id or not name:
+                        continue
+                    if place_id in seen or name in seen:
+                        continue
+                    seen.add(place_id)
+                    seen.add(name)
+
+                    preview_address = item.get("formatted_address") or ""
+                    preview_city = _normalize_city_name(_extract_city(preview_address))
+                    merge_key = _place_merge_key(name, preview_city, preview_address)
+                    existing_hit = existing_by_id.get(place_id) or existing_by_merge_key.get(merge_key)
+                    if existing_hit and not _needs_enrich(existing_hit):
+                        skipped_complete += 1
+                        continue
+
+                    details = {}
+                    if fetch_search_details:
+                        # Reserve quota for the remaining queries (at least 1 call each query).
+                        remaining_queries = max(0, len(queries) - query_idx - 1)
+                        reserve_quota = remaining_queries
+                        if request_count < MAX_REQUESTS - reserve_quota:
+                            details = _place_details(place_id) or {}
+                            if details:
+                                request_count += 1
+
+                    geometry = (details.get("geometry") or item.get("geometry") or {}).get("location", {})
+                    lat = float(geometry.get("lat") or 0)
+                    lng = float(geometry.get("lng") or 0)
+                    types = details.get("types") or item.get("types") or []
+                    rating = details.get("rating") or item.get("rating")
+                    rating_total = details.get("user_ratings_total") or item.get("user_ratings_total")
+                    price_level = details.get("price_level") or item.get("price_level")
+                    editorial = (details.get("editorial_summary") or {}).get("overview") if details else None
+                    details_address = details.get("formatted_address") or ""
+                    components = details.get("address_components") or []
+                    base_address = _pick_best_address(details_address, address)
+                    rebuilt_address = _build_address_from_components(components, base_address)
+                    city = _normalize_city_name(
+                        _extract_city_from_components(components)
+                        or _extract_city(base_address)
+                        or _extract_city(rebuilt_address)
+                    )
+                    if single_city_mode and not city:
+                        city = _normalize_city_name(selected_city)
+                    full_address = _pick_best_address(base_address, rebuilt_address)
+                    full_address = _ensure_address_with_city(full_address, city)
+                    if single_city_mode and not _matches_selected_city(selected_city, city, full_address):
+                        skipped_outside_city += 1
+                        continue
+                    photos = details.get("photos") or item.get("photos") or []
+                    photo_ref = ""
+                    if isinstance(photos, list) and photos:
+                        photo_ref = photos[0].get("photo_reference", "") if isinstance(photos[0], dict) else ""
+                    image_url = _photo_url(photo_ref)
+                    opening_hours = _normalize_opening_hours(details.get("opening_hours"))
+                    raw_reviews = [r.get("text", "") for r in (details.get("reviews") or []) if isinstance(r, dict)]
+                    reviews = _clean_reviews(raw_reviews)
+                    text = f"{name} {full_address} {editorial or ''} {' '.join(reviews)}"
+                    tags = _extract_tags(text, types)
+                    category = tags[0] if tags else "other"
+                    opening_hours = opening_hours or _infer_opening_hours(
+                        name,
+                        types,
+                        tags,
+                        editorial or "",
+                    )
+                    price_level_value = int(price_level) if price_level is not None else None
+                    if price_level_value is None:
+                        price_level_value = _infer_price_level(
+                            name,
+                            types,
+                            city,
+                            full_address,
+                            editorial or "",
+                            " ".join(reviews),
+                        )
+                    price_category = _price_category(price_level_value)
+                    output.append(
+                        Place(
+                            id=place_id,
+                            name=name,
+                            category=category,
+                            tags=tags,
+                            city=city,
+                            address=full_address,
+                            lat=lat,
+                            lng=lng,
+                            description=editorial or "",
+                            imageUrl=image_url,
+                            rating=float(rating) if rating is not None else None,
+                            userRatingsTotal=int(rating_total) if rating_total is not None else None,
+                            priceLevel=price_level_value,
+                            priceCategory=price_category,
+                            openingHours=opening_hours,
+                            source="google_places",
+                            updatedAt=_utc_now_iso(),
+                        )
+                    )
+                    if details:
+                        reviews_out.append(
+                            {
+                                "place_id": place_id,
+                                "source_name": name,
+                                "name": name,
+                                "formatted_address": address,
+                                "rating": rating,
+                                "user_ratings_total": rating_total,
+                                "price_level": price_level,
+                                "types": types,
+                                "editorial_summary": editorial or "",
+                                "reviews": reviews,
+                                "image_url": image_url,
+                                "opening_hours": opening_hours,
+                            }
+                        )
+                    if request_count >= MAX_REQUESTS:
+                        break
+
+                page_token = data.get("next_page_token")
+                page_no += 1
+                if not page_token or status not in {"OK", "ZERO_RESULTS"}:
+                    break
+
+            print(
+                f"完成查詢: {query}, 分頁 {page_no}/{max(1, TEXTSEARCH_MAX_PAGES)}, "
+                f"累積 {len(output)} 筆, 用量 {request_count}/{MAX_REQUESTS}, "
+                f"跳過完整資料 {skipped_complete} 筆, 跳過非目標縣市 {skipped_outside_city} 筆"
+            )
+            time.sleep(SLEEP_BETWEEN)
 
     # Backfill only the source marker for legacy records.
     # Do not stamp updatedAt here, otherwise "只看剛更新" 會把沒有被這次爬蟲碰到的舊資料
@@ -1626,7 +1643,7 @@ def main() -> None:
 
     merged_places, merge_stats = _merge_places(existing_places, output)
 
-    if single_city_mode and request_count < MAX_REQUESTS:
+    if single_city_mode and request_count < MAX_REQUESTS and not fast_bulk_mode:
         enriched_selected_city = 0
         for place in merged_places:
             if request_count >= MAX_REQUESTS:

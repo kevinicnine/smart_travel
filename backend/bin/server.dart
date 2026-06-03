@@ -53,12 +53,14 @@ class _CrawlJob {
     required this.id,
     required this.mode,
     required this.startedAt,
+    this.profile,
     this.city,
     List<String>? cities,
   }) : cities = List<String>.unmodifiable(cities ?? const []);
 
   final String id;
   final String mode;
+  final String? profile;
   final DateTime startedAt;
   final String? city;
   final List<String> cities;
@@ -85,6 +87,7 @@ class _CrawlJob {
   Map<String, dynamic> toJson() => {
     'id': id,
     'mode': mode,
+    'profile': profile,
     'city': city,
     'cities': cities,
     'batch_mode': batchMode,
@@ -786,6 +789,7 @@ Future<void> main(List<String> args) async {
         final maxRequests = _asInt(body, 'maxRequests');
         final maxPages = _asInt(body, 'maxPages');
         final queryScope = _asString(body, 'queryScope').trim().toLowerCase();
+        final crawlProfile = _asString(body, 'crawlProfile').trim().toLowerCase();
         if (_crawlJob != null && _crawlJob!.running) {
           throw ApiException(409, '已有爬取進行中');
         }
@@ -812,6 +816,9 @@ Future<void> main(List<String> args) async {
           id: const Uuid().v4(),
           mode: mode,
           startedAt: DateTime.now(),
+          profile: mode == 'google_places' && crawlProfile.isNotEmpty
+              ? crawlProfile
+              : null,
           city: crawlCity.isEmpty ? null : crawlCity,
           cities: cities,
         );
@@ -824,6 +831,7 @@ Future<void> main(List<String> args) async {
               maxRequests: maxRequests,
               maxPages: maxPages,
               queryScope: queryScope,
+              crawlProfile: crawlProfile,
             ),
           );
           return jsonResponse(
@@ -841,6 +849,7 @@ Future<void> main(List<String> args) async {
           maxRequests: maxRequests,
           maxPages: maxPages,
           queryScope: queryScope,
+          crawlProfile: crawlProfile,
         );
         unawaited(_runSingleCrawlJob(job, process));
         return jsonResponse(
@@ -1305,6 +1314,7 @@ Future<Process> _startCrawlProcess({
   int? maxRequests,
   int? maxPages,
   String? queryScope,
+  String? crawlProfile,
 }) {
   return Process.start(
     'python3',
@@ -1323,6 +1333,11 @@ Future<Process> _startCrawlProcess({
       if (mode == 'google_places' &&
           (queryScope == 'standard' || queryScope == 'expanded'))
         'GOOGLE_QUERY_SCOPE': queryScope!,
+      if (mode == 'google_places' &&
+          (crawlProfile == 'balanced' ||
+              crawlProfile == 'fast_bulk' ||
+              crawlProfile == 'backfill'))
+        'GOOGLE_CRAWL_PROFILE': crawlProfile!,
     },
   );
 }
@@ -1413,6 +1428,7 @@ Future<void> _runBatchCrawlJob({
   int? maxRequests,
   int? maxPages,
   String? queryScope,
+  String? crawlProfile,
 }) async {
   _appendCrawlLog(job, '開始批次爬取，共 ${job.totalCities} 個縣市');
   for (final city in job.cities) {
@@ -1436,6 +1452,7 @@ Future<void> _runBatchCrawlJob({
         maxRequests: maxRequests,
         maxPages: maxPages,
         queryScope: queryScope,
+        crawlProfile: crawlProfile,
       );
       job.process = process;
       final code = await _watchCrawlProcess(job, process, linePrefix: city);

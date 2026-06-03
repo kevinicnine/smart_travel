@@ -719,6 +719,13 @@
                   <option value="expanded">擴充</option>
                 </select>
               </label>
+              <label id="crawlProfileWrap" style="display:none;">抓取策略
+                <select id="crawlProfile">
+                  <option value="balanced" selected>標準完整</option>
+                  <option value="fast_bulk">快速大量</option>
+                  <option value="backfill">補資料</option>
+                </select>
+              </label>
               <label id="crawlRequestsWrap" style="display:none;">最大用量
                 <select id="crawlMaxRequests">
                   <option value="100" selected>100</option>
@@ -1617,6 +1624,7 @@
         document.getElementById('crawlCityWrap').style.display = google ? '' : 'none';
         document.getElementById('crawlBatchCitiesWrap').style.display = google ? '' : 'none';
         document.getElementById('crawlScopeWrap').style.display = google ? '' : 'none';
+        document.getElementById('crawlProfileWrap').style.display = google ? '' : 'none';
         document.getElementById('crawlRequestsWrap').style.display = google ? '' : 'none';
         document.getElementById('crawlPagesWrap').style.display = google ? '' : 'none';
       }
@@ -1636,6 +1644,7 @@
             maxRequests: Number(document.getElementById('crawlMaxRequests').value || 0),
             maxPages: Number(document.getElementById('crawlMaxPages').value || 0),
             queryScope: document.getElementById('crawlQueryScope').value,
+            crawlProfile: document.getElementById('crawlProfile').value,
           };
           const data = await apiFetch('/crawl/start', {
             method: 'POST',
@@ -1672,6 +1681,9 @@
           }
           const parts = [];
           parts.push(`模式：${job.mode || '-'}`);
+          if (job.profile) {
+            parts.push(`策略：${job.profile}`);
+          }
           if (job.batch_mode) {
             parts.push(`批次進度：${job.completed_cities || 0}/${(job.cities || []).length}`);
             parts.push(`成功：${job.succeeded_cities || 0}`);
