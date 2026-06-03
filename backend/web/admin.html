@@ -798,6 +798,7 @@
         currentView: 'overview',
         metrics: null,
         metricsTimer: null,
+        crawlTimer: null,
       };
 
       function getToken() {
@@ -881,6 +882,11 @@
         document.getElementById('toolbarMeta').innerText = titleMap[name][1];
         document.querySelectorAll('.section').forEach((section) => section.classList.remove('active'));
         document.getElementById(`${name}View`).classList.add('active');
+        if (name === 'import') {
+          startCrawlPolling();
+        } else {
+          stopCrawlPolling();
+        }
         refreshCurrentView();
       }
 
@@ -894,6 +900,19 @@
         if (state.metricsTimer) {
           clearInterval(state.metricsTimer);
           state.metricsTimer = null;
+        }
+      }
+
+      function startCrawlPolling() {
+        stopCrawlPolling();
+        refreshCrawlStatus();
+        state.crawlTimer = setInterval(refreshCrawlStatus, 2000);
+      }
+
+      function stopCrawlPolling() {
+        if (state.crawlTimer) {
+          clearInterval(state.crawlTimer);
+          state.crawlTimer = null;
         }
       }
 
@@ -919,6 +938,7 @@
 
       function logout() {
         stopMetricsPolling();
+        stopCrawlPolling();
         clearToken();
         document.getElementById('loginShell').style.display = '';
         document.getElementById('adminLayout').style.display = 'none';
@@ -1607,7 +1627,7 @@
             body: JSON.stringify(body),
           });
           document.getElementById('crawlStatus').innerText = data.message || '已開始爬取';
-          refreshCrawlStatus();
+          startCrawlPolling();
         } catch (error) {
           document.getElementById('crawlStatus').innerText = error.message || '啟動爬蟲失敗';
         }
@@ -1632,6 +1652,7 @@
           if (!job || job.running === false && !job.id) {
             statusEl.innerText = '目前沒有爬取進行中。';
             logsEl.innerText = '尚未開始爬取。';
+            stopCrawlPolling();
             return;
           }
           const parts = [];
@@ -1642,6 +1663,10 @@
           }
           statusEl.innerText = parts.join(' ｜ ');
           logsEl.innerText = (job.logs || []).join('\n') || '尚無日誌';
+          logsEl.scrollTop = logsEl.scrollHeight;
+          if (!job.running) {
+            stopCrawlPolling();
+          }
         } catch (error) {
           document.getElementById('crawlStatus').innerText = error.message || '讀取爬蟲狀態失敗';
         }
