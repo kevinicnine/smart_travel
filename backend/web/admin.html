@@ -55,6 +55,10 @@
       button.ghost {
         background: transparent;
       }
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
       input,
       select,
       textarea {
@@ -658,13 +662,14 @@
         <section id="importView" class="section">
           <div class="card">
             <h3>匯入與同步</h3>
+            <div id="syncCapabilitySummary" class="muted" style="margin-bottom:12px;"></div>
             <div class="actions">
               <button class="primary" onclick="exportDb()">匯出 db.json</button>
               <input type="file" id="importFile" />
               <button onclick="importPlaces()">匯入 places</button>
               <button onclick="importFromFile()">匯入 db.json 到資料庫</button>
-              <button onclick="syncFromRemote()">同步雲端資料到目前環境</button>
-              <button onclick="syncToLocal()">同步目前環境到本機</button>
+              <button id="syncFromRemoteBtn" onclick="syncFromRemote()">同步雲端資料到目前環境</button>
+              <button id="syncToLocalBtn" onclick="syncToLocal()">同步目前環境到本機</button>
             </div>
             <p class="muted">匯入格式需為 <code>{ "places": [ ... ] }</code>。同步功能依後端環境變數設定而定。</p>
           </div>
@@ -1010,6 +1015,7 @@
         if (!snapshot) return;
         const stats = snapshot.stats || {};
         const health = snapshot.health || {};
+        const sync = snapshot.syncCapabilities || {};
         document.getElementById('statsGrid').innerHTML = [
           ['總請求數', stats.totalRequests ?? 0],
           ['近 5 分鐘請求', stats.requestsLast5Min ?? 0],
@@ -1034,6 +1040,7 @@
           ['行程學習模型', health.itineraryLearningConfigured, null],
           ['提醒 Cron', health.cronConfigured, null],
           ['爬蟲執行中', health.crawlRunning, null],
+          ['環境', health.environment === 'render' ? 'Render 雲端' : '本機', 'ok'],
         ].map(([label, value, cls]) => {
           const isBool = typeof value === 'boolean';
           const dotClass = isBool ? (value ? 'ok' : 'warn') : 'ok';
@@ -1093,6 +1100,7 @@
           5,
           '尚無提醒掃描紀錄',
         );
+        renderSyncCapabilities(sync);
         document.getElementById('overviewReminderBody').innerHTML = renderRows(
           snapshot.reminderRuns || [],
           (row) => `
@@ -1108,6 +1116,25 @@
         );
 
         renderAppEvents(snapshot.appEvents || {});
+      }
+
+      function renderSyncCapabilities(sync) {
+        const summaryEl = document.getElementById('syncCapabilitySummary');
+        const syncFromBtn = document.getElementById('syncFromRemoteBtn');
+        const syncToBtn = document.getElementById('syncToLocalBtn');
+        if (!summaryEl || !syncFromBtn || !syncToBtn) return;
+        const envLabel = sync.environment === 'render' ? '目前環境：Render 雲端' : '目前環境：本機後端';
+        const fromLabel = sync.syncFromRemoteAvailable
+          ? `雲端同步：可用${sync.syncFromRemoteSource ? `（來源 ${escapeHtml(sync.syncFromRemoteSource)}）` : ''}`
+          : `雲端同步：不可用（${escapeHtml(sync.syncFromRemoteReason || '未設定')}）`;
+        const toLabel = sync.syncToLocalAvailable
+          ? `同步到本機：可用${sync.syncToLocalTarget ? `（目標 ${escapeHtml(sync.syncToLocalTarget)}）` : ''}`
+          : `同步到本機：不可用（${escapeHtml(sync.syncToLocalReason || '未設定')}）`;
+        summaryEl.innerHTML = `${envLabel}<br>${fromLabel}<br>${toLabel}`;
+        syncFromBtn.disabled = !sync.syncFromRemoteAvailable;
+        syncToBtn.disabled = !sync.syncToLocalAvailable;
+        syncFromBtn.title = sync.syncFromRemoteAvailable ? '' : (sync.syncFromRemoteReason || '不可用');
+        syncToBtn.title = sync.syncToLocalAvailable ? '' : (sync.syncToLocalReason || '不可用');
       }
 
       function renderAppEvents(snapshot) {

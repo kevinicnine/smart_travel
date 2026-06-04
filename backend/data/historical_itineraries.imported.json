@@ -1,0 +1,4 @@
+{
+  "notes": "由 agency_itineraries_raw.json 轉換而成；只保留成功對應 placeId 的景點項目。",
+  "samples": []
+}

@@ -79,6 +79,46 @@ python3 backend/scripts/train_itinerary_ranker.py
 
 如果最高分太低，該景點會進未匹配報表，不會硬塞進訓練樣本。
 
+## 3.1 自動讀取雲端景點資料
+
+如果你平常景點資料主要維護在 Render，而不是本機 `backend/data/db.json`，現在可以直接讓腳本讀雲端後台匯出 API，不用先手動下載 `db.json`。
+
+支援環境變數：
+
+```bash
+PLACES_SOURCE=auto|local|remote
+PLACES_EXPORT_URL=https://your-render-app.onrender.com/api/admin/export
+PLACES_EXPORT_TOKEN=你的ADMIN_TOKEN
+```
+
+行為：
+
+- `PLACES_SOURCE=auto`
+  - 先嘗試讀遠端匯出 API
+  - 失敗再回退本機 `db.json`
+- `PLACES_SOURCE=remote`
+  - 強制讀遠端 API
+- `PLACES_SOURCE=local`
+  - 強制讀本機 `db.json`
+
+如果 `.env.local` 內已經有：
+
+- `RENDER_API_BASE`
+- `ADMIN_TOKEN`
+
+那腳本在 `auto` 模式下會自動推導：
+
+- `PLACES_EXPORT_URL = ${RENDER_API_BASE}/api/admin/export`
+- `PLACES_EXPORT_TOKEN = ADMIN_TOKEN`
+
+所以最常見的情況，其實直接執行：
+
+```bash
+python3 backend/scripts/import_agency_itineraries.py
+```
+
+就會先去嘗試讀 Render 的景點資料。
+
 ## 4. 匯入輸出
 
 ### historical_itineraries.imported.json

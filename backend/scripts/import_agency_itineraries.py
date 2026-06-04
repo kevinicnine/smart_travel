@@ -13,6 +13,9 @@ Usage:
 Optional env:
   RAW_AGENCY_ITINERARIES_PATH=backend/data/agency_itineraries_raw.json
   PLACES_DB_PATH=backend/data/db.json
+  PLACES_SOURCE=auto|local|remote
+  PLACES_EXPORT_URL=https://.../api/admin/export
+  PLACES_EXPORT_TOKEN=admin-token
   OUTPUT_PATH=backend/data/historical_itineraries.imported.json
   REPORT_PATH=backend/data/agency_itinerary_match_report.json
 """
@@ -26,8 +29,11 @@ from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 ROOT = Path(__file__).resolve().parents[1]
+DOTENV_PATH = ROOT.parent / ".env.local"
 RAW_PATH = Path(
     os.environ.get(
         "RAW_AGENCY_ITINERARIES_PATH",
@@ -49,6 +55,7 @@ REPORT_PATH = Path(
         str(ROOT / "data" / "agency_itinerary_match_report.json"),
     )
 )
+_DOTENV_OVERRIDES: dict[str, str] | None = None
 
 _SKIP_TYPES = {
     "arrival",
@@ -87,6 +94,32 @@ class PlaceCandidate:
     normalized: str
 
 
+def _load_dotenv_overrides() -> dict[str, str]:
+    global _DOTENV_OVERRIDES
+    if _DOTENV_OVERRIDES is not None:
+        return _DOTENV_OVERRIDES
+    values: dict[str, str] = {}
+    if DOTENV_PATH.exists():
+        for raw_line in DOTENV_PATH.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key:
+                values[key] = value
+    _DOTENV_OVERRIDES = values
+    return values
+
+
+def _env_value(key: str, default: str | None = None) -> str | None:
+    value = os.environ.get(key)
+    if value is not None and str(value).strip():
+        return str(value).strip()
+    return _load_dotenv_overrides().get(key, default)
+
+
 def _load_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"找不到檔案：{path}")
@@ -113,8 +146,46 @@ def _string_list(value: Any) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
-def _load_place_candidates() -> list[PlaceCandidate]:
-    data = _load_json(PLACES_DB_PATH)
+def _default_remote_export_url() -> str | None:
+    base = _env_value("RENDER_API_BASE")
+    if not base:
+        return None
+    return base.rstrip("/") + "/api/admin/export"
+
+
+def _load_places_payload() -> tuple[dict[str, Any], str]:
+    source_mode = (_env_value("PLACES_SOURCE", "auto") or "auto").strip().lower()
+    if source_mode not in {"auto", "local", "remote"}:
+        source_mode = "auto"
+
+    remote_url = _env_value("PLACES_EXPORT_URL") or _default_remote_export_url()
+    remote_token = _env_value("PLACES_EXPORT_TOKEN") or _env_value("ADMIN_TOKEN")
+
+    if source_mode in {"auto", "remote"} and remote_url and remote_token:
+        request = urllib_request.Request(
+            remote_url,
+            headers={
+                "x-admin-token": remote_token,
+                "accept": "application/json",
+            },
+            method="GET",
+        )
+        try:
+            with urllib_request.urlopen(request, timeout=30) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("遠端匯出內容不是 object")
+            return payload, "remote"
+        except (urllib_error.URLError, urllib_error.HTTPError, TimeoutError, ValueError) as exc:
+            if source_mode == "remote":
+                raise RuntimeError(f"讀取遠端景點匯出失敗：{exc}") from exc
+            print(f"[warn] 遠端景點匯出不可用，改用本機 db.json：{exc}")
+
+    return _load_json(PLACES_DB_PATH), "local"
+
+
+def _load_place_candidates() -> tuple[list[PlaceCandidate], str]:
+    data, source_label = _load_places_payload()
     places = data.get("places")
     if not isinstance(places, list):
         raise ValueError("db.json 缺少 places 陣列")
@@ -126,7 +197,7 @@ def _load_place_candidates() -> list[PlaceCandidate]:
         name = str(item.get("name") or "").strip()
         normalized = _normalize_name(name)
         if not place_id or not name or not normalized:
-          continue
+            continue
         output.append(
             PlaceCandidate(
                 place_id=place_id,
@@ -134,7 +205,7 @@ def _load_place_candidates() -> list[PlaceCandidate]:
                 normalized=normalized,
             )
         )
-    return output
+    return output, source_label
 
 
 def _parse_minutes(value: str | None) -> int | None:
@@ -226,7 +297,7 @@ def main() -> None:
     if not isinstance(sources, list):
         raise ValueError("agency_itineraries_raw.json 缺少 sources 陣列")
 
-    candidates = _load_place_candidates()
+    candidates, places_source = _load_place_candidates()
     output_samples: list[dict[str, Any]] = []
     report_sources: list[dict[str, Any]] = []
     matched_count = 0
@@ -363,6 +434,7 @@ def main() -> None:
     report = {
         "generatedAt": datetime.utcnow().isoformat() + "Z",
         "source": str(RAW_PATH),
+        "placesSource": places_source,
         "samplesGenerated": len(output_samples),
         "matchedItems": matched_count,
         "unmatchedItems": unmatched_count,
@@ -381,7 +453,7 @@ def main() -> None:
     print(
         "已輸出旅行社行程訓練樣本："
         f"{OUTPUT_PATH} (samples={len(output_samples)}, matched={matched_count}, "
-        f"unmatched={unmatched_count}, skipped={skipped_count})"
+        f"unmatched={unmatched_count}, skipped={skipped_count}, places_source={places_source})"
     )
 
 

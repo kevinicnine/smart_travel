@@ -1,0 +1,196 @@
+{
+  "generatedAt": "2026-06-04T12:34:12.337669Z",
+  "source": "/Users/kevinicnine/Desktop/smart_travel/backend/data/agency_itineraries_raw.json",
+  "samplesGenerated": 0,
+  "matchedItems": 0,
+  "unmatchedItems": 20,
+  "skippedItems": 6,
+  "sources": [
+    {
+      "id": "agency-taichung-3d2n-001",
+      "title": "台中三天兩夜旅行社行程",
+      "url": "https://example.com/taichung-3d2n",
+      "matchedItems": [],
+      "unmatchedItems": [
+        {
+          "name": "東海大學",
+          "type": "place",
+          "arrivalTime": "10:00",
+          "departureTime": "12:00",
+          "candidates": []
+        },
+        {
+          "name": "東海商圈",
+          "type": "meal",
+          "arrivalTime": "12:00",
+          "departureTime": "13:00",
+          "candidates": []
+        },
+        {
+          "name": "鰲峰山觀景平台",
+          "type": "place",
+          "arrivalTime": "13:30",
+          "departureTime": "14:30",
+          "candidates": []
+        },
+        {
+          "name": "三井 OUTLET PARK",
+          "type": "place",
+          "arrivalTime": "15:00",
+          "departureTime": "16:00",
+          "candidates": []
+        },
+        {
+          "name": "高美濕地",
+          "type": "place",
+          "arrivalTime": "16:20",
+          "departureTime": "17:40",
+          "candidates": []
+        },
+        {
+          "name": "逢甲夜市",
+          "type": "place",
+          "arrivalTime": "18:30",
+          "departureTime": "20:10",
+          "candidates": []
+        },
+        {
+          "name": "秋紅谷生態景觀",
+          "type": "place",
+          "arrivalTime": "09:40",
+          "departureTime": "10:00",
+          "candidates": []
+        },
+        {
+          "name": "台中國家歌劇院",
+          "type": "place",
+          "arrivalTime": "10:00",
+          "departureTime": "10:30",
+          "candidates": []
+        },
+        {
+          "name": "分子藥局",
+          "type": "place",
+          "arrivalTime": "10:30",
+          "departureTime": "11:20",
+          "candidates": []
+        },
+        {
+          "name": "動漫彩繪巷",
+          "type": "place",
+          "arrivalTime": "11:30",
+          "departureTime": "12:00",
+          "candidates": []
+        },
+        {
+          "name": "第五市場",
+          "type": "place",
+          "arrivalTime": "12:00",
+          "departureTime": "13:00",
+          "candidates": []
+        },
+        {
+          "name": "宮原眼科",
+          "type": "place",
+          "arrivalTime": "13:00",
+          "departureTime": "13:40",
+          "candidates": []
+        },
+        {
+          "name": "新天地西洋博物館",
+          "type": "place",
+          "arrivalTime": "14:00",
+          "departureTime": "15:30",
+          "candidates": []
+        },
+        {
+          "name": "筏子溪迎賓廊道",
+          "type": "place",
+          "arrivalTime": "16:00",
+          "departureTime": "16:40",
+          "candidates": []
+        },
+        {
+          "name": "第六市場",
+          "type": "place",
+          "arrivalTime": "18:00",
+          "departureTime": "19:10",
+          "candidates": []
+        },
+        {
+          "name": "審計新村",
+          "type": "place",
+          "arrivalTime": "09:40",
+          "departureTime": "10:20",
+          "candidates": []
+        },
+        {
+          "name": "台中植物園",
+          "type": "place",
+          "arrivalTime": "10:20",
+          "departureTime": "11:20",
+          "candidates": [
+            {
+              "placeId": "C1_371020000A_001466",
+              "name": "金門植物園",
+              "score": 0.6
+            }
+          ]
+        },
+        {
+          "name": "勤美誠品綠園道",
+          "type": "place",
+          "arrivalTime": "11:30",
+          "departureTime": "13:00",
+          "candidates": []
+        },
+        {
+          "name": "后里鐵馬道",
+          "type": "place",
+          "arrivalTime": "13:30",
+          "departureTime": "15:30",
+          "candidates": []
+        },
+        {
+          "name": "麗寶 OUTLET MALL",
+          "type": "place",
+          "arrivalTime": "16:30",
+          "departureTime": "17:40",
+          "candidates": []
+        }
+      ],
+      "skippedItems": [
+        {
+          "name": "自家出發",
+          "type": "departure",
+          "reason": "item_type_skipped"
+        },
+        {
+          "name": "台中鳥日子",
+          "type": "hotel",
+          "reason": "item_type_skipped"
+        },
+        {
+          "name": "飯店出發",
+          "type": "departure",
+          "reason": "item_type_skipped"
+        },
+        {
+          "name": "台中鳥日子",
+          "type": "hotel",
+          "reason": "item_type_skipped"
+        },
+        {
+          "name": "飯店出發",
+          "type": "departure",
+          "reason": "item_type_skipped"
+        },
+        {
+          "name": "開心返家",
+          "type": "arrival",
+          "reason": "item_type_skipped"
+        }
+      ]
+    }
+  ]
+}

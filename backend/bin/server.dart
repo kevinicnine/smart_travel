@@ -24,6 +24,7 @@ String? _syncSourceUrl;
 String? _syncSourceToken;
 String? _localSyncUrl;
 String? _localSyncToken;
+late final bool _usingRenderBackend;
 String? _openAiApiKey;
 String? _openAiBaseUrl;
 String? _openAiModel;
@@ -296,6 +297,10 @@ Future<void> main(List<String> args) async {
   _syncSourceToken = Platform.environment['SYNC_SOURCE_TOKEN'];
   _localSyncUrl = Platform.environment['LOCAL_SYNC_URL'];
   _localSyncToken = Platform.environment['LOCAL_SYNC_TOKEN'];
+  _usingRenderBackend =
+      (Platform.environment['RENDER'] ?? '').isNotEmpty ||
+      (Platform.environment['RENDER_SERVICE_ID'] ?? '').isNotEmpty ||
+      (Platform.environment['RENDER_EXTERNAL_URL'] ?? '').isNotEmpty;
   _openAiApiKey = Platform.environment['OPENAI_API_KEY'];
   _openAiBaseUrl = Platform.environment['OPENAI_BASE_URL'];
   _openAiModel = Platform.environment['OPENAI_MODEL'] ?? 'gpt-4o-mini';
@@ -1775,6 +1780,7 @@ Future<Map<String, dynamic>> _buildAdminMetricsSnapshot() async {
   final pushEnabledUsers = users.where((user) => user.linePushEnabled).length;
   final topRoutes = _requestPathCounts.entries.toList()
     ..sort((a, b) => b.value.compareTo(a.value));
+  final syncCapabilities = _buildSyncCapabilities();
 
   return {
     'stats': {
@@ -1800,8 +1806,10 @@ Future<Map<String, dynamic>> _buildAdminMetricsSnapshot() async {
       'itineraryLearningConfigured': _itineraryLearningProfile.enabled,
       'cronConfigured': _reminderCronToken != null && _reminderCronToken!.isNotEmpty,
       'crawlRunning': _crawlJob?.running == true,
+      'environment': _usingRenderBackend ? 'render' : 'local',
       'timestamp': now.toUtc().toIso8601String(),
     },
+    'syncCapabilities': syncCapabilities,
     'topRoutes': topRoutes
         .take(12)
         .map((entry) => {'route': entry.key, 'count': entry.value})
@@ -1812,6 +1820,44 @@ Future<Map<String, dynamic>> _buildAdminMetricsSnapshot() async {
     'appEvents': _buildAppEventSnapshot(),
     'crawlJob': _crawlJob?.toJson(),
   };
+}
+
+Map<String, dynamic> _buildSyncCapabilities() {
+  final syncSourceConfigured =
+      (_syncSourceUrl?.trim().isNotEmpty ?? false) &&
+      (_syncSourceToken?.trim().isNotEmpty ?? false);
+  final localSyncConfigured =
+      (_localSyncUrl?.trim().isNotEmpty ?? false) &&
+      (_localSyncToken?.trim().isNotEmpty ?? false);
+
+  String? syncFromRemoteReason;
+  if (!syncSourceConfigured) {
+    syncFromRemoteReason = '缺少 SYNC_SOURCE_URL 或 SYNC_SOURCE_TOKEN';
+  }
+
+  String? syncToLocalReason;
+  if (!localSyncConfigured) {
+    syncToLocalReason = '缺少 LOCAL_SYNC_URL 或 LOCAL_SYNC_TOKEN';
+  } else if (_usingRenderBackend && _looksLikeLoopbackUrl(_localSyncUrl)) {
+    syncToLocalReason = '目前是雲端 Render 後台，無法直接連到 localhost/127.0.0.1';
+  }
+
+  return {
+    'environment': _usingRenderBackend ? 'render' : 'local',
+    'syncFromRemoteAvailable': syncSourceConfigured,
+    'syncFromRemoteReason': syncFromRemoteReason,
+    'syncFromRemoteSource': _syncSourceUrl,
+    'syncToLocalAvailable': syncToLocalReason == null,
+    'syncToLocalReason': syncToLocalReason,
+    'syncToLocalTarget': _localSyncUrl,
+  };
+}
+
+bool _looksLikeLoopbackUrl(String? rawUrl) {
+  if (rawUrl == null || rawUrl.trim().isEmpty) return false;
+  final uri = Uri.tryParse(rawUrl.trim());
+  final host = uri?.host.toLowerCase() ?? '';
+  return host == 'localhost' || host == '127.0.0.1' || host == '::1';
 }
 
 Map<String, dynamic> _buildAppEventSnapshot() {
