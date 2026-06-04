@@ -35,6 +35,7 @@ late final String? _adminToken;
 late final String? _adminUser;
 late final String? _adminPass;
 late final String _dataDir;
+late final _ItineraryLearningProfile _itineraryLearningProfile;
 late final DataStore _store;
 late final NotificationService _notificationService;
 _CrawlJob? _crawlJob;
@@ -47,6 +48,116 @@ final List<Map<String, dynamic>> _reminderRunHistory = [];
 final List<Map<String, dynamic>> _appEventHistory = [];
 int _totalRequestCount = 0;
 int _totalErrorCount = 0;
+
+class _ItineraryLearningProfile {
+  const _ItineraryLearningProfile({
+    required this.globalTagWeights,
+    required this.interestTagWeights,
+    required this.tripPurposeTagWeights,
+    required this.travelBehaviorTagWeights,
+    required this.priceAffinity,
+    required this.metadata,
+    required this.sourcePath,
+  });
+
+  final Map<String, double> globalTagWeights;
+  final Map<String, Map<String, double>> interestTagWeights;
+  final Map<String, Map<String, double>> tripPurposeTagWeights;
+  final Map<String, Map<String, double>> travelBehaviorTagWeights;
+  final Map<String, Map<String, double>> priceAffinity;
+  final Map<String, dynamic> metadata;
+  final String? sourcePath;
+
+  static const empty = _ItineraryLearningProfile(
+    globalTagWeights: <String, double>{},
+    interestTagWeights: <String, Map<String, double>>{},
+    tripPurposeTagWeights: <String, Map<String, double>>{},
+    travelBehaviorTagWeights: <String, Map<String, double>>{},
+    priceAffinity: <String, Map<String, double>>{},
+    metadata: <String, dynamic>{},
+    sourcePath: null,
+  );
+
+  bool get enabled =>
+      globalTagWeights.isNotEmpty ||
+      interestTagWeights.isNotEmpty ||
+      tripPurposeTagWeights.isNotEmpty ||
+      travelBehaviorTagWeights.isNotEmpty ||
+      priceAffinity.isNotEmpty;
+
+  factory _ItineraryLearningProfile.load(String dataDir) {
+    final file = File(p.join(dataDir, 'itinerary_ranker_weights.json'));
+    if (!file.existsSync()) {
+      return _ItineraryLearningProfile.empty;
+    }
+    try {
+      final raw = jsonDecode(file.readAsStringSync());
+      if (raw is! Map) {
+        return _ItineraryLearningProfile.empty;
+      }
+      final json = Map<String, dynamic>.from(raw);
+      return _ItineraryLearningProfile(
+        globalTagWeights: _doubleMapFromJson(json['globalTagWeights']),
+        interestTagWeights: _nestedDoubleMapFromJson(json['interestTagWeights']),
+        tripPurposeTagWeights: _nestedDoubleMapFromJson(
+          json['tripPurposeTagWeights'],
+        ),
+        travelBehaviorTagWeights: _nestedDoubleMapFromJson(
+          json['travelBehaviorTagWeights'],
+        ),
+        priceAffinity: _nestedDoubleMapFromJson(json['priceAffinity']),
+        metadata: json['metadata'] is Map
+            ? Map<String, dynamic>.from(json['metadata'] as Map)
+            : const <String, dynamic>{},
+        sourcePath: file.path,
+      );
+    } catch (error, stack) {
+      _log.warning('Failed to load itinerary learning profile: $error');
+      _log.fine('$stack');
+      return _ItineraryLearningProfile.empty;
+    }
+  }
+
+  double scoreBoost(
+    Place place, {
+    required Set<String> preferredTags,
+    required String? targetPrice,
+    required _PlannerWeights weights,
+  }) {
+    if (!enabled) return 0;
+    final tags = place.tags.map((tag) => tag.trim().toLowerCase()).toSet()
+      ..removeWhere((tag) => tag.isEmpty);
+    if (tags.isEmpty && (targetPrice == null || targetPrice.trim().isEmpty)) {
+      return 0;
+    }
+
+    var score = 0.0;
+    for (final tag in tags) {
+      score += (globalTagWeights[tag] ?? 0) * 0.10;
+      score +=
+          (tripPurposeTagWeights[weights.tripPurpose]?[tag] ?? 0) * 0.45;
+      score +=
+          (travelBehaviorTagWeights[weights.travelBehavior]?[tag] ?? 0) * 0.30;
+    }
+    for (final interest in preferredTags) {
+      final affinity = interestTagWeights[interest.toLowerCase()];
+      if (affinity == null) continue;
+      for (final tag in tags) {
+        score += (affinity[tag] ?? 0) * 0.50;
+      }
+    }
+    final normalizedTargetPrice = targetPrice?.trim().toLowerCase();
+    final category = _effectivePriceCategory(place)?.trim().toLowerCase();
+    if (normalizedTargetPrice != null &&
+        normalizedTargetPrice.isNotEmpty &&
+        category != null &&
+        category.isNotEmpty) {
+      score +=
+          (priceAffinity[normalizedTargetPrice]?[category] ?? 0) * 0.65;
+    }
+    return score.clamp(-2.5, 2.5);
+  }
+}
 
 class _CrawlJob {
   _CrawlJob({
@@ -191,6 +302,7 @@ Future<void> main(List<String> args) async {
   _lineChannelSecret = Platform.environment['LINE_CHANNEL_SECRET'];
   _lineAddFriendUrl = Platform.environment['LINE_ADD_FRIEND_URL'];
   _reminderCronToken = Platform.environment['REMINDER_CRON_TOKEN'];
+  _itineraryLearningProfile = _ItineraryLearningProfile.load(_dataDir);
 
   _log.info('Using data directory: $_dataDir');
   _log.info(
@@ -198,6 +310,10 @@ Future<void> main(List<String> args) async {
   );
   _log.info(
     'GPT itinerary explanation enabled: ${_openAiApiKey != null && _openAiApiKey!.isNotEmpty}',
+  );
+  _log.info(
+    'Itinerary learning profile enabled: ${_itineraryLearningProfile.enabled}'
+    '${_itineraryLearningProfile.sourcePath != null ? ' (${_itineraryLearningProfile.sourcePath})' : ''}',
   );
 
   final postgresConfig = PostgresConfig.fromEnv();
@@ -1681,6 +1797,7 @@ Future<Map<String, dynamic>> _buildAdminMetricsSnapshot() async {
           ((Platform.environment['LINE_CHANNEL_ACCESS_TOKEN'] ?? '').isNotEmpty),
       'googleMapsConfigured':
           (Platform.environment['GOOGLE_MAPS_API_KEY'] ?? '').isNotEmpty,
+      'itineraryLearningConfigured': _itineraryLearningProfile.enabled,
       'cronConfigured': _reminderCronToken != null && _reminderCronToken!.isNotEmpty,
       'crawlRunning': _crawlJob?.running == true,
       'timestamp': now.toUtc().toIso8601String(),
@@ -7266,6 +7383,13 @@ double _scorePlace(
     }
   }
 
+  score += _itineraryLearningProfile.scoreBoost(
+    place,
+    preferredTags: preferredTags,
+    targetPrice: targetPrice,
+    weights: weights,
+  );
+
   return score;
 }
 
@@ -7929,6 +8053,37 @@ String _asString(Map<String, dynamic> body, String key) {
     return '';
   }
   return value.toString();
+}
+
+Map<String, double> _doubleMapFromJson(dynamic raw) {
+  if (raw is! Map) {
+    return const <String, double>{};
+  }
+  final result = <String, double>{};
+  for (final entry in raw.entries) {
+    final key = entry.key.toString().trim().toLowerCase();
+    if (key.isEmpty) continue;
+    final value = entry.value;
+    final parsed = value is num ? value.toDouble() : double.tryParse('$value');
+    if (parsed == null) continue;
+    result[key] = parsed;
+  }
+  return result;
+}
+
+Map<String, Map<String, double>> _nestedDoubleMapFromJson(dynamic raw) {
+  if (raw is! Map) {
+    return const <String, Map<String, double>>{};
+  }
+  final result = <String, Map<String, double>>{};
+  for (final entry in raw.entries) {
+    final key = entry.key.toString().trim().toLowerCase();
+    if (key.isEmpty) continue;
+    final value = _doubleMapFromJson(entry.value);
+    if (value.isEmpty) continue;
+    result[key] = value;
+  }
+  return result;
 }
 
 int? _asInt(Map<String, dynamic> body, String key) {

@@ -1,0 +1,35 @@
+{
+  "notes": "複製此檔為 backend/data/historical_itineraries.json，將 placeId 換成 db.json 裡真實存在的景點 id。",
+  "samples": [
+    {
+      "id": "sample-taichung-001",
+      "weight": 1.0,
+      "context": {
+        "interests": ["museum", "heritage", "cafe"],
+        "tripPurpose": "explore",
+        "travelBehavior": "couple",
+        "targetPrice": "mid",
+        "destinationCities": ["臺中市"]
+      },
+      "days": [
+        {
+          "date": "2026-05-10",
+          "items": [
+            {
+              "placeId": "replace-with-real-place-id-1",
+              "stayMinutes": 90
+            },
+            {
+              "placeId": "replace-with-real-place-id-2",
+              "stayMinutes": 75
+            },
+            {
+              "placeId": "replace-with-real-place-id-3",
+              "stayMinutes": 60
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

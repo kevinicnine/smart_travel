@@ -1,0 +1,223 @@
+{
+  "notes": "旅行社或部落格行程先整理成這個格式，再用 backend/scripts/import_agency_itineraries.py 轉成 historical_itineraries.json 可吃的 sample。type=place 的項目會優先嘗試對應資料庫景點；meal/hotel/note/departure 預設只進報表，不直接進訓練樣本。",
+  "sources": [
+    {
+      "id": "agency-taichung-3d2n-001",
+      "title": "台中三天兩夜旅行社行程",
+      "url": "https://example.com/taichung-3d2n",
+      "weight": 1.0,
+      "context": {
+        "interests": [
+          "heritage",
+          "museum",
+          "night_market",
+          "department_store",
+          "national_park"
+        ],
+        "tripPurpose": "explore",
+        "travelBehavior": "general",
+        "targetPrice": "mid",
+        "destinationCities": [
+          "臺中市"
+        ]
+      },
+      "days": [
+        {
+          "date": "2026-01-01",
+          "dayStartTime": "08:00",
+          "items": [
+            {
+              "name": "自家出發",
+              "arrivalTime": "08:00",
+              "type": "departure"
+            },
+            {
+              "name": "東海大學",
+              "arrivalTime": "10:00",
+              "departureTime": "12:00",
+              "type": "place",
+              "city": "臺中市"
+            },
+            {
+              "name": "東海商圈",
+              "arrivalTime": "12:00",
+              "departureTime": "13:00",
+              "type": "meal",
+              "city": "臺中市",
+              "notes": "午餐"
+            },
+            {
+              "name": "鰲峰山觀景平台",
+              "arrivalTime": "13:30",
+              "departureTime": "14:30",
+              "type": "place",
+              "city": "臺中市"
+            },
+            {
+              "name": "三井 OUTLET PARK",
+              "arrivalTime": "15:00",
+              "departureTime": "16:00",
+              "type": "place",
+              "city": "臺中市"
+            },
+            {
+              "name": "高美濕地",
+              "arrivalTime": "16:20",
+              "departureTime": "17:40",
+              "type": "place",
+              "city": "臺中市"
+            },
+            {
+              "name": "台中鳥日子",
+              "arrivalTime": "18:00",
+              "type": "hotel",
+              "city": "臺中市"
+            },
+            {
+              "name": "逢甲夜市",
+              "arrivalTime": "18:30",
+              "departureTime": "20:10",
+              "type": "place",
+              "city": "臺中市",
+              "notes": "晚餐"
+            }
+          ]
+        },
+        {
+          "date": "2026-01-02",
+          "dayStartTime": "09:30",
+          "items": [
+            {
+              "name": "飯店出發",
+              "arrivalTime": "09:30",
+              "type": "departure"
+            },
+            {
+              "name": "秋紅谷生態景觀",
+              "arrivalTime": "09:40",
+              "departureTime": "10:00",
+              "type": "place",
+              "city": "臺中市"
+            },
+            {
+              "name": "台中國家歌劇院",
+              "arrivalTime": "10:00",
+              "departureTime": "10:30",
+              "type": "place",
+              "city": "臺中市"
+            },
+            {
+              "name": "分子藥局",
+              "arrivalTime": "10:30",
+              "departureTime": "11:20",
+              "type": "place",
+              "city": "臺中市"
+            },
+            {
+              "name": "動漫彩繪巷",
+              "arrivalTime": "11:30",
+              "departureTime": "12:00",
+              "type": "place",
+              "city": "臺中市"
+            },
+            {
+              "name": "第五市場",
+              "arrivalTime": "12:00",
+              "departureTime": "13:00",
+              "type": "place",
+              "city": "臺中市",
+              "notes": "午餐"
+            },
+            {
+              "name": "宮原眼科",
+              "arrivalTime": "13:00",
+              "departureTime": "13:40",
+              "type": "place",
+              "city": "臺中市"
+            },
+            {
+              "name": "新天地西洋博物館",
+              "arrivalTime": "14:00",
+              "departureTime": "15:30",
+              "type": "place",
+              "city": "臺中市"
+            },
+            {
+              "name": "筏子溪迎賓廊道",
+              "arrivalTime": "16:00",
+              "departureTime": "16:40",
+              "type": "place",
+              "city": "臺中市"
+            },
+            {
+              "name": "台中鳥日子",
+              "arrivalTime": "17:00",
+              "type": "hotel",
+              "city": "臺中市"
+            },
+            {
+              "name": "第六市場",
+              "arrivalTime": "18:00",
+              "departureTime": "19:10",
+              "type": "place",
+              "city": "臺中市",
+              "notes": "晚餐"
+            }
+          ]
+        },
+        {
+          "date": "2026-01-03",
+          "dayStartTime": "09:30",
+          "items": [
+            {
+              "name": "飯店出發",
+              "arrivalTime": "09:30",
+              "type": "departure"
+            },
+            {
+              "name": "審計新村",
+              "arrivalTime": "09:40",
+              "departureTime": "10:20",
+              "type": "place",
+              "city": "臺中市"
+            },
+            {
+              "name": "台中植物園",
+              "arrivalTime": "10:20",
+              "departureTime": "11:20",
+              "type": "place",
+              "city": "臺中市"
+            },
+            {
+              "name": "勤美誠品綠園道",
+              "arrivalTime": "11:30",
+              "departureTime": "13:00",
+              "type": "place",
+              "city": "臺中市",
+              "notes": "午餐"
+            },
+            {
+              "name": "后里鐵馬道",
+              "arrivalTime": "13:30",
+              "departureTime": "15:30",
+              "type": "place",
+              "city": "臺中市"
+            },
+            {
+              "name": "麗寶 OUTLET MALL",
+              "arrivalTime": "16:30",
+              "departureTime": "17:40",
+              "type": "place",
+              "city": "臺中市"
+            },
+            {
+              "name": "開心返家",
+              "arrivalTime": "18:00",
+              "type": "arrival"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
