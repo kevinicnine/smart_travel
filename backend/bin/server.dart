@@ -8737,6 +8737,39 @@ String _extractGooglePlaceNameFromUrl(Uri uri) {
   return '';
 }
 
+Future<Uri> _resolveGoogleMapsUrl(Uri uri) async {
+  final host = uri.host.toLowerCase();
+  if (!host.contains('maps.app.goo.gl')) {
+    return uri;
+  }
+  final client = HttpClient()..connectionTimeout = const Duration(seconds: 12);
+  try {
+    var current = uri;
+    for (var i = 0; i < 6; i++) {
+      final request = await client.getUrl(current);
+      request.followRedirects = false;
+      request.headers.set(HttpHeaders.userAgentHeader, 'SmartTravelAdmin/1.0');
+      final response = await request.close();
+      await response.drain<void>();
+      final status = response.statusCode;
+      if (status >= 300 && status < 400) {
+        final location = response.headers.value(HttpHeaders.locationHeader)?.trim() ?? '';
+        if (location.isEmpty) {
+          break;
+        }
+        current = current.resolve(location);
+        continue;
+      }
+      return current;
+    }
+    return current;
+  } catch (_) {
+    return uri;
+  } finally {
+    client.close(force: true);
+  }
+}
+
 String _normalizePlaceNameForMatch(String input) {
   var text = _normalizeLocationText(input);
   const suffixes = <String>[
@@ -8990,11 +9023,12 @@ Future<Place> _importPlaceFromGoogleMapsUrl({
   if (uri == null) {
     throw ApiException(400, 'Google Maps 網址格式錯誤');
   }
+  final resolvedUri = await _resolveGoogleMapsUrl(uri);
   final placeId =
-      uri.queryParameters['query_place_id']?.trim() ??
-      uri.queryParameters['place_id']?.trim() ??
+      resolvedUri.queryParameters['query_place_id']?.trim() ??
+      resolvedUri.queryParameters['place_id']?.trim() ??
       '';
-  final extractedName = _extractGooglePlaceNameFromUrl(uri);
+  final extractedName = _extractGooglePlaceNameFromUrl(resolvedUri);
   final resolvedName = extractedName.isNotEmpty ? extractedName : nameHint;
   final resolvedCity = cityHint.trim();
 

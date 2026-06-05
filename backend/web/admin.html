@@ -1366,7 +1366,9 @@
 
       async function importTrainingPlaceFromGoogleUrl(rowKey, placeName, city = '') {
         const targetName = String(placeName || '').trim();
-        const url = window.prompt(`貼上「${targetName || '未匹配景點'}」的 Google Maps 網址`);
+        const url = window.prompt(
+          `貼上「${targetName || '未匹配景點'}」的 Google Maps 網址\n支援 google.com/maps 與 maps.app.goo.gl`,
+        );
         if (!url) return;
         try {
           setTrainingActionStatus(`正在從 Google Maps 補入景點：${targetName || '未匹配景點'}...`, 'muted');
@@ -1383,8 +1385,11 @@
             throw new Error('Google Maps 補景點成功，但未取得可指派的景點資料');
           }
           await setTrainingOverride(rowKey, 'map', place.id, place.name || targetName);
+          window.alert(`已補入景點：${place.name || targetName}\n並已指派到這筆未匹配景點。`);
         } catch (error) {
-          setTrainingActionStatus(error.message || '從 Google Maps 補景點失敗', 'danger');
+          const message = error.message || '從 Google Maps 補景點失敗';
+          setTrainingActionStatus(message, 'danger');
+          window.alert(message);
         }
       }
 
