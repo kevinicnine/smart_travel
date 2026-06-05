@@ -27,7 +27,7 @@
           "dayStartTime": "08:00",
           "items": [
             {
-              "name": "自家出發",
+              "name": "出發",
               "arrivalTime": "08:00",
               "type": "departure"
             },
@@ -211,7 +211,110 @@
               "city": "臺中市"
             },
             {
-              "name": "開心返家",
+              "name": "返家",
+              "arrivalTime": "18:00",
+              "type": "arrival"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "agency-miaoli-2d1n-001a",
+      "title": "苗栗泰安溫泉二日遊 A版",
+      "url": "https://www.welovetravel.com.tw/go67616/fun01/sche.php?c=TW1D20207",
+      "weight": 1.0,
+      "context": {
+        "interests": [
+          "heritage",
+          "hot_spring",
+          "market",
+          "diy",
+          "national_park"
+        ],
+        "tripPurpose": "relax",
+        "travelBehavior": "family",
+        "targetPrice": "mid",
+        "destinationCities": [
+          "苗栗縣"
+        ]
+      },
+      "days": [
+        {
+          "date": "2026-01-01",
+          "dayStartTime": "07:20",
+          "items": [
+            {
+              "name": "集合出發",
+              "arrivalTime": "07:20",
+              "type": "departure"
+            },
+            {
+              "name": "黃金小鎮",
+              "arrivalTime": "09:30",
+              "departureTime": "14:00",
+              "type": "place",
+              "city": "苗栗縣",
+              "notes": "單車探索、石圍牆文化、風車DIY、鄉土午餐"
+            },
+            {
+              "name": "清安豆腐街",
+              "arrivalTime": "14:10",
+              "departureTime": "16:00",
+              "type": "place",
+              "city": "苗栗縣"
+            },
+            {
+              "name": "泰安溫泉錦水溫泉飯店",
+              "arrivalTime": "16:30",
+              "type": "hotel",
+              "city": "苗栗縣",
+              "notes": "住宿與溫泉設施"
+            },
+            {
+              "name": "飯店晚餐",
+              "arrivalTime": "18:30",
+              "departureTime": "19:30",
+              "type": "meal",
+              "city": "苗栗縣"
+            }
+          ]
+        },
+        {
+          "date": "2026-01-02",
+          "dayStartTime": "10:30",
+          "items": [
+            {
+              "name": "飯店退房出發",
+              "arrivalTime": "10:30",
+              "type": "departure"
+            },
+            {
+              "name": "巧克力雲莊",
+              "arrivalTime": "11:00",
+              "departureTime": "14:00",
+              "type": "place",
+              "city": "苗栗縣",
+              "notes": "巧克力DIY、西式風味餐"
+            },
+            {
+              "name": "納姆內彈珠汽水觀光工廠",
+              "arrivalTime": "14:30",
+              "departureTime": "16:30",
+              "type": "place",
+              "city": "苗栗縣",
+              "notes": "導覽、DIY、汽水體驗"
+            },
+            {
+              "name": "客家米食風味點心",
+              "arrivalTime": "16:40",
+              "departureTime": "17:10",
+              "type": "meal",
+              "city": "苗栗縣",
+              "notes": "菜包、水粄等"
+            },
+            {
+              "name": "平安賦歸",
               "arrivalTime": "18:00",
               "type": "arrival"
             }

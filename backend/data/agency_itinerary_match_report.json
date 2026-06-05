@@ -1,16 +1,43 @@
 {
-  "generatedAt": "2026-06-04T12:34:12.337669Z",
+  "generatedAt": "2026-06-04T16:40:57.845226Z",
   "source": "/Users/kevinicnine/Desktop/smart_travel/backend/data/agency_itineraries_raw.json",
-  "samplesGenerated": 0,
-  "matchedItems": 0,
+  "placesSource": "remote",
+  "samplesGenerated": 2,
+  "matchedItems": 6,
   "unmatchedItems": 20,
-  "skippedItems": 6,
+  "skippedItems": 10,
   "sources": [
     {
       "id": "agency-taichung-3d2n-001",
       "title": "台中三天兩夜旅行社行程",
       "url": "https://example.com/taichung-3d2n",
-      "matchedItems": [],
+      "matchedItems": [
+        {
+          "sourceName": "高美濕地",
+          "matchedPlaceId": "ChIJvYFhg4wTaTQR2evNLEQ1ZN8",
+          "matchedPlaceName": "高美濕地木棧道"
+        },
+        {
+          "sourceName": "逢甲夜市",
+          "matchedPlaceId": "ChIJK4W2WSIWaTQROebP2ugIGg8",
+          "matchedPlaceName": "逢甲夜市"
+        },
+        {
+          "sourceName": "動漫彩繪巷",
+          "matchedPlaceId": "ChIJN_NZXQk9aTQRTJVxW1kkEz8",
+          "matchedPlaceName": "動漫彩繪巷"
+        },
+        {
+          "sourceName": "新天地西洋博物館",
+          "matchedPlaceId": "ChIJg889ukg9aTQRnwMhHv6vZP0",
+          "matchedPlaceName": "新天地西洋博物館"
+        },
+        {
+          "sourceName": "審計新村",
+          "matchedPlaceId": "ChIJZc4QyaE9aTQRRVwjmQmYS7g",
+          "matchedPlaceName": "審計新村"
+        }
+      ],
       "unmatchedItems": [
         {
           "name": "東海大學",
@@ -31,7 +58,23 @@
           "type": "place",
           "arrivalTime": "13:30",
           "departureTime": "14:30",
-          "candidates": []
+          "candidates": [
+            {
+              "placeId": "ChIJf-ualBHbaDQRp8HJbCGNrrI",
+              "name": "虎頭山觀景平台",
+              "score": 0.7143
+            },
+            {
+              "placeId": "ChIJb6KFy2tlQTQRCSi4kE-_IC8",
+              "name": "壁山觀景臺",
+              "score": 0.6667
+            },
+            {
+              "placeId": "ChIJC3Q_e_msQjQRgEw324e0CRM",
+              "name": "碧山巖觀景台",
+              "score": 0.6154
+            }
+          ]
         },
         {
           "name": "三井 OUTLET PARK",
@@ -41,25 +84,22 @@
           "candidates": []
         },
         {
-          "name": "高美濕地",
-          "type": "place",
-          "arrivalTime": "16:20",
-          "departureTime": "17:40",
-          "candidates": []
-        },
-        {
-          "name": "逢甲夜市",
-          "type": "place",
-          "arrivalTime": "18:30",
-          "departureTime": "20:10",
-          "candidates": []
-        },
-        {
           "name": "秋紅谷生態景觀",
           "type": "place",
           "arrivalTime": "09:40",
           "departureTime": "10:00",
-          "candidates": []
+          "candidates": [
+            {
+              "placeId": "ChIJLfH_-vM9aTQRpL9e_PxZTxU",
+              "name": "秋紅谷景觀生態公園",
+              "score": 0.625
+            },
+            {
+              "placeId": "ChIJk-xswJ3TbjQR5sakG3cG7TU",
+              "name": "鹿芝谷生態景觀園區",
+              "score": 0.625
+            }
+          ]
         },
         {
           "name": "台中國家歌劇院",
@@ -73,13 +113,6 @@
           "type": "place",
           "arrivalTime": "10:30",
           "departureTime": "11:20",
-          "candidates": []
-        },
-        {
-          "name": "動漫彩繪巷",
-          "type": "place",
-          "arrivalTime": "11:30",
-          "departureTime": "12:00",
           "candidates": []
         },
         {
@@ -97,13 +130,6 @@
           "candidates": []
         },
         {
-          "name": "新天地西洋博物館",
-          "type": "place",
-          "arrivalTime": "14:00",
-          "departureTime": "15:30",
-          "candidates": []
-        },
-        {
           "name": "筏子溪迎賓廊道",
           "type": "place",
           "arrivalTime": "16:00",
@@ -118,21 +144,34 @@
           "candidates": []
         },
         {
-          "name": "審計新村",
-          "type": "place",
-          "arrivalTime": "09:40",
-          "departureTime": "10:20",
-          "candidates": []
-        },
-        {
           "name": "台中植物園",
           "type": "place",
           "arrivalTime": "10:20",
           "departureTime": "11:20",
           "candidates": [
             {
+              "placeId": "ChIJe1ASN0-pQjQRIeghXqXkkAg",
+              "name": "臺北植物園",
+              "score": 0.8
+            },
+            {
+              "placeId": "ChIJC4IJrms9aTQRqGR5vbJivl8",
+              "name": "臺中公園(雙十路)",
+              "score": 0.6667
+            },
+            {
+              "placeId": "ChIJ5SQWm2s9aTQRO9CRyPBXThA",
+              "name": "臺中公園",
+              "score": 0.6667
+            },
+            {
               "placeId": "C1_371020000A_001466",
               "name": "金門植物園",
+              "score": 0.6
+            },
+            {
+              "placeId": "ChIJsQX5VAY2aDQRIm2J8uaw7r4",
+              "name": "高峰植物園",
               "score": 0.6
             }
           ]
@@ -149,7 +188,13 @@
           "type": "place",
           "arrivalTime": "13:30",
           "departureTime": "15:30",
-          "candidates": []
+          "candidates": [
+            {
+              "placeId": "ChIJAQAAQBM9aTQRXASVVs5t3aI",
+              "name": "后豐鐵馬道",
+              "score": 0.8
+            }
+          ]
         },
         {
           "name": "麗寶 OUTLET MALL",
@@ -161,7 +206,7 @@
       ],
       "skippedItems": [
         {
-          "name": "自家出發",
+          "name": "出發",
           "type": "departure",
           "reason": "item_type_skipped"
         },
@@ -186,7 +231,78 @@
           "reason": "item_type_skipped"
         },
         {
-          "name": "開心返家",
+          "name": "返家",
+          "type": "arrival",
+          "reason": "item_type_skipped"
+        }
+      ]
+    },
+    {
+      "id": "agency-miaoli-2d1n-001a",
+      "title": "苗栗泰安溫泉二日遊 A版",
+      "url": "https://www.welovetravel.com.tw/go67616/fun01/sche.php?c=TW1D20207",
+      "matchedItems": [
+        {
+          "sourceName": "巧克力雲莊",
+          "matchedPlaceId": "ChIJ0Rxr6hQAaTQRwjvjR8zEfqo",
+          "matchedPlaceName": "巧克力雲莊"
+        }
+      ],
+      "unmatchedItems": [
+        {
+          "name": "黃金小鎮",
+          "type": "place",
+          "arrivalTime": "09:30",
+          "departureTime": "14:00",
+          "candidates": []
+        },
+        {
+          "name": "清安豆腐街",
+          "type": "place",
+          "arrivalTime": "14:10",
+          "departureTime": "16:00",
+          "candidates": []
+        },
+        {
+          "name": "飯店晚餐",
+          "type": "meal",
+          "arrivalTime": "18:30",
+          "departureTime": "19:30",
+          "candidates": []
+        },
+        {
+          "name": "納姆內彈珠汽水觀光工廠",
+          "type": "place",
+          "arrivalTime": "14:30",
+          "departureTime": "16:30",
+          "candidates": []
+        },
+        {
+          "name": "客家米食風味點心",
+          "type": "meal",
+          "arrivalTime": "16:40",
+          "departureTime": "17:10",
+          "candidates": []
+        }
+      ],
+      "skippedItems": [
+        {
+          "name": "集合出發",
+          "type": "departure",
+          "reason": "item_type_skipped"
+        },
+        {
+          "name": "泰安溫泉錦水溫泉飯店",
+          "type": "hotel",
+          "reason": "item_type_skipped"
+        },
+        {
+          "name": "飯店退房出發",
+          "type": "departure",
+          "reason": "item_type_skipped"
+        },
+        {
+          "name": "平安賦歸",
           "type": "arrival",
           "reason": "item_type_skipped"
         }

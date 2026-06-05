@@ -429,6 +429,7 @@
           <button class="nav-item" data-view="events" onclick="showView('events')">App 事件</button>
           <button class="nav-item" data-view="places" onclick="showView('places')">景點管理</button>
           <button class="nav-item" data-view="users" onclick="showView('users')">使用者</button>
+          <button class="nav-item" data-view="training" onclick="showView('training')">模型訓練</button>
           <button class="nav-item" data-view="import" onclick="showView('import')">匯入、同步與爬蟲</button>
         </div>
         <div class="sidebar-footer">
@@ -659,6 +660,71 @@
           </div>
         </section>
 
+        <section id="trainingView" class="section">
+          <div class="grid stats" id="trainingStatsGrid"></div>
+          <div class="card">
+            <h3>旅行社原始行程 JSON</h3>
+            <p class="muted">這裡直接維護 <code>agency_itineraries_raw.json</code>。儲存後可直接在雲端執行匯入、查看匹配結果、併入正式訓練檔並啟動模型訓練。</p>
+            <textarea id="trainingAgencyRaw" style="min-height: 360px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;"></textarea>
+            <div class="actions" style="margin-top:12px;">
+              <button onclick="loadTrainingRaw()">重新載入原始資料</button>
+              <button class="primary" onclick="saveTrainingRaw()">儲存原始資料</button>
+              <button onclick="runAgencyImport()">執行匯入轉換</button>
+              <button onclick="promoteImportedSamples()">併入正式訓練檔</button>
+              <button class="primary" onclick="runRankerTraining()">開始訓練模型</button>
+            </div>
+            <div id="trainingActionStatus" class="muted" style="margin-top:12px;"></div>
+          </div>
+          <div class="section-grid">
+            <div class="card">
+              <h3>匯入結果摘要</h3>
+              <div id="trainingImportedSummary" class="muted"></div>
+              <pre id="trainingRunLog" style="margin-top:12px;">尚未執行。</pre>
+            </div>
+            <div class="card">
+              <h3>模型權重摘要</h3>
+              <div id="trainingWeightsSummary" class="muted"></div>
+              <pre id="trainingWeightsPreview" style="margin-top:12px;">尚未產生權重檔。</pre>
+            </div>
+          </div>
+          <div class="card">
+            <h3>模型版本</h3>
+            <div id="trainingWeightVersionSummary" class="muted"></div>
+            <div class="table-wrap" style="margin-top:12px;">
+              <table>
+                <thead>
+                  <tr>
+                    <th>版本</th>
+                    <th>建立時間</th>
+                    <th>摘要</th>
+                    <th>狀態</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="trainingWeightVersionsBody"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="card">
+            <h3>未匹配景點</h3>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>來源</th>
+                    <th>景點名稱</th>
+                    <th>類型</th>
+                    <th>時間</th>
+                    <th>候選建議</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="trainingUnmatchedBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
         <section id="importView" class="section">
           <div class="card">
             <h3>匯入與同步</h3>
@@ -671,6 +737,7 @@
               <button id="syncFromRemoteBtn" onclick="syncFromRemote()">同步雲端資料到目前環境</button>
               <button id="syncToLocalBtn" onclick="syncToLocal()">同步目前環境到本機</button>
             </div>
+            <div id="syncActionStatus" class="muted" style="margin-top:12px;"></div>
             <p class="muted">匯入格式需為 <code>{ "places": [ ... ] }</code>。同步功能依後端環境變數設定而定。</p>
           </div>
           <div class="card">
@@ -683,6 +750,7 @@
                   <option value="merge_tags">合併標籤 (merge_tags_from_reviews.py)</option>
                   <option value="merge_ratings">合併評分 (merge_ratings_from_reviews.py)</option>
                   <option value="google_places">Google 抓景點 (fetch_places_from_google.py)</option>
+                  <option value="reclassify_places">重跑景點分類 (reclassify_places.py)</option>
                 </select>
               </label>
               <label id="crawlCityWrap" style="display:none;">縣市
@@ -818,6 +886,13 @@
         metrics: null,
         metricsTimer: null,
         crawlTimer: null,
+        trainingSnapshot: null,
+        trainingSearchResults: {},
+        trainingMatchOverrides: {},
+        trainingWeightVersions: {
+          activeVersionId: null,
+          versions: [],
+        },
       };
 
       function getToken() {
@@ -878,6 +953,10 @@
           .replaceAll("'", '&#39;');
       }
 
+      function jsStringLiteral(value) {
+        return JSON.stringify(String(value ?? ''));
+      }
+
       function badge(label, cls = 'info') {
         return `<span class="badge ${cls}">${label}</span>`;
       }
@@ -899,6 +978,7 @@
           events: ['App 事件', '追蹤 Flutter 前端頁面瀏覽、登入、行程生成與編輯操作。'],
           places: ['景點管理', '維護景點資料、查看完整度、價格與營業時間，並快速修正內容。'],
           users: ['使用者', '查看興趣偏好、LINE 綁定、有效行程，並執行測試推播。'],
+          training: ['模型訓練', '雲端管理旅行社原始行程、查看匹配結果、併入正式訓練檔並訓練排序模型。'],
           import: ['匯入、同步與爬蟲', '匯出資料、合併同步、控制爬蟲與檢查最後同步結果。'],
         };
         document.getElementById('viewTitle').innerText = titleMap[name][0];
@@ -991,6 +1071,9 @@
         }
         if (state.currentView === 'users') {
           await loadUsers();
+        }
+        if (state.currentView === 'training') {
+          await loadTrainingWorkspace();
         }
         if (state.currentView === 'import') {
           await refreshCrawlStatus();
@@ -1137,6 +1220,18 @@
         syncToBtn.title = sync.syncToLocalAvailable ? '' : (sync.syncToLocalReason || '不可用');
       }
 
+      function setSyncActionStatus(message, tone = 'muted') {
+        const el = document.getElementById('syncActionStatus');
+        if (!el) return;
+        const colors = {
+          muted: 'var(--muted)',
+          ok: 'var(--ok)',
+          danger: 'var(--danger)',
+        };
+        el.style.color = colors[tone] || colors.muted;
+        el.innerText = message;
+      }
+
       function renderAppEvents(snapshot) {
         document.getElementById('eventStatsGrid').innerHTML = [
           ['總事件數', snapshot.totalEvents ?? 0],
@@ -1178,6 +1273,366 @@
           5,
           '尚無近期 App 事件',
         );
+      }
+
+      function setTrainingActionStatus(message, tone = 'muted') {
+        const el = document.getElementById('trainingActionStatus');
+        if (!el) return;
+        const colors = {
+          muted: 'var(--muted)',
+          ok: 'var(--ok)',
+          danger: 'var(--danger)',
+        };
+        el.style.color = colors[tone] || colors.muted;
+        el.innerText = message;
+      }
+
+      function buildTrainingMatchKey(sourceId, item) {
+        if (item && item.overrideKey) return String(item.overrideKey);
+        return [
+          sourceId || '',
+          item?.name || '',
+          item?.type || 'place',
+          item?.arrivalTime || '',
+          item?.departureTime || '',
+        ].join('||');
+      }
+
+      function formatTrainingVersionLabel(version) {
+        const label = String(version?.label || '').trim();
+        if (label) return label;
+        const metadata = version?.metadata || {};
+        return `samples=${metadata.samplesUsed || 0} / stops=${metadata.stopsUsed || 0}`;
+      }
+
+      async function setTrainingOverride(key, action, placeId = '', placeName = '') {
+        try {
+          setTrainingActionStatus(
+            action === 'ignore'
+              ? '更新忽略規則中...'
+              : action === 'clear'
+              ? '清除修正規則中...'
+              : '儲存景點指派中...',
+            'muted',
+          );
+          await apiFetch('/training/match-overrides', {
+            method: 'POST',
+            body: JSON.stringify({
+              key,
+              action,
+              placeId,
+              placeName,
+            }),
+          });
+          delete state.trainingSearchResults[key];
+          setTrainingActionStatus(
+            action === 'ignore'
+              ? '已標記為忽略。請重新執行匯入轉換讓修正生效。'
+              : action === 'clear'
+              ? '已清除人工修正。請重新執行匯入轉換。'
+              : '已儲存人工匹配。請重新執行匯入轉換。',
+            'ok',
+          );
+          await loadTrainingWorkspace();
+        } catch (error) {
+          setTrainingActionStatus(error.message || '更新匹配修正規則失敗', 'danger');
+        }
+      }
+
+      async function searchTrainingPlaces(rowKey, query) {
+        const trimmed = String(query || '').trim();
+        if (!trimmed) {
+          setTrainingActionStatus('景點搜尋名稱不可為空。', 'danger');
+          return;
+        }
+        try {
+          setTrainingActionStatus(`搜尋景點候選：${trimmed}`, 'muted');
+          const data = await apiFetch(
+            `/places?q=${encodeURIComponent(trimmed)}&category=&sort=rating&recent=0&incomplete=0`,
+          );
+          const places = data.data?.places || [];
+          state.trainingSearchResults[rowKey] = places.slice(0, 8);
+          renderTrainingWorkspace(state.trainingSnapshot || {});
+          setTrainingActionStatus(
+            places.length
+              ? `找到 ${places.length} 筆候選，請選擇要指派的景點。`
+              : '查無候選景點。',
+            places.length ? 'ok' : 'muted',
+          );
+        } catch (error) {
+          setTrainingActionStatus(error.message || '搜尋景點候選失敗', 'danger');
+        }
+      }
+
+      async function activateWeightVersion(versionId) {
+        if (!confirm('會切換目前啟用中的模型版本，確定執行？')) return;
+        try {
+          setTrainingActionStatus('切換模型版本中...', 'muted');
+          const data = await apiFetch('/training/activate-weight-version', {
+            method: 'POST',
+            body: JSON.stringify({ versionId }),
+          });
+          setTrainingActionStatus(data.message || '已切換模型版本', 'ok');
+          renderTrainingWorkspace(data.data?.snapshot || {});
+          await loadMetrics();
+        } catch (error) {
+          setTrainingActionStatus(error.message || '切換模型版本失敗', 'danger');
+        }
+      }
+
+      function summarizeFileRow(label, file) {
+        if (!file || !file.exists) {
+          return `<div class="kv"><strong>${escapeHtml(label)}</strong><div>尚未產生</div></div>`;
+        }
+        const details = [
+          file.sampleCount != null ? `樣本 ${file.sampleCount}` : null,
+          file.sourceCount != null ? `來源 ${file.sourceCount}` : null,
+          file.matchedItems != null ? `匹配 ${file.matchedItems}` : null,
+          file.unmatchedItems != null ? `未匹配 ${file.unmatchedItems}` : null,
+          file.sizeBytes != null ? `${file.sizeBytes} bytes` : null,
+          file.updatedAt ? `更新 ${formatDateTime(file.updatedAt)}` : null,
+        ].filter(Boolean).join(' ｜ ');
+        return `<div class="kv"><strong>${escapeHtml(label)}</strong><div>${escapeHtml(details || '已存在')}</div></div>`;
+      }
+
+      function renderTrainingWorkspace(snapshot) {
+        state.trainingSnapshot = snapshot;
+        const files = snapshot.files || {};
+        const report = snapshot.matchReport || {};
+        const matchOverrides = snapshot.matchOverrides?.overrides || {};
+        const weightVersions = snapshot.weightVersions || { activeVersionId: null, versions: [] };
+        const imported = snapshot.imported || {};
+        const weights = snapshot.weights || {};
+        const raw = snapshot.raw || {};
+        state.trainingMatchOverrides = matchOverrides;
+        state.trainingWeightVersions = weightVersions;
+
+        document.getElementById('trainingStatsGrid').innerHTML = [
+          ['原始來源數', files.agencyRaw?.sourceCount ?? 0],
+          ['匯入樣本數', files.imported?.sampleCount ?? 0],
+          ['正式訓練樣本', files.historical?.sampleCount ?? 0],
+          ['已匹配景點', files.matchReport?.matchedItems ?? 0],
+          ['未匹配景點', files.matchReport?.unmatchedItems ?? 0],
+          ['人工修正規則', files.matchOverrides?.overrideCount ?? 0],
+          ['模型已啟用', weights && Object.keys(weights).length ? '是' : '否'],
+        ].map(([label, value]) => `
+          <div class="stat">
+            <div class="label">${label}</div>
+            <div class="value">${value}</div>
+          </div>
+        `).join('');
+
+        if (raw && Object.keys(raw).length) {
+          document.getElementById('trainingAgencyRaw').value = JSON.stringify(raw, null, 2);
+        }
+
+        document.getElementById('trainingImportedSummary').innerHTML = [
+          summarizeFileRow('原始行程', files.agencyRaw),
+          summarizeFileRow('匯入樣本', files.imported),
+          summarizeFileRow('正式訓練檔', files.historical),
+          summarizeFileRow('匹配報表', files.matchReport),
+          summarizeFileRow('人工修正規則', files.matchOverrides),
+        ].join('');
+
+        const metadata = weights.metadata || {};
+        const weightsSummary = [];
+        if (files.weights?.exists) {
+          weightsSummary.push(`<div class="kv"><strong>權重檔</strong><div>${escapeHtml(files.weights.filename || 'itinerary_ranker_weights.json')}</div></div>`);
+          if (weights.generatedAt) {
+            weightsSummary.push(`<div class="kv"><strong>產生時間</strong><div>${formatDateTime(weights.generatedAt)}</div></div>`);
+          }
+          if (metadata.samplesUsed != null || metadata.stopsUsed != null) {
+            weightsSummary.push(`<div class="kv"><strong>訓練摘要</strong><div>samplesUsed=${metadata.samplesUsed ?? 0} ｜ stopsUsed=${metadata.stopsUsed ?? 0} ｜ skipped=${metadata.skippedPlaceRefs ?? 0}</div></div>`);
+          }
+        } else {
+          weightsSummary.push('<div class="empty">尚未產生權重檔。</div>');
+        }
+        document.getElementById('trainingWeightsSummary').innerHTML = weightsSummary.join('');
+        document.getElementById('trainingWeightsPreview').innerText = files.weights?.exists
+          ? JSON.stringify(weights, null, 2)
+          : '尚未產生權重檔。';
+
+        const versions = Array.isArray(weightVersions.versions) ? weightVersions.versions : [];
+        const activeVersionId = weightVersions.activeVersionId || null;
+        document.getElementById('trainingWeightVersionSummary').innerHTML = versions.length
+          ? `<div class="kv"><strong>目前啟用版本</strong><div>${escapeHtml(activeVersionId || '-')}</div></div>`
+          : '<div class="empty">尚未建立模型版本。</div>';
+        document.getElementById('trainingWeightVersionsBody').innerHTML = renderRows(
+          versions,
+          (version) => {
+            const isActive = activeVersionId && version.id === activeVersionId;
+            const metadata = version.metadata || {};
+            const summary = [
+              formatTrainingVersionLabel(version),
+              metadata.samplesUsed != null ? `samplesUsed=${metadata.samplesUsed}` : null,
+              metadata.stopsUsed != null ? `stopsUsed=${metadata.stopsUsed}` : null,
+              metadata.skippedPlaceRefs != null ? `skipped=${metadata.skippedPlaceRefs}` : null,
+            ].filter(Boolean).join(' ｜ ');
+            return `
+              <tr>
+                <td><code>${escapeHtml(version.id || '-')}</code></td>
+                <td>${formatDateTime(version.createdAt || version.generatedAt)}</td>
+                <td>${escapeHtml(summary || '-')}</td>
+                <td>${isActive ? badge('啟用中', 'ok') : badge('待命', 'info')}</td>
+                <td>
+                  ${isActive
+                    ? '<span class="muted">目前版本</span>'
+                    : `<button onclick='activateWeightVersion(${jsStringLiteral(version.id || '')})'>啟用</button>`}
+                </td>
+              </tr>
+            `;
+          },
+          5,
+          '尚未建立模型版本。',
+        );
+
+        const unmatchedRows = [];
+        for (const source of report.sources || []) {
+          for (const item of source.unmatchedItems || []) {
+            const rowKey = buildTrainingMatchKey(source.id || '', item);
+            const override = matchOverrides[rowKey] || null;
+            const searchResults = state.trainingSearchResults[rowKey] || [];
+            const candidates = (item.candidates || []).slice(0, 3).map((candidate) => {
+              const score = candidate.score != null ? ` (${candidate.score})` : '';
+              const candidateName = candidate.name || candidate.placeId || '-';
+              return `
+                <div style="margin-bottom:6px;">
+                  <span>${escapeHtml(candidateName)}${escapeHtml(score)}</span>
+                  <button style="margin-left:8px;" onclick='setTrainingOverride(${jsStringLiteral(rowKey)},"map",${jsStringLiteral(candidate.placeId || '')},${jsStringLiteral(candidate.name || '')})'>指派</button>
+                </div>
+              `;
+            }).join('');
+            const searched = searchResults.length
+              ? searchResults.map((place) => `
+                  <div style="margin-top:6px;">
+                    <span>${escapeHtml(place.name || '-')}</span>
+                    <span class="muted" style="margin-left:6px;">${escapeHtml(place.city || '-')}</span>
+                    <button style="margin-left:8px;" onclick='setTrainingOverride(${jsStringLiteral(rowKey)},"map",${jsStringLiteral(place.id || '')},${jsStringLiteral(place.name || '')})'>指派</button>
+                  </div>
+                `).join('')
+              : '';
+            const overrideStatus = override
+              ? override.action === 'ignore'
+                ? `<div class="muted">已標記忽略</div>`
+                : `<div class="muted">已人工指派：${escapeHtml(override.placeName || override.placeId || '-')}</div>`
+              : '';
+            unmatchedRows.push({
+              key: rowKey,
+              sourceTitle: source.title || source.id || '-',
+              name: item.name || '-',
+              type: item.type || '-',
+              time: [item.arrivalTime, item.departureTime].filter(Boolean).join(' - ') || '-',
+              candidates: candidates || '無候選',
+              actions: `
+                ${overrideStatus}
+                <div class="inline-actions" style="margin-top:8px;">
+                  <button onclick='searchTrainingPlaces(${jsStringLiteral(rowKey)},${jsStringLiteral(item.name || '')})'>搜尋同名</button>
+                  <button onclick='setTrainingOverride(${jsStringLiteral(rowKey)},"ignore")'>忽略</button>
+                  ${override ? `<button onclick='setTrainingOverride(${jsStringLiteral(rowKey)},"clear")'>清除修正</button>` : ''}
+                </div>
+                ${searched ? `<div style="margin-top:8px;">${searched}</div>` : ''}
+              `,
+            });
+          }
+        }
+        document.getElementById('trainingUnmatchedBody').innerHTML = renderRows(
+          unmatchedRows,
+          (row) => `
+            <tr>
+              <td>${escapeHtml(row.sourceTitle)}</td>
+              <td>${escapeHtml(row.name)}</td>
+              <td>${escapeHtml(row.type)}</td>
+              <td>${escapeHtml(row.time)}</td>
+              <td>${row.candidates}</td>
+              <td>${row.actions}</td>
+            </tr>
+          `,
+          6,
+          '目前沒有未匹配景點。',
+        );
+      }
+
+      async function loadTrainingWorkspace() {
+        try {
+          const data = await apiFetch('/training/status');
+          renderTrainingWorkspace(data.data || {});
+        } catch (error) {
+          setTrainingActionStatus(error.message || '讀取模型訓練資料失敗', 'danger');
+        }
+      }
+
+      async function loadTrainingRaw() {
+        try {
+          const data = await apiFetch('/training/agency-raw');
+          document.getElementById('trainingAgencyRaw').value = data.data?.text || '';
+          setTrainingActionStatus('已重新載入旅行社原始行程資料。', 'ok');
+        } catch (error) {
+          setTrainingActionStatus(error.message || '載入原始資料失敗', 'danger');
+        }
+      }
+
+      async function saveTrainingRaw() {
+        const text = document.getElementById('trainingAgencyRaw').value.trim();
+        if (!text) {
+          setTrainingActionStatus('原始行程 JSON 不可為空。', 'danger');
+          return;
+        }
+        try {
+          JSON.parse(text);
+        } catch (_) {
+          setTrainingActionStatus('原始行程 JSON 格式錯誤。', 'danger');
+          return;
+        }
+        try {
+          const data = await apiFetch('/training/agency-raw', {
+            method: 'PUT',
+            body: JSON.stringify({ text }),
+          });
+          setTrainingActionStatus(`已儲存旅行社原始行程資料（來源 ${data.data?.sourceCount || 0} 筆）。`, 'ok');
+          await loadTrainingWorkspace();
+        } catch (error) {
+          setTrainingActionStatus(error.message || '儲存原始資料失敗', 'danger');
+        }
+      }
+
+      async function runAgencyImport() {
+        try {
+          setTrainingActionStatus('匯入中，正在轉換旅行社行程並比對景點...', 'muted');
+          const data = await apiFetch('/training/import-agency', { method: 'POST' });
+          const run = data.data?.run || {};
+          document.getElementById('trainingRunLog').innerText = [run.stdout, run.stderr].filter(Boolean).join('\n\n') || '已完成，但沒有額外輸出。';
+          setTrainingActionStatus(data.message || '已完成旅行社行程匯入', 'ok');
+          renderTrainingWorkspace(data.data?.snapshot || {});
+        } catch (error) {
+          setTrainingActionStatus(error.message || '旅行社行程匯入失敗', 'danger');
+        }
+      }
+
+      async function promoteImportedSamples() {
+        if (!confirm('會將 historical_itineraries.imported.json 併入正式訓練檔，確定執行？')) return;
+        try {
+          const data = await apiFetch('/training/promote-imported', { method: 'POST' });
+          const info = data.data || {};
+          setTrainingActionStatus(`已併入正式訓練檔：新增 ${info.inserted || 0}，覆蓋 ${info.replaced || 0}，總樣本 ${info.totalSamples || 0}。`, 'ok');
+          await loadTrainingWorkspace();
+        } catch (error) {
+          setTrainingActionStatus(error.message || '併入正式訓練檔失敗', 'danger');
+        }
+      }
+
+      async function runRankerTraining() {
+        if (!confirm('會在目前雲端資料基礎上重新訓練行程排序模型，確定執行？')) return;
+        try {
+          setTrainingActionStatus('訓練中，正在執行 train_itinerary_ranker.py ...', 'muted');
+          const data = await apiFetch('/training/train-ranker', { method: 'POST' });
+          const run = data.data?.run || {};
+          document.getElementById('trainingRunLog').innerText = [run.stdout, run.stderr].filter(Boolean).join('\n\n') || '已完成，但沒有額外輸出。';
+          setTrainingActionStatus(data.message || '已完成模型訓練', 'ok');
+          renderTrainingWorkspace(data.data?.snapshot || {});
+          await loadMetrics();
+        } catch (error) {
+          setTrainingActionStatus(error.message || '模型訓練失敗', 'danger');
+        }
       }
 
       function renderRows(items, renderer, columns, emptyText) {
@@ -1630,30 +2085,41 @@
 
       async function syncFromRemote() {
         if (!confirm('會以遠端管理後台匯出資料合併到目前環境，確定執行？')) return;
+        const btn = document.getElementById('syncFromRemoteBtn');
         try {
+          if (btn) btn.disabled = true;
+          setSyncActionStatus('同步中，正在讀取遠端景點資料...', 'muted');
           const data = await apiFetch('/sync-from-remote', { method: 'POST' });
-          alert(`同步完成：${data.data?.count || 0} 筆`);
+          setSyncActionStatus(`同步完成：${data.data?.count || 0} 筆`, 'ok');
           loadPlaces();
           loadMetrics();
         } catch (error) {
-          alert(error.message || '同步失敗');
+          setSyncActionStatus(error.message || '同步失敗', 'danger');
+        } finally {
+          if (btn) btn.disabled = false;
         }
       }
 
       async function syncToLocal() {
         if (!confirm('會把目前環境的景點同步到本機 API，確定執行？')) return;
+        const btn = document.getElementById('syncToLocalBtn');
         try {
+          if (btn) btn.disabled = true;
+          setSyncActionStatus('同步中，正在推送目前環境資料到本機...', 'muted');
           const data = await apiFetch('/sync-to-local', { method: 'POST' });
-          alert(`同步到本機完成：${data.data?.count || 0} 筆`);
+          setSyncActionStatus(`同步到本機完成：${data.data?.count || 0} 筆`, 'ok');
         } catch (error) {
-          alert(error.message || '同步失敗');
+          setSyncActionStatus(error.message || '同步失敗', 'danger');
+        } finally {
+          if (btn) btn.disabled = false;
         }
       }
 
       function onCrawlModeChange() {
         const mode = document.getElementById('crawlMode').value;
         const google = mode === 'google_places';
-        document.getElementById('crawlCityWrap').style.display = google ? '' : 'none';
+        const reclassify = mode === 'reclassify_places';
+        document.getElementById('crawlCityWrap').style.display = (google || reclassify) ? '' : 'none';
         document.getElementById('crawlBatchCitiesWrap').style.display = google ? '' : 'none';
         document.getElementById('crawlScopeWrap').style.display = google ? '' : 'none';
         document.getElementById('crawlProfileWrap').style.display = google ? '' : 'none';

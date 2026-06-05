@@ -131,17 +131,23 @@ class User {
 }
 
 class BackendData {
-  BackendData({List<User>? users, List<Place>? places})
-    : users = users ?? <User>[],
-      places = places ?? <Place>[];
+  BackendData({
+    List<User>? users,
+    List<Place>? places,
+    Map<String, dynamic>? appState,
+  }) : users = users ?? <User>[],
+       places = places ?? <Place>[],
+       appState = appState ?? <String, dynamic>{};
 
   final List<User> users;
   final List<Place> places;
+  final Map<String, dynamic> appState;
 
   Map<String, dynamic> toJson() {
     return {
       'users': users.map((u) => u.toJson()).toList(),
       'places': places.map((p) => p.toJson()).toList(),
+      'appState': appState,
     };
   }
 
@@ -154,6 +160,12 @@ class BackendData {
               .map(Place.fromJson)
               .toList()
         : <Place>[];
+    final rawAppState = json['appState'];
+    final appState = rawAppState is Map<String, dynamic>
+        ? Map<String, dynamic>.from(rawAppState)
+        : rawAppState is Map
+        ? Map<String, dynamic>.from(rawAppState)
+        : <String, dynamic>{};
     if (rawUsers is List) {
       return BackendData(
         users: rawUsers
@@ -161,9 +173,10 @@ class BackendData {
             .map(User.fromJson)
             .toList(),
         places: places,
+        appState: appState,
       );
     }
-    return BackendData(places: places);
+    return BackendData(places: places, appState: appState);
   }
 }
 

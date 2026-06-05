@@ -1,4 +1,119 @@
 {
   "notes": "由 agency_itineraries_raw.json 轉換而成；只保留成功對應 placeId 的景點項目。",
-  "samples": []
+  "samples": [
+    {
+      "id": "agency-taichung-3d2n-001",
+      "weight": 1.0,
+      "context": {
+        "interests": [
+          "heritage",
+          "museum",
+          "night_market",
+          "department_store",
+          "national_park"
+        ],
+        "tripPurpose": "explore",
+        "travelBehavior": "general",
+        "targetPrice": "mid",
+        "destinationCities": [
+          "臺中市"
+        ]
+      },
+      "days": [
+        {
+          "date": "2026-01-01",
+          "dayStartTime": "08:00",
+          "items": [
+            {
+              "placeId": "ChIJvYFhg4wTaTQR2evNLEQ1ZN8",
+              "stayMinutes": 80,
+              "arrivalTime": "16:20",
+              "slot": "afternoon",
+              "departureTime": "17:40",
+              "transitMinutesFromPrevious": 20
+            },
+            {
+              "placeId": "ChIJK4W2WSIWaTQROebP2ugIGg8",
+              "stayMinutes": 100,
+              "arrivalTime": "18:30",
+              "slot": "evening",
+              "departureTime": "20:10",
+              "transitMinutesFromPrevious": 30
+            }
+          ]
+        },
+        {
+          "date": "2026-01-02",
+          "dayStartTime": "09:30",
+          "items": [
+            {
+              "placeId": "ChIJN_NZXQk9aTQRTJVxW1kkEz8",
+              "stayMinutes": 30,
+              "arrivalTime": "11:30",
+              "slot": "noon",
+              "departureTime": "12:00",
+              "transitMinutesFromPrevious": 10
+            },
+            {
+              "placeId": "ChIJg889ukg9aTQRnwMhHv6vZP0",
+              "stayMinutes": 90,
+              "arrivalTime": "14:00",
+              "slot": "afternoon",
+              "departureTime": "15:30",
+              "transitMinutesFromPrevious": 20
+            }
+          ]
+        },
+        {
+          "date": "2026-01-03",
+          "dayStartTime": "09:30",
+          "items": [
+            {
+              "placeId": "ChIJZc4QyaE9aTQRRVwjmQmYS7g",
+              "stayMinutes": 40,
+              "arrivalTime": "09:40",
+              "slot": "morning",
+              "departureTime": "10:20",
+              "transitMinutesFromPrevious": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "agency-miaoli-2d1n-001a",
+      "weight": 1.0,
+      "context": {
+        "interests": [
+          "heritage",
+          "hot_spring",
+          "market",
+          "diy",
+          "national_park"
+        ],
+        "tripPurpose": "relax",
+        "travelBehavior": "family",
+        "targetPrice": "mid",
+        "destinationCities": [
+          "苗栗縣"
+        ]
+      },
+      "days": [
+        {
+          "date": "2026-01-02",
+          "dayStartTime": "10:30",
+          "items": [
+            {
+              "placeId": "ChIJ0Rxr6hQAaTQRwjvjR8zEfqo",
+              "stayMinutes": 180,
+              "arrivalTime": "11:00",
+              "slot": "noon",
+              "departureTime": "14:00",
+              "transitMinutesFromPrevious": 30
+            }
+          ]
+        }
+      ]
+    }
+  ]
 }

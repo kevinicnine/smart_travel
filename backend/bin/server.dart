@@ -36,7 +36,7 @@ late final String? _adminToken;
 late final String? _adminUser;
 late final String? _adminPass;
 late final String _dataDir;
-late final _ItineraryLearningProfile _itineraryLearningProfile;
+late _ItineraryLearningProfile _itineraryLearningProfile;
 late final DataStore _store;
 late final NotificationService _notificationService;
 _CrawlJob? _crawlJob;
@@ -307,7 +307,7 @@ Future<void> main(List<String> args) async {
   _lineChannelSecret = Platform.environment['LINE_CHANNEL_SECRET'];
   _lineAddFriendUrl = Platform.environment['LINE_ADD_FRIEND_URL'];
   _reminderCronToken = Platform.environment['REMINDER_CRON_TOKEN'];
-  _itineraryLearningProfile = _ItineraryLearningProfile.load(_dataDir);
+  _reloadItineraryLearningProfile();
 
   _log.info('Using data directory: $_dataDir');
   _log.info(
@@ -624,6 +624,10 @@ Future<void> main(List<String> args) async {
       '/api/admin/export',
       (req) => _withAdmin(req, () async {
         final data = await store.read();
+        final scope = req.url.queryParameters['scope']?.trim().toLowerCase();
+        if (scope == 'places') {
+          return jsonResponse(200, {'places': data.places.map((p) => p.toJson()).toList()});
+        }
         return jsonResponse(200, data.toJson());
       }),
     )
@@ -750,6 +754,263 @@ Future<void> main(List<String> args) async {
         } finally {
           client.close(force: true);
         }
+      }),
+    )
+    ..get(
+      '/api/admin/training/status',
+      (req) => _withAdmin(req, () async {
+        final snapshot = await _buildTrainingSnapshot();
+        return jsonResponse(
+          200,
+          successBody(message: '已取得模型訓練資料狀態', data: snapshot),
+        );
+      }),
+    )
+    ..get(
+      '/api/admin/training/agency-raw',
+      (req) => _withAdmin(req, () async {
+        final raw = await _readJsonMapFileIfExists('agency_itineraries_raw.json');
+        final text = raw == null
+            ? ''
+            : const JsonEncoder.withIndent('  ').convert(raw);
+        return jsonResponse(
+          200,
+          successBody(
+            message: '已取得旅行社原始行程資料',
+            data: {'text': text},
+          ),
+        );
+      }),
+    )
+    ..put(
+      '/api/admin/training/agency-raw',
+      (req) => _withAdmin(req, () async {
+        final body = await parseJsonBody(req);
+        final rawText = body['text']?.toString();
+        dynamic decoded;
+        if (rawText != null) {
+          decoded = jsonDecode(rawText);
+        } else {
+          decoded = body['data'];
+        }
+        if (decoded is! Map) {
+          throw ApiException(400, '旅行社原始行程 JSON 格式錯誤');
+        }
+        final payload = Map<String, dynamic>.from(decoded);
+        final sources = payload['sources'];
+        if (sources is! List) {
+          throw ApiException(400, 'agency_itineraries_raw.json 缺少 sources 陣列');
+        }
+        await _writePrettyJsonFile('agency_itineraries_raw.json', payload);
+        return jsonResponse(
+          200,
+          successBody(
+            message: '已儲存旅行社原始行程資料',
+            data: {'sourceCount': sources.length},
+          ),
+        );
+      }),
+    )
+    ..get(
+      '/api/admin/training/imported',
+      (req) => _withAdmin(req, () async {
+        final imported = await _requireJsonMapFile(
+          'historical_itineraries.imported.json',
+        );
+        return jsonResponse(
+          200,
+          successBody(message: '已取得匯入後訓練樣本', data: imported),
+        );
+      }),
+    )
+    ..get(
+      '/api/admin/training/match-report',
+      (req) => _withAdmin(req, () async {
+        final report = await _requireJsonMapFile(
+          'agency_itinerary_match_report.json',
+        );
+        return jsonResponse(
+          200,
+          successBody(message: '已取得景點匹配報表', data: report),
+        );
+      }),
+    )
+    ..get(
+      '/api/admin/training/match-overrides',
+      (req) => _withAdmin(req, () async {
+        final overrides =
+            await _readJsonMapFileIfExists('agency_itinerary_match_overrides.json') ??
+            const <String, dynamic>{'overrides': <String, dynamic>{}};
+        return jsonResponse(
+          200,
+          successBody(message: '已取得景點匹配修正規則', data: overrides),
+        );
+      }),
+    )
+    ..post(
+      '/api/admin/training/match-overrides',
+      (req) => _withAdmin(req, () async {
+        final body = await parseJsonBody(req);
+        final key = body['key']?.toString().trim() ?? '';
+        final action = body['action']?.toString().trim().toLowerCase() ?? '';
+        if (key.isEmpty) {
+          throw ApiException(400, '缺少匹配修正 key');
+        }
+        if (!{'map', 'ignore', 'clear'}.contains(action)) {
+          throw ApiException(400, 'action 必須為 map / ignore / clear');
+        }
+        final payload =
+            await _readJsonMapFileIfExists('agency_itinerary_match_overrides.json') ??
+            <String, dynamic>{'overrides': <String, dynamic>{}};
+        final rawOverrides = payload['overrides'];
+        final overrides = rawOverrides is Map<String, dynamic>
+            ? Map<String, dynamic>.from(rawOverrides)
+            : rawOverrides is Map
+            ? Map<String, dynamic>.from(rawOverrides)
+            : <String, dynamic>{};
+        if (action == 'clear') {
+          overrides.remove(key);
+        } else {
+          final entry = <String, dynamic>{
+            'action': action,
+            'updatedAt': DateTime.now().toUtc().toIso8601String(),
+          };
+          if (action == 'map') {
+            final placeId = body['placeId']?.toString().trim() ?? '';
+            if (placeId.isEmpty) {
+              throw ApiException(400, 'map action 缺少 placeId');
+            }
+            entry['placeId'] = placeId;
+            final placeName = body['placeName']?.toString().trim();
+            if (placeName != null && placeName.isNotEmpty) {
+              entry['placeName'] = placeName;
+            }
+          }
+          overrides[key] = entry;
+        }
+        final next = <String, dynamic>{'overrides': overrides};
+        await _writePrettyJsonFile('agency_itinerary_match_overrides.json', next);
+        return jsonResponse(
+          200,
+          successBody(message: '已更新景點匹配修正規則', data: next),
+        );
+      }),
+    )
+    ..get(
+      '/api/admin/training/weights',
+      (req) => _withAdmin(req, () async {
+        final weights = await _requireJsonMapFile('itinerary_ranker_weights.json');
+        return jsonResponse(
+          200,
+          successBody(message: '已取得行程排序模型權重', data: weights),
+        );
+      }),
+    )
+    ..post(
+      '/api/admin/training/import-agency',
+      (req) => _withAdmin(req, () async {
+        final placesPath = await _writeTrainingPlacesSnapshot();
+        final result = await _runPythonTrainingScript(
+          'import_agency_itineraries.py',
+          environment: {
+            'PLACES_SOURCE': 'local',
+            'PLACES_DB_PATH': placesPath,
+            'MATCH_OVERRIDE_PATH': _trainingDataPath(
+              'agency_itinerary_match_overrides.json',
+            ),
+          },
+        );
+        if (result['ok'] == true) {
+          await _persistTrainingArtifactsFromFiles(const [
+            'historical_itineraries.imported.json',
+            'agency_itinerary_match_report.json',
+          ]);
+        }
+        final snapshot = await _buildTrainingSnapshot();
+        return jsonResponse(
+          200,
+          successBody(
+            message: result['ok'] == true ? '已完成旅行社行程匯入轉換' : '旅行社行程匯入失敗',
+            data: {
+              'run': result,
+              'snapshot': snapshot,
+            },
+          ),
+        );
+      }),
+    )
+    ..post(
+      '/api/admin/training/promote-imported',
+      (req) => _withAdmin(req, () async {
+        final result = await _promoteImportedHistoricalSamples();
+        final summary = _summarizeTrainingFile(
+          'historical_itineraries.json',
+          data: await _readJsonMapFileIfExists('historical_itineraries.json'),
+        );
+        return jsonResponse(
+          200,
+          successBody(
+            message: '已將匯入樣本併入正式訓練檔',
+            data: {
+              ...result,
+              'historical': summary,
+            },
+          ),
+        );
+      }),
+    )
+    ..post(
+      '/api/admin/training/train-ranker',
+      (req) => _withAdmin(req, () async {
+        final placesPath = await _writeTrainingPlacesSnapshot();
+        final result = await _runPythonTrainingScript(
+          'train_itinerary_ranker.py',
+          environment: {
+            'PLACES_DB_PATH': placesPath,
+          },
+        );
+        if (result['ok'] == true) {
+          await _persistTrainingArtifactsFromFiles(const [
+            'itinerary_ranker_weights.json',
+          ]);
+          final weights = await _requireJsonMapFile('itinerary_ranker_weights.json');
+          await _appendWeightVersion(weights);
+          _reloadItineraryLearningProfile();
+        }
+        final snapshot = await _buildTrainingSnapshot();
+        return jsonResponse(
+          200,
+          successBody(
+            message: result['ok'] == true ? '已完成行程排序模型訓練' : '行程排序模型訓練失敗',
+            data: {
+              'run': result,
+              'snapshot': snapshot,
+            },
+          ),
+        );
+      }),
+    )
+    ..post(
+      '/api/admin/training/activate-weight-version',
+      (req) => _withAdmin(req, () async {
+        final body = await parseJsonBody(req);
+        final versionId = body['versionId']?.toString().trim() ?? '';
+        if (versionId.isEmpty) {
+          throw ApiException(400, '缺少 versionId');
+        }
+        final activated = await _activateWeightVersion(versionId);
+        _reloadItineraryLearningProfile();
+        final snapshot = await _buildTrainingSnapshot();
+        return jsonResponse(
+          200,
+          successBody(
+            message: '已切換模型版本',
+            data: {
+              'activated': activated,
+              'snapshot': snapshot,
+            },
+          ),
+        );
       }),
     )
     ..get(
@@ -1362,6 +1623,386 @@ String _normalizeText(String input) {
   return input.toLowerCase().replaceAll(RegExp(r'[\s\W_]+', unicode: true), '');
 }
 
+const Map<String, String> _trainingArtifactStateKeys = {
+  'agency_itineraries_raw.json': 'training.agencyRaw',
+  'historical_itineraries.imported.json': 'training.imported',
+  'historical_itineraries.json': 'training.historical',
+  'agency_itinerary_match_report.json': 'training.matchReport',
+  'agency_itinerary_match_overrides.json': 'training.matchOverrides',
+  'itinerary_ranker_weights.json': 'training.weights',
+};
+
+const String _trainingWeightVersionsStateKey = 'training.weightVersions';
+
+String _trainingDataPath(String filename) => p.join(_dataDir, filename);
+
+Future<Map<String, dynamic>> _readAppState() => _store.readAppState();
+
+Future<void> _writeAppState(Map<String, dynamic> state) => _store.writeAppState(state);
+
+void _reloadItineraryLearningProfile() {
+  _itineraryLearningProfile = _ItineraryLearningProfile.load(_dataDir);
+}
+
+Future<Map<String, dynamic>?> _readJsonMapFileIfExists(String filename) async {
+  final stateKey = _trainingArtifactStateKeys[filename];
+  if (stateKey != null) {
+    final appState = await _readAppState();
+    final stored = appState[stateKey];
+    if (stored is Map<String, dynamic>) {
+      return Map<String, dynamic>.from(stored);
+    }
+    if (stored is Map) {
+      return Map<String, dynamic>.from(stored);
+    }
+  }
+  final file = File(_trainingDataPath(filename));
+  if (!await file.exists()) {
+    return null;
+  }
+  final raw = jsonDecode(await file.readAsString());
+  if (raw is! Map) {
+    throw ApiException(500, '$filename 格式錯誤');
+  }
+  return Map<String, dynamic>.from(raw);
+}
+
+Future<Map<String, dynamic>> _requireJsonMapFile(String filename) async {
+  final data = await _readJsonMapFileIfExists(filename);
+  if (data == null) {
+    throw ApiException(404, '找不到 $filename');
+  }
+  return data;
+}
+
+Future<void> _writePrettyJsonFile(String filename, Object data) async {
+  final stateKey = _trainingArtifactStateKeys[filename];
+  if (stateKey != null && data is Map<String, dynamic>) {
+    final appState = await _readAppState();
+    appState[stateKey] = Map<String, dynamic>.from(data);
+    await _writeAppState(appState);
+  }
+  final file = File(_trainingDataPath(filename));
+  await file.parent.create(recursive: true);
+  await file.writeAsString(
+    const JsonEncoder.withIndent('  ').convert(data),
+    flush: true,
+  );
+}
+
+Future<void> _mirrorTrainingArtifactsToFiles() async {
+  for (final filename in _trainingArtifactStateKeys.keys) {
+    final data = await _readJsonMapFileIfExists(filename);
+    if (data == null) continue;
+    final file = File(_trainingDataPath(filename));
+    await file.parent.create(recursive: true);
+    await file.writeAsString(
+      const JsonEncoder.withIndent('  ').convert(data),
+      flush: true,
+    );
+  }
+}
+
+Future<void> _persistTrainingArtifactsFromFiles(Iterable<String> filenames) async {
+  final appState = await _readAppState();
+  var changed = false;
+  for (final filename in filenames) {
+    final stateKey = _trainingArtifactStateKeys[filename];
+    if (stateKey == null) continue;
+    final file = File(_trainingDataPath(filename));
+    if (!await file.exists()) continue;
+    final raw = jsonDecode(await file.readAsString());
+    if (raw is! Map) continue;
+    appState[stateKey] = Map<String, dynamic>.from(raw);
+    changed = true;
+  }
+  if (changed) {
+    await _writeAppState(appState);
+  }
+}
+
+Future<Map<String, dynamic>> _readTrainingWeightVersions() async {
+  final appState = await _readAppState();
+  final raw = appState[_trainingWeightVersionsStateKey];
+  if (raw is Map<String, dynamic>) {
+    return Map<String, dynamic>.from(raw);
+  }
+  if (raw is Map) {
+    return Map<String, dynamic>.from(raw);
+  }
+  return <String, dynamic>{'activeVersionId': null, 'versions': <dynamic>[]};
+}
+
+Future<void> _writeTrainingWeightVersions(Map<String, dynamic> payload) async {
+  final appState = await _readAppState();
+  appState[_trainingWeightVersionsStateKey] = payload;
+  await _writeAppState(appState);
+}
+
+Future<Map<String, dynamic>> _appendWeightVersion(
+  Map<String, dynamic> weights,
+) async {
+  final payload = await _readTrainingWeightVersions();
+  final rawVersions = payload['versions'];
+  final versions = rawVersions is List
+      ? rawVersions
+            .whereType<Map>()
+            .map((entry) => Map<String, dynamic>.from(entry))
+            .toList()
+      : <Map<String, dynamic>>[];
+  final metadata = weights['metadata'] is Map
+      ? Map<String, dynamic>.from(weights['metadata'] as Map)
+      : const <String, dynamic>{};
+  final generatedAt =
+      weights['generatedAt']?.toString().trim().isNotEmpty == true
+      ? weights['generatedAt'].toString()
+      : DateTime.now().toUtc().toIso8601String();
+  final versionId = const Uuid().v4();
+  final version = <String, dynamic>{
+    'id': versionId,
+    'createdAt': DateTime.now().toUtc().toIso8601String(),
+    'generatedAt': generatedAt,
+    'label': 'samples=${metadata['samplesUsed'] ?? 0} / stops=${metadata['stopsUsed'] ?? 0}',
+    'metadata': metadata,
+    'weights': Map<String, dynamic>.from(weights),
+  };
+  versions.insert(0, version);
+  final next = <String, dynamic>{
+    'activeVersionId': versionId,
+    'versions': versions.take(20).toList(),
+  };
+  await _writeTrainingWeightVersions(next);
+  return version;
+}
+
+Future<Map<String, dynamic>> _activateWeightVersion(String versionId) async {
+  final payload = await _readTrainingWeightVersions();
+  final rawVersions = payload['versions'];
+  final versions = rawVersions is List
+      ? rawVersions
+            .whereType<Map>()
+            .map((entry) => Map<String, dynamic>.from(entry))
+            .toList()
+      : <Map<String, dynamic>>[];
+  Map<String, dynamic>? target;
+  for (final version in versions) {
+    if ((version['id'] ?? '').toString() == versionId) {
+      target = version;
+      break;
+    }
+  }
+  if (target == null) {
+    throw ApiException(404, '找不到指定模型版本');
+  }
+  final weights = target['weights'];
+  if (weights is! Map) {
+    throw ApiException(500, '模型版本缺少 weights 內容');
+  }
+  await _writePrettyJsonFile(
+    'itinerary_ranker_weights.json',
+    Map<String, dynamic>.from(weights),
+  );
+  payload['activeVersionId'] = versionId;
+  await _writeTrainingWeightVersions(payload);
+  return target;
+}
+
+Future<Map<String, dynamic>> _exportCurrentPlacesPayload() async {
+  final data = await _store.read();
+  return {'places': data.places.map((place) => place.toJson()).toList()};
+}
+
+Future<String> _writeTrainingPlacesSnapshot() async {
+  final file = File(_trainingDataPath('training_places_export.json'));
+  final payload = await _exportCurrentPlacesPayload();
+  await file.writeAsString(jsonEncode(payload), flush: true);
+  return file.path;
+}
+
+Future<Map<String, dynamic>> _runPythonTrainingScript(
+  String scriptName, {
+  Map<String, String>? environment,
+}) async {
+  await _mirrorTrainingArtifactsToFiles();
+  final scriptPath = p.join(_dataDir, '..', 'scripts', scriptName);
+  if (!File(scriptPath).existsSync()) {
+    throw ApiException(404, '找不到腳本：$scriptName');
+  }
+  final process = await Process.start(
+    'python3',
+    [scriptPath],
+    workingDirectory: p.dirname(scriptPath),
+    environment: {
+      ...Platform.environment,
+      'PYTHONUNBUFFERED': '1',
+      'PYTHONIOENCODING': 'utf-8',
+      ...?environment,
+    },
+  );
+  final stdoutFuture = process.stdout.transform(utf8.decoder).join();
+  final stderrFuture = process.stderr.transform(utf8.decoder).join();
+  final exitCode = await process.exitCode;
+  final stdout = await stdoutFuture;
+  final stderr = await stderrFuture;
+  return {
+    'script': scriptName,
+    'exitCode': exitCode,
+    'ok': exitCode == 0,
+    'stdout': stdout.trim(),
+    'stderr': stderr.trim(),
+  };
+}
+
+Map<String, dynamic> _summarizeTrainingFile(
+  String filename, {
+  required Map<String, dynamic>? data,
+}) {
+  final stateKey = _trainingArtifactStateKeys[filename];
+  final file = File(_trainingDataPath(filename));
+  final exists = file.existsSync();
+  final storedInState = stateKey != null && data != null;
+  final summary = <String, dynamic>{
+    'filename': filename,
+    'path': file.path,
+    'exists': exists || storedInState,
+    'storedInAppState': storedInState,
+    'sizeBytes': exists ? file.lengthSync() : 0,
+    'updatedAt': exists ? file.lastModifiedSync().toUtc().toIso8601String() : null,
+  };
+  if (data == null) {
+    return summary;
+  }
+  if (filename == 'agency_itineraries_raw.json') {
+    final sources = data['sources'];
+    summary['sourceCount'] = sources is List ? sources.length : 0;
+  } else if (filename == 'historical_itineraries.imported.json' ||
+      filename == 'historical_itineraries.json') {
+    final samples = data['samples'];
+    summary['sampleCount'] = samples is List ? samples.length : 0;
+  } else if (filename == 'agency_itinerary_match_report.json') {
+    summary['samplesGenerated'] = data['samplesGenerated'] ?? 0;
+    summary['matchedItems'] = data['matchedItems'] ?? 0;
+    summary['unmatchedItems'] = data['unmatchedItems'] ?? 0;
+    summary['skippedItems'] = data['skippedItems'] ?? 0;
+    final sources = data['sources'];
+    summary['sourceCount'] = sources is List ? sources.length : 0;
+  } else if (filename == 'agency_itinerary_match_overrides.json') {
+    final overrides = data['overrides'];
+    summary['overrideCount'] = overrides is Map ? overrides.length : 0;
+  } else if (filename == 'itinerary_ranker_weights.json') {
+    summary['metadata'] = data['metadata'];
+    summary['generatedAt'] = data['generatedAt'];
+  }
+  return summary;
+}
+
+Future<Map<String, dynamic>> _buildTrainingSnapshot() async {
+  final raw = await _readJsonMapFileIfExists('agency_itineraries_raw.json');
+  final imported = await _readJsonMapFileIfExists(
+    'historical_itineraries.imported.json',
+  );
+  final historical = await _readJsonMapFileIfExists('historical_itineraries.json');
+  final report = await _readJsonMapFileIfExists('agency_itinerary_match_report.json');
+  final matchOverrides = await _readJsonMapFileIfExists(
+    'agency_itinerary_match_overrides.json',
+  );
+  final weights = await _readJsonMapFileIfExists('itinerary_ranker_weights.json');
+  final weightVersions = await _readTrainingWeightVersions();
+  return {
+    'files': {
+      'agencyRaw': _summarizeTrainingFile(
+        'agency_itineraries_raw.json',
+        data: raw,
+      ),
+      'imported': _summarizeTrainingFile(
+        'historical_itineraries.imported.json',
+        data: imported,
+      ),
+      'historical': _summarizeTrainingFile(
+        'historical_itineraries.json',
+        data: historical,
+      ),
+      'matchReport': _summarizeTrainingFile(
+        'agency_itinerary_match_report.json',
+        data: report,
+      ),
+      'matchOverrides': _summarizeTrainingFile(
+        'agency_itinerary_match_overrides.json',
+        data: matchOverrides,
+      ),
+      'weights': _summarizeTrainingFile(
+        'itinerary_ranker_weights.json',
+        data: weights,
+      ),
+    },
+    'raw': raw,
+    'imported': imported,
+    'historical': historical,
+    'matchReport': report,
+    'matchOverrides': matchOverrides,
+    'weights': weights,
+    'weightVersions': weightVersions,
+    'storageBackend': _store.runtimeType.toString(),
+  };
+}
+
+Future<Map<String, dynamic>> _promoteImportedHistoricalSamples() async {
+  final imported = await _requireJsonMapFile('historical_itineraries.imported.json');
+  final importedSamples = imported['samples'];
+  if (importedSamples is! List) {
+    throw ApiException(500, 'historical_itineraries.imported.json 缺少 samples');
+  }
+
+  final historical =
+      await _readJsonMapFileIfExists('historical_itineraries.json') ??
+      <String, dynamic>{'samples': <dynamic>[]};
+  final existingSamplesRaw = historical['samples'];
+  final existingSamples = existingSamplesRaw is List
+      ? existingSamplesRaw.whereType<Map>().map(Map<String, dynamic>.from).toList()
+      : <Map<String, dynamic>>[];
+
+  final byId = <String, Map<String, dynamic>>{};
+  final merged = <Map<String, dynamic>>[];
+  for (final sample in existingSamples) {
+    final id = (sample['id'] ?? '').toString().trim();
+    if (id.isEmpty) continue;
+    byId[id] = sample;
+    merged.add(sample);
+  }
+
+  var inserted = 0;
+  var replaced = 0;
+  for (final rawSample in importedSamples.whereType<Map>()) {
+    final sample = Map<String, dynamic>.from(rawSample);
+    final id = (sample['id'] ?? '').toString().trim();
+    if (id.isEmpty) continue;
+    final existing = byId[id];
+    if (existing == null) {
+      byId[id] = sample;
+      merged.add(sample);
+      inserted += 1;
+      continue;
+    }
+    final index = merged.indexOf(existing);
+    if (index >= 0) {
+      merged[index] = sample;
+    }
+    byId[id] = sample;
+    replaced += 1;
+  }
+
+  final payload = <String, dynamic>{
+    'notes': '由後台模型訓練流程維護',
+    'samples': merged,
+  };
+  await _writePrettyJsonFile('historical_itineraries.json', payload);
+  return {
+    'inserted': inserted,
+    'replaced': replaced,
+    'totalSamples': merged.length,
+  };
+}
+
 Future<int> _mergePlacesToStore(DataStore store, List<Place> places) async {
   for (final place in places) {
     await store.upsertPlace(_normalizePlaceForStorage(place));
@@ -1393,6 +2034,7 @@ const _crawlModesToSync = {
   'merge_tags',
   'google_places',
   'merge_ratings',
+  'reclassify_places',
 };
 
 void _appendCrawlLog(_CrawlJob job, String line) {
@@ -1410,6 +2052,7 @@ String _crawlScriptForMode(String mode) => switch (mode) {
   'merge_tags' => 'merge_tags_from_reviews.py',
   'google_places' => 'fetch_places_from_google.py',
   'merge_ratings' => 'merge_ratings_from_reviews.py',
+  'reclassify_places' => 'reclassify_places.py',
   _ => throw ApiException(400, '未知的爬取模式'),
 };
 
@@ -1447,6 +2090,10 @@ Future<Process> _startCrawlProcess({
       'PYTHONIOENCODING': 'utf-8',
       if (mode == 'google_places' && city != null && city.trim().isNotEmpty)
         'GOOGLE_PLACE_CITY': city.trim(),
+      if (mode == 'reclassify_places' &&
+          city != null &&
+          city.trim().isNotEmpty)
+        'RECLASSIFY_CITY': city.trim(),
       if (mode == 'google_places' && maxRequests != null && maxRequests > 0)
         'MAX_REQUESTS': maxRequests.clamp(50, 1000).toString(),
       if (mode == 'google_places' && maxPages != null && maxPages > 0)

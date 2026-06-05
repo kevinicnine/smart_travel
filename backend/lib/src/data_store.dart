@@ -130,6 +130,8 @@ abstract class DataStore {
   Future<User?> findByLineUserId(String lineUserId);
   Future<User?> findByUsername(String username);
   Future<User?> findByAccount(String account);
+  Future<Map<String, dynamic>> readAppState();
+  Future<void> writeAppState(Map<String, dynamic> state);
 }
 
 class PostgresDataStore implements DataStore {
@@ -193,6 +195,13 @@ class PostgresDataStore implements DataStore {
     await conn.query(
       'ALTER TABLE users ADD COLUMN IF NOT EXISTS active_plan_updated_at TIMESTAMPTZ',
     );
+    await conn.query('''
+      CREATE TABLE IF NOT EXISTS app_state (
+        key TEXT PRIMARY KEY,
+        value_json TEXT NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    ''');
     await conn.query('''
       CREATE TABLE IF NOT EXISTS places (
         id TEXT PRIMARY KEY,
@@ -378,9 +387,16 @@ class PostgresDataStore implements DataStore {
     final placesRows = await conn.query(
       'SELECT id, name, tags, city, address, lat, lng, description, image_url, rating, user_ratings_total, price_level, price_category, opening_hours_json, source, updated_at FROM places',
     );
+    final appStateRows = await conn.query(
+      'SELECT key, value_json FROM app_state',
+    );
     final users = usersRows.map(_rowToUser).toList();
     final places = placesRows.map(_rowToPlace).toList();
-    return BackendData(users: users, places: places);
+    return BackendData(
+      users: users,
+      places: places,
+      appState: _decodeAppStateRows(appStateRows),
+    );
   }
 
   @override
@@ -398,6 +414,7 @@ class PostgresDataStore implements DataStore {
     await conn.transaction((ctx) async {
       await ctx.query('DELETE FROM users');
       await ctx.query('DELETE FROM places');
+      await ctx.query('DELETE FROM app_state');
       for (final user in data.users) {
         await ctx.query(
           'INSERT INTO users (id, username, email, phone, password_hash, created_at, line_user_id, line_linked_at, line_push_enabled, interests_json, active_plan_json, active_plan_updated_at) VALUES (@id, @username, @email, @phone, @password_hash, @created_at, @line_user_id, @line_linked_at, @line_push_enabled, @interests_json, @active_plan_json, @active_plan_updated_at)',
@@ -438,6 +455,16 @@ class PostgresDataStore implements DataStore {
             'opening_hours_json': _encodeOpeningHours(place.openingHours),
             'source': place.source,
             'updated_at': place.updatedAt?.toUtc(),
+          },
+        );
+      }
+      for (final entry in data.appState.entries) {
+        await ctx.query(
+          'INSERT INTO app_state (key, value_json, updated_at) VALUES (@key, @value_json, @updated_at)',
+          substitutionValues: {
+            'key': entry.key,
+            'value_json': jsonEncode(entry.value),
+            'updated_at': DateTime.now().toUtc(),
           },
         );
       }
@@ -658,6 +685,46 @@ class PostgresDataStore implements DataStore {
     if (rows.isEmpty) return null;
     return _rowToUser(rows.first);
   }
+
+  Map<String, dynamic> _decodeAppStateRows(List<List<dynamic>> rows) {
+    final state = <String, dynamic>{};
+    for (final row in rows) {
+      final key = row[0]?.toString().trim() ?? '';
+      final raw = row[1]?.toString().trim() ?? '';
+      if (key.isEmpty || raw.isEmpty) continue;
+      try {
+        state[key] = jsonDecode(raw);
+      } catch (_) {}
+    }
+    return state;
+  }
+
+  @override
+  Future<Map<String, dynamic>> readAppState() async {
+    await _ensureInitialized();
+    final conn = await _ensureConnection();
+    final rows = await conn.query('SELECT key, value_json FROM app_state');
+    return _decodeAppStateRows(rows);
+  }
+
+  @override
+  Future<void> writeAppState(Map<String, dynamic> state) async {
+    await _ensureInitialized();
+    final conn = await _ensureConnection();
+    await conn.transaction((ctx) async {
+      await ctx.query('DELETE FROM app_state');
+      for (final entry in state.entries) {
+        await ctx.query(
+          'INSERT INTO app_state (key, value_json, updated_at) VALUES (@key, @value_json, @updated_at)',
+          substitutionValues: {
+            'key': entry.key,
+            'value_json': jsonEncode(entry.value),
+            'updated_at': DateTime.now().toUtc(),
+          },
+        );
+      }
+    });
+  }
 }
 
 class FileDataStore implements DataStore {
@@ -811,6 +878,24 @@ class FileDataStore implements DataStore {
     );
   }
 
+  @override
+  Future<Map<String, dynamic>> readAppState() async {
+    final data = await read();
+    return Map<String, dynamic>.from(data.appState);
+  }
+
+  @override
+  Future<void> writeAppState(Map<String, dynamic> state) async {
+    final data = await read();
+    await save(
+      BackendData(
+        users: data.users,
+        places: data.places,
+        appState: state,
+      ),
+    );
+  }
+
   User? _find(List<User> users, bool Function(User user) predicate) {
     for (final user in users) {
       if (predicate(user)) {
@@ -876,6 +961,15 @@ class MySqlDataStore implements DataStore {
     await _ensureColumn(conn, 'users', 'interests_json', 'TEXT NULL');
     await _ensureColumn(conn, 'users', 'active_plan_json', 'LONGTEXT NULL');
     await _ensureColumn(conn, 'users', 'active_plan_updated_at', 'DATETIME NULL');
+    await conn.execute(
+      '''
+      CREATE TABLE IF NOT EXISTS app_state (
+        `key` VARCHAR(128) PRIMARY KEY,
+        value_json LONGTEXT NOT NULL,
+        updated_at DATETIME NOT NULL
+      )
+      ''',
+    );
     await conn.execute(
       '''
       CREATE TABLE IF NOT EXISTS places (
@@ -965,8 +1059,15 @@ class MySqlDataStore implements DataStore {
     final placeRows = await conn.execute(
       'SELECT id, name, tags, city, address, lat, lng, description, image_url, rating, user_ratings_total, price_level, price_category, opening_hours_json, source, updated_at FROM places',
     );
+    final appStateRows = await conn.execute(
+      'SELECT `key`, value_json FROM app_state',
+    );
     final places = placeRows.rows.map<Place>(_rowToPlace).toList();
-    return BackendData(users: users, places: places);
+    return BackendData(
+      users: users,
+      places: places,
+      appState: _decodeAppStateRows(appStateRows.rows),
+    );
   }
 
   @override
@@ -977,11 +1078,22 @@ class MySqlDataStore implements DataStore {
     try {
       await conn.execute('DELETE FROM users');
       await conn.execute('DELETE FROM places');
+      await conn.execute('DELETE FROM app_state');
       for (final user in data.users) {
         await _insertUser(conn, user);
       }
       for (final place in data.places) {
         await _upsertPlace(conn, place);
+      }
+      for (final entry in data.appState.entries) {
+        await conn.execute(
+          'INSERT INTO app_state (`key`, value_json, updated_at) VALUES (:key, :value_json, :updated_at)',
+          {
+            'key': entry.key,
+            'value_json': jsonEncode(entry.value),
+            'updated_at': _formatDateTime(DateTime.now().toUtc()),
+          },
+        );
       }
       await conn.execute('COMMIT');
     } catch (_) {
@@ -1001,6 +1113,7 @@ class MySqlDataStore implements DataStore {
     try {
       await conn.execute('DELETE FROM users');
       await conn.execute('DELETE FROM places');
+      await conn.execute('DELETE FROM app_state');
       var count = 0;
       for (final user in data.users) {
         await _insertUser(conn, user);
@@ -1016,6 +1129,16 @@ class MySqlDataStore implements DataStore {
         if (placeCount % 100 == 0) {
           onProgress?.call('已寫入 places：$placeCount / ${data.places.length}');
         }
+      }
+      for (final entry in data.appState.entries) {
+        await conn.execute(
+          'INSERT INTO app_state (`key`, value_json, updated_at) VALUES (:key, :value_json, :updated_at)',
+          {
+            'key': entry.key,
+            'value_json': jsonEncode(entry.value),
+            'updated_at': _formatDateTime(DateTime.now().toUtc()),
+          },
+        );
       }
       await conn.execute('COMMIT');
     } catch (_) {
@@ -1203,6 +1326,51 @@ class MySqlDataStore implements DataStore {
       return null;
     }
     return _rowToUser(rows.rows.first);
+  }
+
+  Map<String, dynamic> _decodeAppStateRows(Iterable<ResultSetRow> rows) {
+    final state = <String, dynamic>{};
+    for (final row in rows) {
+      final key = row.colByName('key')?.toString().trim() ?? '';
+      final raw = row.colByName('value_json')?.toString().trim() ?? '';
+      if (key.isEmpty || raw.isEmpty) continue;
+      try {
+        state[key] = jsonDecode(raw);
+      } catch (_) {}
+    }
+    return state;
+  }
+
+  @override
+  Future<Map<String, dynamic>> readAppState() async {
+    await _ensureInitialized();
+    final conn = await _ensureConnection();
+    final rows = await conn.execute('SELECT `key`, value_json FROM app_state');
+    return _decodeAppStateRows(rows.rows);
+  }
+
+  @override
+  Future<void> writeAppState(Map<String, dynamic> state) async {
+    await _ensureInitialized();
+    final conn = await _ensureConnection();
+    await conn.execute('START TRANSACTION');
+    try {
+      await conn.execute('DELETE FROM app_state');
+      for (final entry in state.entries) {
+        await conn.execute(
+          'INSERT INTO app_state (`key`, value_json, updated_at) VALUES (:key, :value_json, :updated_at)',
+          {
+            'key': entry.key,
+            'value_json': jsonEncode(entry.value),
+            'updated_at': _formatDateTime(DateTime.now().toUtc()),
+          },
+        );
+      }
+      await conn.execute('COMMIT');
+    } catch (_) {
+      await conn.execute('ROLLBACK');
+      rethrow;
+    }
   }
 
   Future<void> _insertUser(

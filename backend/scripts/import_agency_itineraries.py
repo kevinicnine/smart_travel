@@ -16,6 +16,11 @@ Optional env:
   PLACES_SOURCE=auto|local|remote
   PLACES_EXPORT_URL=https://.../api/admin/export
   PLACES_EXPORT_TOKEN=admin-token
+  SYNC_SOURCE_URL=https://... (used as remote export base fallback)
+  SYNC_SOURCE_TOKEN=admin-token (preferred remote token fallback)
+  REMOTE_EXPORT_TIMEOUT=90
+  REMOTE_EXPORT_RETRIES=2
+  MATCH_OVERRIDE_PATH=backend/data/agency_itinerary_match_overrides.json
   OUTPUT_PATH=backend/data/historical_itineraries.imported.json
   REPORT_PATH=backend/data/agency_itinerary_match_report.json
 """
@@ -24,6 +29,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from difflib import SequenceMatcher
@@ -53,6 +60,12 @@ REPORT_PATH = Path(
     os.environ.get(
         "REPORT_PATH",
         str(ROOT / "data" / "agency_itinerary_match_report.json"),
+    )
+)
+MATCH_OVERRIDE_PATH = Path(
+    os.environ.get(
+        "MATCH_OVERRIDE_PATH",
+        str(ROOT / "data" / "agency_itinerary_match_overrides.json"),
     )
 )
 _DOTENV_OVERRIDES: dict[str, str] | None = None
@@ -147,21 +160,28 @@ def _string_list(value: Any) -> list[str]:
 
 
 def _default_remote_export_url() -> str | None:
+    sync_source = _env_value("SYNC_SOURCE_URL")
+    if sync_source:
+        return sync_source.rstrip("/") + "/api/admin/export?scope=places"
     base = _env_value("RENDER_API_BASE")
     if not base:
         return None
-    return base.rstrip("/") + "/api/admin/export"
+    return base.rstrip("/") + "/api/admin/export?scope=places"
 
 
-def _load_places_payload() -> tuple[dict[str, Any], str]:
-    source_mode = (_env_value("PLACES_SOURCE", "auto") or "auto").strip().lower()
-    if source_mode not in {"auto", "local", "remote"}:
-        source_mode = "auto"
+def _as_positive_int(value: str | None, default: int) -> int:
+    try:
+        parsed = int(str(value or "").strip())
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
 
-    remote_url = _env_value("PLACES_EXPORT_URL") or _default_remote_export_url()
-    remote_token = _env_value("PLACES_EXPORT_TOKEN") or _env_value("ADMIN_TOKEN")
 
-    if source_mode in {"auto", "remote"} and remote_url and remote_token:
+def _fetch_remote_payload(remote_url: str, remote_token: str) -> dict[str, Any]:
+    timeout_seconds = _as_positive_int(_env_value("REMOTE_EXPORT_TIMEOUT"), 90)
+    retries = _as_positive_int(_env_value("REMOTE_EXPORT_RETRIES"), 2)
+    last_error: Exception | None = None
+    for attempt in range(1, retries + 1):
         request = urllib_request.Request(
             remote_url,
             headers={
@@ -171,12 +191,52 @@ def _load_places_payload() -> tuple[dict[str, Any], str]:
             method="GET",
         )
         try:
-            with urllib_request.urlopen(request, timeout=30) as response:
+            with urllib_request.urlopen(request, timeout=timeout_seconds) as response:
                 payload = json.loads(response.read().decode("utf-8"))
             if not isinstance(payload, dict):
                 raise ValueError("遠端匯出內容不是 object")
+            return payload
+        except (
+            urllib_error.URLError,
+            urllib_error.HTTPError,
+            TimeoutError,
+            socket.timeout,
+            OSError,
+            ValueError,
+        ) as exc:
+            last_error = exc
+            if attempt >= retries:
+                break
+            print(f"[warn] 遠端景點匯出第 {attempt} 次失敗，準備重試：{exc}")
+            time.sleep(min(2 * attempt, 5))
+    assert last_error is not None
+    raise last_error
+
+
+def _load_places_payload() -> tuple[dict[str, Any], str]:
+    source_mode = (_env_value("PLACES_SOURCE", "auto") or "auto").strip().lower()
+    if source_mode not in {"auto", "local", "remote"}:
+        source_mode = "auto"
+
+    remote_url = _env_value("PLACES_EXPORT_URL") or _default_remote_export_url()
+    remote_token = (
+        _env_value("PLACES_EXPORT_TOKEN")
+        or _env_value("SYNC_SOURCE_TOKEN")
+        or _env_value("ADMIN_TOKEN")
+    )
+
+    if source_mode in {"auto", "remote"} and remote_url and remote_token:
+        try:
+            payload = _fetch_remote_payload(remote_url, remote_token)
             return payload, "remote"
-        except (urllib_error.URLError, urllib_error.HTTPError, TimeoutError, ValueError) as exc:
+        except (
+            urllib_error.URLError,
+            urllib_error.HTTPError,
+            TimeoutError,
+            socket.timeout,
+            OSError,
+            ValueError,
+        ) as exc:
             if source_mode == "remote":
                 raise RuntimeError(f"讀取遠端景點匯出失敗：{exc}") from exc
             print(f"[warn] 遠端景點匯出不可用，改用本機 db.json：{exc}")
@@ -206,6 +266,24 @@ def _load_place_candidates() -> tuple[list[PlaceCandidate], str]:
             )
         )
     return output, source_label
+
+
+def _load_match_overrides() -> dict[str, dict[str, Any]]:
+    if not MATCH_OVERRIDE_PATH.exists():
+        return {}
+    raw = _load_json(MATCH_OVERRIDE_PATH)
+    overrides = raw.get("overrides")
+    if not isinstance(overrides, dict):
+        return {}
+    output: dict[str, dict[str, Any]] = {}
+    for key, value in overrides.items():
+        if not isinstance(value, dict):
+            continue
+        normalized_key = str(key or "").strip()
+        if not normalized_key:
+            continue
+        output[normalized_key] = dict(value)
+    return output
 
 
 def _parse_minutes(value: str | None) -> int | None:
@@ -291,6 +369,18 @@ def _normalize_context(source: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _build_override_key(source_id: str, item: dict[str, Any]) -> str:
+    return "||".join(
+        [
+            source_id.strip(),
+            str(item.get("name") or "").strip(),
+            str(item.get("type") or "place").strip().lower(),
+            str(item.get("arrivalTime") or "").strip(),
+            str(item.get("departureTime") or "").strip(),
+        ]
+    )
+
+
 def main() -> None:
     raw = _load_json(RAW_PATH)
     sources = raw.get("sources")
@@ -298,6 +388,8 @@ def main() -> None:
         raise ValueError("agency_itineraries_raw.json 缺少 sources 陣列")
 
     candidates, places_source = _load_place_candidates()
+    candidate_by_id = {candidate.place_id: candidate for candidate in candidates}
+    overrides = _load_match_overrides()
     output_samples: list[dict[str, Any]] = []
     report_sources: list[dict[str, Any]] = []
     matched_count = 0
@@ -361,11 +453,64 @@ def main() -> None:
                     previous_departure = str(item.get("departureTime") or item.get("arrivalTime") or previous_departure or "")
                     continue
 
+                override_key = _build_override_key(source_id, item)
+                override = overrides.get(override_key)
+                if override:
+                    override_action = str(override.get("action") or "").strip().lower()
+                    if override_action == "ignore":
+                        skipped_count += 1
+                        source_report["skippedItems"].append(
+                            {
+                                "name": item_name,
+                                "type": item_type,
+                                "reason": "manual_override_ignore",
+                            }
+                        )
+                        previous_departure = str(item.get("departureTime") or item.get("arrivalTime") or previous_departure or "")
+                        continue
+                    if override_action == "map":
+                        override_place_id = str(override.get("placeId") or "").strip()
+                        matched_override = candidate_by_id.get(override_place_id)
+                        if matched_override is not None:
+                            arrival = str(item.get("arrivalTime") or "").strip() or None
+                            departure = str(item.get("departureTime") or "").strip() or None
+                            normalized_item = {
+                                "placeId": matched_override.place_id,
+                                "stayMinutes": _stay_minutes(item) or 60,
+                            }
+                            if arrival:
+                                normalized_item["arrivalTime"] = arrival
+                                normalized_item["slot"] = _slot_for_time(arrival)
+                            if departure:
+                                normalized_item["departureTime"] = departure
+                            if previous_departure and arrival:
+                                previous_minutes = _parse_minutes(previous_departure)
+                                arrival_minutes = _parse_minutes(arrival)
+                                if (
+                                    previous_minutes is not None
+                                    and arrival_minutes is not None
+                                    and arrival_minutes >= previous_minutes
+                                ):
+                                    normalized_item["transitMinutesFromPrevious"] = arrival_minutes - previous_minutes
+                            normalized_items.append(normalized_item)
+                            matched_count += 1
+                            source_report["matchedItems"].append(
+                                {
+                                    "sourceName": item_name,
+                                    "matchedPlaceId": matched_override.place_id,
+                                    "matchedPlaceName": matched_override.name,
+                                    "override": True,
+                                }
+                            )
+                            previous_departure = departure or arrival or previous_departure
+                            continue
+
                 matched, top_candidates = _choose_match(item_name, candidates)
                 if matched is None:
                     unmatched_count += 1
                     source_report["unmatchedItems"].append(
                         {
+                            "overrideKey": override_key,
                             "name": item_name,
                             "type": item_type,
                             "arrivalTime": item.get("arrivalTime"),
