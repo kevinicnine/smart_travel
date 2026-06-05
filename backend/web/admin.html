@@ -1364,6 +1364,30 @@
         }
       }
 
+      async function importTrainingPlaceFromGoogleUrl(rowKey, placeName, city = '') {
+        const targetName = String(placeName || '').trim();
+        const url = window.prompt(`貼上「${targetName || '未匹配景點'}」的 Google Maps 網址`);
+        if (!url) return;
+        try {
+          setTrainingActionStatus(`正在從 Google Maps 補入景點：${targetName || '未匹配景點'}...`, 'muted');
+          const data = await apiFetch('/training/import-google-place', {
+            method: 'POST',
+            body: JSON.stringify({
+              url,
+              name: targetName,
+              city: city || '',
+            }),
+          });
+          const place = data.data?.place || null;
+          if (!place || !place.id) {
+            throw new Error('Google Maps 補景點成功，但未取得可指派的景點資料');
+          }
+          await setTrainingOverride(rowKey, 'map', place.id, place.name || targetName);
+        } catch (error) {
+          setTrainingActionStatus(error.message || '從 Google Maps 補景點失敗', 'danger');
+        }
+      }
+
       async function activateWeightVersion(versionId) {
         if (!confirm('會切換目前啟用中的模型版本，確定執行？')) return;
         try {
@@ -1527,6 +1551,7 @@
                 ${overrideStatus}
                 <div class="inline-actions" style="margin-top:8px;">
                   <button onclick='searchTrainingPlaces(${jsStringLiteral(rowKey)},${jsStringLiteral(item.name || '')})'>搜尋同名</button>
+                  <button onclick='importTrainingPlaceFromGoogleUrl(${jsStringLiteral(rowKey)},${jsStringLiteral(item.name || '')},${jsStringLiteral(item.city || '')})'>貼網址補齊</button>
                   <button onclick='setTrainingOverride(${jsStringLiteral(rowKey)},"ignore")'>忽略</button>
                   ${override ? `<button onclick='setTrainingOverride(${jsStringLiteral(rowKey)},"clear")'>清除修正</button>` : ''}
                 </div>

@@ -896,6 +896,31 @@ Future<void> main(List<String> args) async {
         );
       }),
     )
+    ..post(
+      '/api/admin/training/import-google-place',
+      (req) => _withAdmin(req, () async {
+        final body = await parseJsonBody(req);
+        final url = body['url']?.toString().trim() ?? '';
+        final nameHint = body['name']?.toString().trim() ?? '';
+        final cityHint = body['city']?.toString().trim() ?? '';
+        if (url.isEmpty) {
+          throw ApiException(400, '缺少 Google Maps 網址');
+        }
+        final place = await _importPlaceFromGoogleMapsUrl(
+          store: store,
+          url: url,
+          nameHint: nameHint,
+          cityHint: cityHint,
+        );
+        return jsonResponse(
+          200,
+          successBody(
+            message: '已從 Google Maps 補入景點資料',
+            data: {'place': _placeToApiJson(place)},
+          ),
+        );
+      }),
+    )
     ..get(
       '/api/admin/training/weights',
       (req) => _withAdmin(req, () async {
@@ -8627,6 +8652,455 @@ Future<List<Map<String, dynamic>>> _googlePlaceSearch({
   } finally {
     client.close(force: true);
   }
+}
+
+Future<Map<String, dynamic>?> _googlePlaceDetails({
+  required String key,
+  required String placeId,
+}) async {
+  final uri = Uri.https('maps.googleapis.com', '/maps/api/place/details/json', {
+    'place_id': placeId,
+    'language': 'zh-TW',
+    'reviews_sort': 'most_relevant',
+    'fields': [
+      'place_id',
+      'name',
+      'formatted_address',
+      'geometry',
+      'editorial_summary',
+      'rating',
+      'user_ratings_total',
+      'price_level',
+      'types',
+      'address_components',
+      'photos',
+      'opening_hours',
+      'website',
+      'formatted_phone_number',
+    ].join(','),
+    'key': key,
+  });
+  final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+  try {
+    final request = await client.getUrl(uri);
+    final response = await request.close().timeout(const Duration(seconds: 12));
+    if (response.statusCode != 200) {
+      return null;
+    }
+    final body = await utf8.decodeStream(response);
+    final decoded = jsonDecode(body);
+    if (decoded is! Map) {
+      return null;
+    }
+    final status = decoded['status']?.toString() ?? '';
+    if (status != 'OK') {
+      _log.warning('Google Place details failed: $status placeId=$placeId');
+      return null;
+    }
+    final result = decoded['result'];
+    if (result is! Map) {
+      return null;
+    }
+    return Map<String, dynamic>.from(result);
+  } catch (error) {
+    _log.warning('Google Place details request error: $error');
+    return null;
+  } finally {
+    client.close(force: true);
+  }
+}
+
+String _googlePhotoUrl(String key, String photoReference) {
+  return Uri.https('maps.googleapis.com', '/maps/api/place/photo', {
+    'maxwidth': '800',
+    'photo_reference': photoReference,
+    'key': key,
+  }).toString();
+}
+
+String _extractGooglePlaceNameFromUrl(Uri uri) {
+  final queryKeys = ['query', 'q'];
+  for (final key in queryKeys) {
+    final value = uri.queryParameters[key]?.trim() ?? '';
+    if (value.isNotEmpty) {
+      return value.replaceAll('+', ' ').trim();
+    }
+  }
+  final segments = uri.pathSegments;
+  final placeIndex = segments.indexOf('place');
+  if (placeIndex >= 0 && placeIndex + 1 < segments.length) {
+    return Uri.decodeComponent(segments[placeIndex + 1]).replaceAll('+', ' ').trim();
+  }
+  if (segments.isNotEmpty) {
+    return Uri.decodeComponent(segments.last).replaceAll('+', ' ').trim();
+  }
+  return '';
+}
+
+String _normalizePlaceNameForMatch(String input) {
+  var text = _normalizeLocationText(input);
+  const suffixes = <String>[
+    '台中市',
+    '臺中市',
+    '台北市',
+    '臺北市',
+    '新北市',
+    '桃園市',
+    '台南市',
+    '臺南市',
+    '高雄市',
+    '苗栗縣',
+    '新竹縣',
+    '新竹市',
+    '彰化縣',
+    '南投縣',
+    '雲林縣',
+    '嘉義縣',
+    '嘉義市',
+    '屏東縣',
+    '宜蘭縣',
+    '花蓮縣',
+    '台東縣',
+    '臺東縣',
+    '金門縣',
+    '連江縣',
+    '基隆市',
+    '商圈',
+    '景觀',
+    '觀景',
+    '觀景平台',
+    '生態景觀',
+    '生態景觀公園',
+    '觀光工廠',
+    'outlet park',
+    'outlet mall',
+  ];
+  for (final suffix in suffixes) {
+    final normalizedSuffix = _normalizeLocationText(suffix);
+    if (normalizedSuffix.isNotEmpty && text.endsWith(normalizedSuffix)) {
+      text = text.substring(0, text.length - normalizedSuffix.length).trim();
+    }
+  }
+  return text.trim();
+}
+
+int _scoreGooglePlaceCandidate(
+  Map<String, dynamic> result, {
+  required String rawName,
+  required String cityHint,
+}) {
+  final normalizedTarget = _normalizePlaceNameForMatch(rawName);
+  final candidateName = result['name']?.toString().trim() ?? '';
+  final normalizedCandidate = _normalizePlaceNameForMatch(candidateName);
+  var score = 0;
+  if (normalizedTarget.isNotEmpty && normalizedCandidate == normalizedTarget) {
+    score += 1000;
+  } else if (normalizedTarget.isNotEmpty &&
+      (normalizedCandidate.contains(normalizedTarget) ||
+          normalizedTarget.contains(normalizedCandidate))) {
+    score += 600;
+  }
+  final address =
+      result['formatted_address']?.toString().trim() ??
+      result['vicinity']?.toString().trim() ??
+      '';
+  final candidateCity = _extractCityHint(address) ?? '';
+  final normalizedCityHint = _normalizeLocationText(cityHint);
+  if (normalizedCityHint.isNotEmpty &&
+      _normalizeLocationText(candidateCity) == normalizedCityHint) {
+    score += 250;
+  }
+  final ratingTotal = _asIntValue(result['user_ratings_total']) ?? 0;
+  score += min(ratingTotal, 500);
+  if ((_asDoubleValue(result['rating']) ?? 0) >= 4.2) {
+    score += 30;
+  }
+  return score;
+}
+
+List<String> _googlePlaceTags({
+  required String name,
+  required String address,
+  required String description,
+  required Iterable<String> types,
+}) {
+  final typeSet = types.map((e) => e.toString().trim().toLowerCase()).toSet();
+  final text = _normalizeLocationText('$name $address $description ${typeSet.join(' ')}');
+  final tags = <String>{};
+
+  if (typeSet.contains('university') || typeSet.contains('school')) {
+    tags.addAll(const ['heritage', 'national_park', 'campus']);
+  }
+  if (typeSet.contains('museum') || typeSet.contains('art_gallery')) {
+    tags.add('museum');
+  }
+  if (typeSet.contains('shopping_mall')) {
+    tags.add('department_store');
+  }
+  if (typeSet.contains('amusement_park')) {
+    tags.add('amusement');
+  }
+  if (typeSet.contains('campground') || typeSet.contains('rv_park')) {
+    tags.add('camping');
+  }
+  if (typeSet.contains('aquarium')) {
+    tags.add('aquarium');
+  }
+  if (typeSet.contains('zoo')) {
+    tags.add('zoo');
+  }
+  if (typeSet.contains('movie_theater')) {
+    tags.add('cinema');
+  }
+  if (typeSet.contains('cafe')) {
+    tags.add('cafe');
+  }
+  if (typeSet.contains('restaurant')) {
+    tags.add('restaurant');
+  }
+  if (typeSet.contains('spa')) {
+    tags.add('hot_spring');
+  }
+  if (typeSet.contains('church') ||
+      typeSet.contains('hindu_temple') ||
+      typeSet.contains('place_of_worship')) {
+    tags.addAll(const ['temple', 'heritage']);
+  }
+  if (typeSet.contains('park') ||
+      typeSet.contains('natural_feature') ||
+      typeSet.contains('tourist_attraction')) {
+    if (text.contains(_normalizeLocationText('濕地')) ||
+        text.contains(_normalizeLocationText('步道')) ||
+        text.contains(_normalizeLocationText('公園')) ||
+        text.contains(_normalizeLocationText('景觀台')) ||
+        text.contains(_normalizeLocationText('綠園道')) ||
+        text.contains(_normalizeLocationText('植物園'))) {
+      tags.add('national_park');
+    }
+  }
+
+  if (text.contains(_normalizeLocationText('夜市'))) {
+    tags.addAll(const ['night_market', 'street_food']);
+  }
+  if (text.contains(_normalizeLocationText('商圈')) ||
+      text.contains(_normalizeLocationText('outlet')) ||
+      text.contains(_normalizeLocationText('百貨'))) {
+    tags.add('department_store');
+  }
+  if (text.contains(_normalizeLocationText('老街')) ||
+      text.contains(_normalizeLocationText('古蹟')) ||
+      text.contains(_normalizeLocationText('教堂')) ||
+      text.contains(_normalizeLocationText('校園'))) {
+    tags.add('heritage');
+  }
+  if (text.contains(_normalizeLocationText('溪')) ||
+      text.contains(_normalizeLocationText('濕地'))) {
+    tags.add('lake_river');
+  }
+  if (text.contains(_normalizeLocationText('創意')) ||
+      text.contains(_normalizeLocationText('彩繪')) ||
+      text.contains(_normalizeLocationText('文創'))) {
+    tags.add('creative_park');
+  }
+  return tags.toList();
+}
+
+Place _buildPlaceFromGoogleResult({
+  required String key,
+  required Map<String, dynamic> result,
+  required String fallbackName,
+  required String fallbackCity,
+}) {
+  final details = result['details'] is Map
+      ? Map<String, dynamic>.from(result['details'] as Map)
+      : const <String, dynamic>{};
+  final source = details.isNotEmpty ? details : result;
+  final geometry = source['geometry'] is Map
+      ? Map<String, dynamic>.from(source['geometry'] as Map)
+      : const <String, dynamic>{};
+  final location = geometry['location'] is Map
+      ? Map<String, dynamic>.from(geometry['location'] as Map)
+      : const <String, dynamic>{};
+  final photos = source['photos'];
+  String imageUrl = '';
+  if (photos is List && photos.isNotEmpty && photos.first is Map) {
+    final photoRef = (photos.first as Map)['photo_reference']?.toString().trim() ?? '';
+    if (photoRef.isNotEmpty) {
+      imageUrl = _googlePhotoUrl(key, photoRef);
+    }
+  }
+  final openingHours = source['opening_hours'] is Map
+      ? Map<String, dynamic>.from(source['opening_hours'] as Map)
+      : null;
+  final types = (source['types'] as List?)
+          ?.map((e) => e.toString().trim().toLowerCase())
+          .where((e) => e.isNotEmpty)
+          .toList() ??
+      const <String>[];
+  final description =
+      (details['editorial_summary'] is Map
+              ? (details['editorial_summary'] as Map)['overview']?.toString().trim()
+              : null) ??
+      (source['formatted_phone_number']?.toString().trim() ?? '');
+  final name = source['name']?.toString().trim().isNotEmpty == true
+      ? source['name']!.toString().trim()
+      : fallbackName;
+  final address =
+      source['formatted_address']?.toString().trim() ??
+      source['vicinity']?.toString().trim() ??
+      '';
+  final city = _extractCityHint(address) ?? fallbackCity;
+  return Place(
+    id: source['place_id']?.toString().trim().isNotEmpty == true
+        ? source['place_id']!.toString().trim()
+        : const Uuid().v4(),
+    name: name,
+    tags: _googlePlaceTags(
+      name: name,
+      address: address,
+      description: description,
+      types: types,
+    ),
+    city: city,
+    address: address,
+    lat: _asDoubleValue(location['lat']) ?? 0,
+    lng: _asDoubleValue(location['lng']) ?? 0,
+    description: description,
+    imageUrl: imageUrl,
+    rating: _asDoubleValue(source['rating']),
+    userRatingsTotal: _asIntValue(source['user_ratings_total']),
+    priceLevel: _asIntValue(source['price_level']),
+    openingHours: openingHours,
+    source: 'google_place_url_import',
+    updatedAt: DateTime.now().toUtc(),
+  );
+}
+
+Future<Place> _importPlaceFromGoogleMapsUrl({
+  required DataStore store,
+  required String url,
+  required String nameHint,
+  required String cityHint,
+}) async {
+  final key = Platform.environment['GOOGLE_MAPS_API_KEY'] ?? '';
+  if (key.isEmpty) {
+    throw ApiException(400, '需要設定 GOOGLE_MAPS_API_KEY 才能從 Google Maps 補景點');
+  }
+  final uri = Uri.tryParse(url);
+  if (uri == null) {
+    throw ApiException(400, 'Google Maps 網址格式錯誤');
+  }
+  final placeId =
+      uri.queryParameters['query_place_id']?.trim() ??
+      uri.queryParameters['place_id']?.trim() ??
+      '';
+  final extractedName = _extractGooglePlaceNameFromUrl(uri);
+  final resolvedName = extractedName.isNotEmpty ? extractedName : nameHint;
+  final resolvedCity = cityHint.trim();
+
+  Map<String, dynamic>? result;
+  if (placeId.isNotEmpty) {
+    final details = await _googlePlaceDetails(key: key, placeId: placeId);
+    if (details != null) {
+      result = {'place_id': placeId, ...details, 'details': details};
+    }
+  }
+
+  if (result == null) {
+    final query = [
+      if (resolvedName.isNotEmpty) resolvedName,
+      if (resolvedCity.isNotEmpty) resolvedCity,
+    ].join(' ').trim();
+    if (query.isEmpty) {
+      throw ApiException(400, '無法從網址解析景點名稱，請提供可辨識的 Google Maps 網址');
+    }
+    final results = await _googlePlaceSearch(
+      key: key,
+      path: '/maps/api/place/textsearch/json',
+      params: {
+        'query': query,
+        'language': 'zh-TW',
+        'region': 'tw',
+      },
+    );
+    if (results.isEmpty) {
+      throw ApiException(404, 'Google Places 找不到對應景點');
+    }
+    results.sort((a, b) {
+      final aScore = _scoreGooglePlaceCandidate(
+        a,
+        rawName: resolvedName,
+        cityHint: resolvedCity,
+      );
+      final bScore = _scoreGooglePlaceCandidate(
+        b,
+        rawName: resolvedName,
+        cityHint: resolvedCity,
+      );
+      return bScore.compareTo(aScore);
+    });
+    result = results.first;
+    final resolvedPlaceId = result['place_id']?.toString().trim() ?? '';
+    if (resolvedPlaceId.isNotEmpty) {
+      final details = await _googlePlaceDetails(key: key, placeId: resolvedPlaceId);
+      if (details != null) {
+        result = {...result, 'details': details};
+      }
+    }
+  }
+
+  var imported = _buildPlaceFromGoogleResult(
+    key: key,
+    result: result,
+    fallbackName: resolvedName,
+    fallbackCity: resolvedCity,
+  );
+
+  final places = await store.listPlaces();
+  Place? existing;
+  final normalizedImportedName = _normalizePlaceNameForMatch(imported.name);
+  final normalizedImportedCity = _normalizeLocationText(imported.city);
+  final normalizedImportedAddress = _normalizeLocationText(imported.address);
+  for (final place in places) {
+    final normalizedName = _normalizePlaceNameForMatch(place.name);
+    final normalizedCity = _normalizeLocationText(place.city);
+    final normalizedAddress = _normalizeLocationText(place.address);
+    if (normalizedImportedName.isNotEmpty &&
+        normalizedName == normalizedImportedName &&
+        ((normalizedImportedCity.isNotEmpty && normalizedCity == normalizedImportedCity) ||
+            (normalizedImportedAddress.isNotEmpty &&
+                normalizedAddress == normalizedImportedAddress))) {
+      existing = place;
+      break;
+    }
+  }
+
+  if (existing != null) {
+    imported = Place(
+      id: existing.id,
+      name: imported.name.isNotEmpty ? imported.name : existing.name,
+      tags: <String>{...existing.tags, ...imported.tags}.toList(),
+      city: imported.city.isNotEmpty ? imported.city : existing.city,
+      address: imported.address.isNotEmpty ? imported.address : existing.address,
+      lat: imported.lat != 0 ? imported.lat : existing.lat,
+      lng: imported.lng != 0 ? imported.lng : existing.lng,
+      description: imported.description.isNotEmpty
+          ? imported.description
+          : existing.description,
+      imageUrl: imported.imageUrl.isNotEmpty ? imported.imageUrl : existing.imageUrl,
+      rating: imported.rating ?? existing.rating,
+      userRatingsTotal: imported.userRatingsTotal ?? existing.userRatingsTotal,
+      priceLevel: imported.priceLevel ?? existing.priceLevel,
+      priceCategory: imported.priceCategory ?? existing.priceCategory,
+      openingHours: imported.openingHours ?? existing.openingHours,
+      source: imported.source ?? existing.source,
+      updatedAt: DateTime.now().toUtc(),
+    );
+  }
+
+  imported = _normalizePlaceForStorage(imported);
+  await store.upsertPlace(imported);
+  return imported;
 }
 
 List<Map<String, dynamic>> _normalizeMealSearchResults(
