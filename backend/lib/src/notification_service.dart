@@ -14,7 +14,7 @@ import 'exceptions.dart';
 /// external services.
 class NotificationService {
   NotificationService({http.Client? httpClient})
-      : _client = httpClient ?? http.Client();
+    : _client = httpClient ?? http.Client();
 
   final http.Client _client;
   final _log = Logger('NotificationService');
@@ -31,7 +31,9 @@ class NotificationService {
       Platform.environment['LINE_CHANNEL_ACCESS_TOKEN'];
 
   bool get _emailEnabled =>
-      _sendgridKey != null && _sendgridFromEmail != null && _sendgridFromEmail!.isNotEmpty;
+      _sendgridKey != null &&
+      _sendgridFromEmail != null &&
+      _sendgridFromEmail!.isNotEmpty;
   bool get _smsEnabled =>
       _twilioSid != null &&
       _twilioToken != null &&
@@ -46,7 +48,8 @@ class NotificationService {
   }) async {
     if (!_emailEnabled) {
       _log.info(
-          'Skipping email verification send because SendGrid env vars are missing (to=$to, code=$code)');
+        'Skipping email verification send because SendGrid env vars are missing (to=$to, code=$code)',
+      );
       return;
     }
     await _sendGridMail(
@@ -63,7 +66,8 @@ class NotificationService {
   }) async {
     if (!_emailEnabled) {
       _log.info(
-          'Skipping password reset email because SendGrid env vars are missing (to=$to, code=$code)');
+        'Skipping password reset email because SendGrid env vars are missing (to=$to, code=$code)',
+      );
       return;
     }
     await _sendGridMail(
@@ -80,7 +84,8 @@ class NotificationService {
   }) async {
     if (!_smsEnabled) {
       _log.info(
-          'Skipping SMS verification send because Twilio env vars are missing (to=$to, code=$code)');
+        'Skipping SMS verification send because Twilio env vars are missing (to=$to, code=$code)',
+      );
       return;
     }
     final uri = Uri.https(
@@ -110,6 +115,7 @@ class NotificationService {
   Future<void> sendLinePush({
     required String to,
     required String text,
+    String? imageUrl,
   }) async {
     if (!_lineEnabled) {
       _log.info(
@@ -117,19 +123,45 @@ class NotificationService {
       );
       return;
     }
-    final response = await _client.post(
-      Uri.https('api.line.me', '/v2/bot/message/push'),
-      headers: {
-        'Authorization': 'Bearer ${_lineChannelToken!}',
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode({
-        'to': to,
-        'messages': [
-          {'type': 'text', 'text': text},
-        ],
-      }),
+    final normalizedImageUrl = imageUrl?.trim() ?? '';
+    final messages = <Map<String, dynamic>>[];
+    final parsedImageUrl = Uri.tryParse(normalizedImageUrl);
+    if (parsedImageUrl != null &&
+        parsedImageUrl.scheme == 'https' &&
+        parsedImageUrl.host.isNotEmpty) {
+      messages.add({
+        'type': 'image',
+        'originalContentUrl': normalizedImageUrl,
+        'previewImageUrl': normalizedImageUrl,
+      });
+    }
+    messages.add({'type': 'text', 'text': text});
+
+    final uri = Uri.https('api.line.me', '/v2/bot/message/push');
+    final headers = {
+      'Authorization': 'Bearer ${_lineChannelToken!}',
+      'Content-Type': 'application/json',
+    };
+    var response = await _client.post(
+      uri,
+      headers: headers,
+      body: jsonEncode({'to': to, 'messages': messages}),
     );
+    if (response.statusCode >= 400 && messages.length > 1) {
+      _log.warning(
+        'LINE image push failed (${response.statusCode}); retrying text only.',
+      );
+      response = await _client.post(
+        uri,
+        headers: headers,
+        body: jsonEncode({
+          'to': to,
+          'messages': [
+            {'type': 'text', 'text': text},
+          ],
+        }),
+      );
+    }
     if (response.statusCode >= 400) {
       _log.severe(
         'LINE push failed (${response.statusCode}): ${response.body}',
@@ -179,17 +211,11 @@ class NotificationService {
             {'email': to},
           ],
           'subject': subject,
-        }
+        },
       ],
-      'from': {
-        'email': _sendgridFromEmail,
-        'name': _sendgridFromName,
-      },
+      'from': {'email': _sendgridFromEmail, 'name': _sendgridFromName},
       'content': [
-        {
-          'type': 'text/plain',
-          'value': content,
-        }
+        {'type': 'text/plain', 'value': content},
       ],
     };
 
@@ -203,7 +229,8 @@ class NotificationService {
     );
     if (response.statusCode >= 400) {
       _log.severe(
-          'SendGrid mail failed (${response.statusCode}): ${response.body}');
+        'SendGrid mail failed (${response.statusCode}): ${response.body}',
+      );
       throw ApiException(500, errorMessage);
     }
   }
