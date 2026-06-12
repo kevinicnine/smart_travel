@@ -1244,7 +1244,9 @@ Future<void> main(List<String> args) async {
     ..post(
       '/api/admin/reminders/run-now',
       (req) => _withAdmin(req, () async {
-        final result = await _runUpcomingReminderScan(triggerSource: 'admin');
+        final result = await _runTrackedUpcomingReminderScan(
+          triggerSource: 'admin',
+        );
         return jsonResponse(
           200,
           successBody(message: '已手動執行提醒掃描', data: result),
@@ -1885,7 +1887,9 @@ Future<void> main(List<String> args) async {
     ..post(
       '/api/line/run-upcoming-reminders',
       (req) => _withReminderCron(req, () async {
-        final result = await _runUpcomingReminderScan(triggerSource: 'cron');
+        final result = await _runTrackedUpcomingReminderScan(
+          triggerSource: 'cron',
+        );
         return jsonResponse(
           200,
           successBody(message: '已完成即時提醒掃描', data: result),
@@ -5186,6 +5190,29 @@ Future<Map<String, dynamic>> _buildAdminMetricsSnapshot() async {
     0,
     (sum, entry) => sum + ((entry['totalTokens'] as int?) ?? 0),
   );
+  final linePushSuccesses = _linePushHistory
+      .where((entry) => entry['status'] == 'success')
+      .length;
+  final linePushFailures = _linePushHistory.length - linePushSuccesses;
+  final reminderSuccesses = _reminderRunHistory.where((entry) {
+    final status = entry['status']?.toString();
+    return status == null || status == 'success';
+  }).length;
+  final reminderFailures = _reminderRunHistory.length - reminderSuccesses;
+  final reminderDurationTotal = _reminderRunHistory.fold<int>(
+    0,
+    (sum, entry) => sum + ((entry['durationMs'] as int?) ?? 0),
+  );
+  final cronRuns = _reminderRunHistory
+      .where((entry) => entry['source'] == 'cron')
+      .toList();
+  final lastCronRun = cronRuns.isEmpty ? null : cronRuns.last;
+  final lastCronRunAt = lastCronRun == null
+      ? null
+      : DateTime.tryParse(lastCronRun['timestamp']?.toString() ?? '');
+  final cronRecentlyActive =
+      lastCronRunAt != null &&
+      lastCronRunAt.isAfter(now.subtract(const Duration(minutes: 15)));
   final aiFeatureStats = <String, Map<String, dynamic>>{};
   for (final entry in _aiUsageHistory) {
     final feature = entry['feature']?.toString() ?? 'unknown';
@@ -5270,6 +5297,7 @@ Future<Map<String, dynamic>> _buildAdminMetricsSnapshot() async {
       'itineraryLearningConfigured': _itineraryLearningProfile.enabled,
       'cronConfigured':
           _reminderCronToken != null && _reminderCronToken!.isNotEmpty,
+      'cronRecentlyActive': cronRecentlyActive,
       'crawlRunning': _crawlJob?.running == true,
       'environment': _usingRenderBackend ? 'render' : 'local',
       'timestamp': now.toUtc().toIso8601String(),
@@ -5282,6 +5310,30 @@ Future<Map<String, dynamic>> _buildAdminMetricsSnapshot() async {
     'recentRequests': _recentRequestLogs.reversed.take(30).toList(),
     'linePushHistory': _linePushHistory.reversed.take(30).toList(),
     'reminderRuns': _reminderRunHistory.reversed.take(20).toList(),
+    'notificationMetrics': {
+      'linePushAttempts': _linePushHistory.length,
+      'linePushSuccesses': linePushSuccesses,
+      'linePushFailures': linePushFailures,
+      'linePushSuccessRate': _linePushHistory.isEmpty
+          ? 0.0
+          : (linePushSuccesses / _linePushHistory.length * 100),
+      'lastLinePushAt': _linePushHistory.isEmpty
+          ? null
+          : _linePushHistory.last['timestamp'],
+      'reminderRuns': _reminderRunHistory.length,
+      'reminderSuccesses': reminderSuccesses,
+      'reminderFailures': reminderFailures,
+      'reminderSuccessRate': _reminderRunHistory.isEmpty
+          ? 0.0
+          : (reminderSuccesses / _reminderRunHistory.length * 100),
+      'avgReminderDurationMs': _reminderRunHistory.isEmpty
+          ? 0
+          : reminderDurationTotal ~/ _reminderRunHistory.length,
+      'cronRuns': cronRuns.length,
+      'lastCronRunAt': lastCronRun?['timestamp'],
+      'lastCronStatus': lastCronRun?['status'] ?? 'success',
+      'cronRecentlyActive': cronRecentlyActive,
+    },
     'appEvents': _buildAppEventSnapshot(),
     'crawlJob': _crawlJob?.toJson(),
     'aiMetrics': {
@@ -5546,9 +5598,34 @@ Future<void> _markLineReminderSent(String signature) async {
   await _writeAppState(appState);
 }
 
+Future<Map<String, dynamic>> _runTrackedUpcomingReminderScan({
+  required String triggerSource,
+}) async {
+  final startedAt = DateTime.now();
+  try {
+    return await _runUpcomingReminderScan(triggerSource: triggerSource);
+  } catch (error) {
+    _recordReminderRun(
+      source: triggerSource,
+      result: {
+        'status': 'failed',
+        'durationMs': DateTime.now().difference(startedAt).inMilliseconds,
+        'scannedUsers': 0,
+        'syncedPlans': 0,
+        'linePushed': 0,
+        'failedUsers': 0,
+        'errors': [error.toString()],
+        'checkedAt': _taipeiNow().toIso8601String(),
+      },
+    );
+    rethrow;
+  }
+}
+
 Future<Map<String, dynamic>> _runUpcomingReminderScan({
   required String triggerSource,
 }) async {
+  final startedAt = DateTime.now();
   final users = (await _store.read()).users;
   final now = _taipeiNow();
   final todayText = now.toIso8601String().substring(0, 10);
@@ -5564,7 +5641,9 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan({
   var syncedPlans = 0;
   var pushed = 0;
   var tomorrowSummariesPushed = 0;
+  var failedUsers = 0;
   final pushedUsers = <String>[];
+  final errors = <String>[];
 
   for (final user in users) {
     if (user.lineUserId == null ||
@@ -5591,15 +5670,21 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan({
     );
     if (todayDay.isNotEmpty) {
       scanned += 1;
-      final result = await _buildContextAwareness({
-        'day': todayDay,
-        'userId': user.id,
-        'triggerLinePush': true,
-        'currentTime': now.toIso8601String(),
-      });
-      if (result['linePushed'] == true) {
-        pushed += 1;
-        pushedUsers.add(user.username);
+      try {
+        final result = await _buildContextAwareness({
+          'day': todayDay,
+          'userId': user.id,
+          'triggerLinePush': true,
+          'currentTime': now.toIso8601String(),
+        });
+        if (result['linePushed'] == true) {
+          pushed += 1;
+          pushedUsers.add(user.username);
+        }
+      } catch (error) {
+        failedUsers += 1;
+        errors.add('${user.username}: $error');
+        _log.warning('提醒掃描使用者失敗：user=${user.id} error=$error');
       }
     }
 
@@ -5608,23 +5693,35 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan({
         (item) => item['date']?.toString().startsWith(tomorrowText) == true,
         orElse: () => const <String, dynamic>{},
       );
-      if (tomorrowDay.isNotEmpty &&
-          await _sendLineTomorrowSummaryNotification(
+      if (tomorrowDay.isNotEmpty) {
+        try {
+          if (await _sendLineTomorrowSummaryNotification(
             user: user,
             day: tomorrowDay,
           )) {
-        pushed += 1;
-        tomorrowSummariesPushed += 1;
-        pushedUsers.add(user.username);
+            pushed += 1;
+            tomorrowSummariesPushed += 1;
+            pushedUsers.add(user.username);
+          }
+        } catch (error) {
+          failedUsers += 1;
+          errors.add('${user.username}: $error');
+          _log.warning('前一晚摘要推播失敗：user=${user.id} error=$error');
+        }
       }
     }
   }
 
+  final durationMs = DateTime.now().difference(startedAt).inMilliseconds;
   final result = {
+    'status': failedUsers == 0 ? 'success' : 'partial',
     'scannedUsers': scanned,
     'syncedPlans': syncedPlans,
     'linePushed': pushed,
     'tomorrowSummariesPushed': tomorrowSummariesPushed,
+    'failedUsers': failedUsers,
+    'durationMs': durationMs,
+    if (errors.isNotEmpty) 'errors': errors.take(10).toList(),
     'pushedUsers': pushedUsers,
     'checkedAt': now.toIso8601String(),
   };

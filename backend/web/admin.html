@@ -429,6 +429,7 @@
           <button class="nav-item" data-view="events" onclick="showView('events')">App 事件</button>
           <button class="nav-item" data-view="places" onclick="showView('places')">景點管理</button>
           <button class="nav-item" data-view="users" onclick="showView('users')">使用者</button>
+          <button class="nav-item" data-view="reviews" onclick="showView('reviews')">行程評審</button>
           <button class="nav-item" data-view="training" onclick="showView('training')">模型訓練</button>
           <button class="nav-item" data-view="import" onclick="showView('import')">匯入、同步與爬蟲</button>
         </div>
@@ -455,6 +456,10 @@
             <h3>服務健康狀態</h3>
             <div id="healthPills" class="pill-list"></div>
           </div>
+          <div class="card">
+            <h3>AI 流量監控</h3>
+            <div class="grid stats" id="aiStatsGrid"></div>
+          </div>
           <div class="section-grid">
             <div class="card">
               <h3>熱門路由</h3>
@@ -475,6 +480,30 @@
                     <tr><th>時間</th><th>來源</th><th>掃描</th><th>推播</th></tr>
                   </thead>
                   <tbody id="overviewReminderBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div class="section-grid">
+            <div class="card">
+              <h3>AI 功能用量</h3>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>功能</th><th>請求</th><th>成功率</th><th>平均延遲</th><th>總 tokens</th></tr>
+                  </thead>
+                  <tbody id="aiFeaturesBody"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="card">
+              <h3>最近 AI 呼叫</h3>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>時間</th><th>功能</th><th>模型</th><th>狀態</th><th>Latency</th><th>Tokens</th></tr>
+                  </thead>
+                  <tbody id="aiRecentCallsBody"></tbody>
                 </table>
               </div>
             </div>
@@ -500,6 +529,7 @@
         </section>
 
         <section id="pushView" class="section">
+          <div class="grid stats" id="notificationStatsGrid"></div>
           <div class="card">
             <div class="actions">
               <button class="primary" onclick="runReminderScan()">手動執行提醒掃描</button>
@@ -535,6 +565,9 @@
                       <th>有效行程</th>
                       <th>實際掃描</th>
                       <th>已推播</th>
+                      <th>狀態</th>
+                      <th>耗時</th>
+                      <th>錯誤</th>
                     </tr>
                   </thead>
                   <tbody id="reminderRunsBody"></tbody>
@@ -660,8 +693,55 @@
           </div>
         </section>
 
+        <section id="reviewsView" class="section">
+          <div class="grid stats" id="planReviewStats"></div>
+          <div class="card">
+            <div class="actions">
+              <button class="primary" onclick="loadPlanReviews()">重新整理</button>
+            </div>
+          </div>
+          <div class="grid" id="planReviewList"></div>
+        </section>
+
         <section id="trainingView" class="section">
           <div class="grid stats" id="trainingStatsGrid"></div>
+          <div class="card">
+            <h3>自然語言需求測試</h3>
+            <p class="muted">直接測試「日期 + 縣市 + 補充需求」對行程生成的實際影響。這裡會呼叫正式 <code>/api/travel/plans</code>，並顯示需求解析摘要與產生的行程 JSON。</p>
+            <div class="field-grid">
+              <label class="field">開始日期<input id="trainingPlanStartDate" type="date" /></label>
+              <label class="field">結束日期<input id="trainingPlanEndDate" type="date" /></label>
+              <label class="field">出發縣市<input id="trainingPlanOriginCity" placeholder="例如：雲林縣" /></label>
+              <label class="field">目的縣市<input id="trainingPlanDestinationCities" placeholder="例如：臺中市, 苗栗縣" /></label>
+              <label class="field full">補充需求<textarea id="trainingPlanRequirements" placeholder="例如：和家庭出遊想要戶外走走，沿途到各個景點打卡拍照，點跟點的距離不要太遠"></textarea></label>
+            </div>
+            <div class="actions" style="margin-top:12px;">
+              <button class="primary" onclick="runTrainingPlanPreview()">測試需求效果</button>
+              <button onclick="resetTrainingPlanPreview()">清空</button>
+            </div>
+            <div id="trainingPlanPreviewStatus" class="muted" style="margin-top:12px;"></div>
+            <div class="section-grid" style="margin-top:16px;">
+              <div class="card" style="padding:16px;">
+                <h4>需求解析摘要</h4>
+                <div id="trainingPlanPreviewSummary" class="muted">尚未執行。</div>
+              </div>
+              <div class="card" style="padding:16px;">
+                <h4>行程預覽 JSON</h4>
+                <pre id="trainingPlanPreviewJson">尚未執行。</pre>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <h3>旅行社行程網址匯入</h3>
+            <p class="muted">貼上旅行社行程網址，後端會先抓頁面並整理成 <code>agency_itineraries_raw.json</code> 可用的預覽格式。你可以先在下方直接微調 JSON，再套用到原始行程資料。</p>
+            <div class="actions" style="align-items:flex-start;">
+              <input id="trainingAgencyUrl" type="url" placeholder="https://www.welovetravel.com.tw/..." style="min-width:360px; flex:1 1 360px;" />
+              <button onclick="fetchTrainingAgencyUrlPreview()">抓取網址預覽</button>
+              <button id="applyTrainingAgencyUrlBtn" class="primary" onclick="applyTrainingAgencyUrlPreview()" disabled>套用到原始資料</button>
+            </div>
+            <div id="trainingAgencyUrlPreviewSummary" class="muted" style="margin-top:12px;"></div>
+            <textarea id="trainingAgencyUrlPreview" style="min-height: 260px; margin-top:12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;"></textarea>
+          </div>
           <div class="card">
             <h3>旅行社原始行程 JSON</h3>
             <p class="muted">這裡直接維護 <code>agency_itineraries_raw.json</code>。儲存後可直接在雲端執行匯入、查看匹配結果、併入正式訓練檔並啟動模型訓練。</p>
@@ -887,6 +967,8 @@
         metricsTimer: null,
         crawlTimer: null,
         trainingSnapshot: null,
+        trainingPlanPreview: null,
+        trainingAgencyUrlPreview: null,
         trainingSearchResults: {},
         trainingMatchOverrides: {},
         trainingWeightVersions: {
@@ -918,6 +1000,21 @@
         const res = await fetch(`${api}${path}`, {
           headers: headers(),
           ...options,
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.message || data.error || `Request failed (${res.status})`);
+        }
+        return data;
+      }
+
+      async function publicJsonFetch(path, payload) {
+        const res = await fetch(path, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -961,6 +1058,12 @@
         return `<span class="badge ${cls}">${label}</span>`;
       }
 
+      function formatPercent(value) {
+        const num = Number(value ?? 0);
+        if (!Number.isFinite(num)) return '0%';
+        return `${num.toFixed(1)}%`;
+      }
+
       function statusBadge(ok, okText = '正常', badText = '未設定') {
         return ok
           ? `<span class="badge ok">${okText}</span>`
@@ -978,6 +1081,7 @@
           events: ['App 事件', '追蹤 Flutter 前端頁面瀏覽、登入、行程生成與編輯操作。'],
           places: ['景點管理', '維護景點資料、查看完整度、價格與營業時間，並快速修正內容。'],
           users: ['使用者', '查看興趣偏好、LINE 綁定、有效行程，並執行測試推播。'],
+          reviews: ['行程評審', '評分已進入正式頁面的行程，讓人工品質訊號改善後續推薦排序。'],
           training: ['模型訓練', '雲端管理旅行社原始行程、查看匹配結果、併入正式訓練檔並訓練排序模型。'],
           import: ['匯入、同步與爬蟲', '匯出資料、合併同步、控制爬蟲與檢查最後同步結果。'],
         };
@@ -1072,6 +1176,9 @@
         if (state.currentView === 'users') {
           await loadUsers();
         }
+        if (state.currentView === 'reviews') {
+          await loadPlanReviews();
+        }
         if (state.currentView === 'training') {
           await loadTrainingWorkspace();
         }
@@ -1099,6 +1206,8 @@
         const stats = snapshot.stats || {};
         const health = snapshot.health || {};
         const sync = snapshot.syncCapabilities || {};
+        const ai = snapshot.aiMetrics || {};
+        const notifications = snapshot.notificationMetrics || {};
         document.getElementById('statsGrid').innerHTML = [
           ['總請求數', stats.totalRequests ?? 0],
           ['近 5 分鐘請求', stats.requestsLast5Min ?? 0],
@@ -1117,11 +1226,15 @@
 
         document.getElementById('healthPills').innerHTML = [
           ['資料儲存', health.dataStore || '-', health.dataStore ? 'ok' : 'warn'],
+          ['LLM Provider', health.llmProvider || '-', 'ok'],
+          ['LLM', health.llmConfigured, null],
           ['OpenAI', health.openAiConfigured, null],
+          ['Gemini', health.geminiConfigured, null],
           ['LINE', health.lineConfigured, null],
           ['Google Maps', health.googleMapsConfigured, null],
           ['行程學習模型', health.itineraryLearningConfigured, null],
           ['提醒 Cron', health.cronConfigured, null],
+          ['Cron 最近有執行', health.cronRecentlyActive, null],
           ['爬蟲執行中', health.crawlRunning, null],
           ['環境', health.environment === 'render' ? 'Render 雲端' : '本機', 'ok'],
         ].map(([label, value, cls]) => {
@@ -1136,6 +1249,54 @@
           (row) => `<tr><td>${escapeHtml(row.route)}</td><td>${row.count ?? 0}</td></tr>`,
           2,
           '尚無請求資料',
+        );
+
+        document.getElementById('aiStatsGrid').innerHTML = [
+          ['AI 請求總數', ai.totalRequests ?? 0],
+          ['API 連線成功率', formatPercent(ai.transportSuccessRate ?? 0)],
+          ['AI 結果可用率', formatPercent(ai.successRate ?? 0)],
+          ['近 5 分鐘 AI 請求', ai.requestsLast5Min ?? 0],
+          ['近 5 分鐘 AI 錯誤', ai.errorsLast5Min ?? 0],
+          ['近 5 分鐘平均延遲 (ms)', ai.avgLatencyMsLast5Min ?? 0],
+          ['Prompt tokens', ai.totalPromptTokens ?? 0],
+          ['Completion tokens', ai.totalCompletionTokens ?? 0],
+          ['總 tokens', ai.totalTokens ?? 0],
+        ].map(([label, value]) => `
+          <div class="stat">
+            <div class="label">${label}</div>
+            <div class="value">${value}</div>
+          </div>
+        `).join('');
+
+        document.getElementById('aiFeaturesBody').innerHTML = renderRows(
+          ai.features || [],
+          (row) => `
+            <tr>
+              <td>${escapeHtml(row.feature || '-')}</td>
+              <td>${row.requests ?? 0}</td>
+              <td>${formatPercent(row.successRate ?? 0)}</td>
+              <td>${row.avgLatencyMs ?? 0} ms</td>
+              <td>${row.totalTokens ?? 0}</td>
+            </tr>
+          `,
+          5,
+          '尚無 AI 呼叫資料',
+        );
+
+        document.getElementById('aiRecentCallsBody').innerHTML = renderRows(
+          ai.recentCalls || [],
+          (row) => `
+            <tr>
+              <td>${formatDateTime(row.timestamp)}</td>
+              <td>${escapeHtml(row.feature || '-')}</td>
+              <td>${escapeHtml(row.model || '-')}</td>
+              <td title="${escapeHtml(row.error || '')}">${row.success === true ? badge('成功', 'ok') : badge(row.statusCode || '失敗', 'danger')}</td>
+              <td>${row.latencyMs ?? 0} ms</td>
+              <td>${row.totalTokens ?? 0}</td>
+            </tr>
+          `,
+          6,
+          '尚無 AI 呼叫資料',
         );
 
         document.getElementById('recentRequestsBody').innerHTML = renderRows(
@@ -1169,6 +1330,22 @@
           '尚無 LINE 推播紀錄',
         );
 
+        document.getElementById('notificationStatsGrid').innerHTML = [
+          ['LINE 推播嘗試', notifications.linePushAttempts ?? 0],
+          ['LINE 推播成功率', formatPercent(notifications.linePushSuccessRate ?? 0)],
+          ['LINE 推播失敗', notifications.linePushFailures ?? 0],
+          ['提醒掃描次數', notifications.reminderRuns ?? 0],
+          ['提醒掃描成功率', formatPercent(notifications.reminderSuccessRate ?? 0)],
+          ['Cron 執行次數', notifications.cronRuns ?? 0],
+          ['平均掃描耗時', `${notifications.avgReminderDurationMs ?? 0} ms`],
+          ['最近 Cron', notifications.lastCronRunAt ? formatDateTime(notifications.lastCronRunAt) : '尚未執行'],
+        ].map(([label, value]) => `
+          <div class="stat">
+            <div class="label">${label}</div>
+            <div class="value">${value}</div>
+          </div>
+        `).join('');
+
         document.getElementById('reminderRunsBody').innerHTML = renderRows(
           snapshot.reminderRuns || [],
           (row) => `
@@ -1178,9 +1355,12 @@
               <td>${row.syncedPlans ?? 0}</td>
               <td>${row.scannedUsers ?? 0}</td>
               <td>${row.linePushed ?? 0}</td>
+              <td>${row.status === 'success' || !row.status ? badge('成功', 'ok') : badge(row.status === 'partial' ? '部分失敗' : '失敗', 'danger')}</td>
+              <td>${row.durationMs ?? 0} ms</td>
+              <td title="${escapeHtml(JSON.stringify(row.errors || []))}">${row.failedUsers ?? 0}</td>
             </tr>
           `,
-          5,
+          8,
           '尚無提醒掃描紀錄',
         );
         renderSyncCapabilities(sync);
@@ -1199,6 +1379,122 @@
         );
 
         renderAppEvents(snapshot.appEvents || {});
+      }
+
+      function summarizePlanStops(plan) {
+        const days = Array.isArray(plan?.days) ? plan.days : [];
+        return days.map((day, index) => {
+          const names = (Array.isArray(day?.items) ? day.items : [])
+            .map((item) => item?.place?.name || item?.name)
+            .filter(Boolean);
+          return `第 ${day?.day || index + 1} 天：${names.join(' → ') || '沒有景點資料'}`;
+        }).join('\n');
+      }
+
+      function renderPlanReviews(payload) {
+        const reviews = Array.isArray(payload?.reviews) ? payload.reviews : [];
+        const scores = reviews
+          .filter((review) => review?.score != null)
+          .map((review) => Number(review.score))
+          .filter((score) => Number.isFinite(score));
+        const averageScore = scores.length
+          ? (scores.reduce((sum, score) => sum + score, 0) / scores.length).toFixed(1)
+          : '-';
+        document.getElementById('planReviewStats').innerHTML = [
+          ['正式行程紀錄', reviews.length],
+          ['待評審', payload?.pendingCount ?? 0],
+          ['已評審', payload?.reviewedCount ?? 0],
+          ['平均分數', averageScore],
+        ].map(([label, value]) => `
+          <div class="stat">
+            <div class="label">${label}</div>
+            <div class="value">${value}</div>
+          </div>
+        `).join('');
+
+        document.getElementById('planReviewList').innerHTML = reviews.length
+          ? reviews.map((review) => {
+              const plan = review?.plan || {};
+              const meta = plan?.meta || {};
+              const score = Number(review?.score) || '';
+              const scoreOptions = [1, 2, 3, 4, 5].map((value) => `
+                <option value="${value}" ${score === value ? 'selected' : ''}>${value} 分</option>
+              `).join('');
+              const destinationCities = Array.isArray(meta?.destinationCities)
+                ? meta.destinationCities.join('、')
+                : (meta?.location || '-');
+              return `
+                <div class="card">
+                  <div class="actions" style="justify-content:space-between; align-items:flex-start;">
+                    <div>
+                      <h3>${escapeHtml(review?.username || review?.userId || '使用者')}</h3>
+                      <div class="muted">
+                        確認：${formatDateTime(review?.confirmedAt)}
+                        ｜ ${review?.score ? badge(`${review.score} 分`, 'ok') : badge('待評審', 'warn')}
+                      </div>
+                    </div>
+                  </div>
+                  <div class="kv">
+                    <strong>目的地</strong>
+                    <div>${escapeHtml(destinationCities)}</div>
+                  </div>
+                  <div class="kv">
+                    <strong>日期</strong>
+                    <div>${escapeHtml(meta?.startDate || '-')} ～ ${escapeHtml(meta?.endDate || '-')}</div>
+                  </div>
+                  <pre>${escapeHtml(summarizePlanStops(plan))}</pre>
+                  <div class="field-grid">
+                    <label class="field">
+                      品質評分
+                      <select id="reviewScore-${escapeHtml(review.id)}">
+                        <option value="">選擇分數</option>
+                        ${scoreOptions}
+                      </select>
+                    </label>
+                    <label class="field full">
+                      評審備註
+                      <textarea id="reviewNotes-${escapeHtml(review.id)}" placeholder="例如：路線順且符合需求；第 2 天跨區太遠">${escapeHtml(review?.notes || '')}</textarea>
+                    </label>
+                  </div>
+                  <div class="actions" style="margin-top:12px;">
+                    <button class="primary" onclick='savePlanReview(${jsStringLiteral(review.id)})'>儲存評分</button>
+                  </div>
+                  <details style="margin-top:12px;">
+                    <summary>查看完整行程 JSON</summary>
+                    <pre>${escapeHtml(JSON.stringify(plan, null, 2))}</pre>
+                  </details>
+                </div>
+              `;
+            }).join('')
+          : '<div class="card"><div class="empty">尚無已確認正式行程。</div></div>';
+      }
+
+      async function loadPlanReviews() {
+        try {
+          const data = await apiFetch('/plan-reviews');
+          renderPlanReviews(data.data || {});
+        } catch (error) {
+          document.getElementById('planReviewList').innerHTML =
+            `<div class="card"><div class="empty">${escapeHtml(error.message || '讀取行程評審失敗')}</div></div>`;
+        }
+      }
+
+      async function savePlanReview(id) {
+        const score = Number(document.getElementById(`reviewScore-${id}`)?.value || 0);
+        const notes = document.getElementById(`reviewNotes-${id}`)?.value.trim() || '';
+        if (score < 1 || score > 5) {
+          alert('請選擇 1 到 5 分');
+          return;
+        }
+        try {
+          await apiFetch(`/plan-reviews/${encodeURIComponent(id)}`, {
+            method: 'PUT',
+            body: JSON.stringify({ score, notes }),
+          });
+          await loadPlanReviews();
+        } catch (error) {
+          alert(error.message || '儲存行程評分失敗');
+        }
       }
 
       function renderSyncCapabilities(sync) {
@@ -1287,6 +1583,106 @@
         el.innerText = message;
       }
 
+      function setTrainingPlanPreviewStatus(message, tone = 'muted') {
+        const el = document.getElementById('trainingPlanPreviewStatus');
+        if (!el) return;
+        const colors = {
+          muted: 'var(--muted)',
+          ok: 'var(--ok)',
+          danger: 'var(--danger)',
+        };
+        el.style.color = colors[tone] || colors.muted;
+        el.innerText = message;
+      }
+
+      function renderTrainingPlanPreview(plan) {
+        state.trainingPlanPreview = plan || null;
+        const summaryEl = document.getElementById('trainingPlanPreviewSummary');
+        const jsonEl = document.getElementById('trainingPlanPreviewJson');
+        if (!summaryEl || !jsonEl) return;
+        if (!plan) {
+          summaryEl.innerHTML = '尚未執行。';
+          jsonEl.innerText = '尚未執行。';
+          return;
+        }
+        const metadata = plan.metadata || {};
+        const requirementSignals = metadata.requirementsSignals || {};
+        const preferredTags = Array.isArray(requirementSignals.preferredTags)
+          ? requirementSignals.preferredTags.join(', ')
+          : '';
+        const keywords = Array.isArray(requirementSignals.keywords)
+          ? requirementSignals.keywords.join(', ')
+          : '';
+        const days = Array.isArray(plan.days) ? plan.days : [];
+        const totalStops = days.reduce((sum, day) => sum + (Array.isArray(day.stops) ? day.stops.length : 0), 0);
+        const improvements = Array.isArray(plan.routeOptimization?.improvements)
+          ? plan.routeOptimization.improvements.join('、')
+          : '';
+        const warnings = Array.isArray(plan.routeOptimization?.warnings)
+          ? plan.routeOptimization.warnings.join('、')
+          : '';
+        summaryEl.innerHTML = [
+          `<div class="kv"><strong>需求摘要</strong><div>${escapeHtml(requirementSignals.summary || '未抽取到明確需求')}</div></div>`,
+          `<div class="kv"><strong>偏好標籤</strong><div>${escapeHtml(preferredTags || '未推斷')}</div></div>`,
+          `<div class="kv"><strong>關鍵詞</strong><div>${escapeHtml(keywords || '未推斷')}</div></div>`,
+          `<div class="kv"><strong>行程結果</strong><div>${days.length} 天 ｜ ${totalStops} 個景點 ｜ ${escapeHtml(String(metadata.transportMode || '-'))}</div></div>`,
+          improvements ? `<div class="kv"><strong>優化重點</strong><div>${escapeHtml(improvements)}</div></div>` : '',
+          warnings ? `<div class="kv"><strong>警告</strong><div>${escapeHtml(warnings)}</div></div>` : '',
+        ].filter(Boolean).join('');
+        jsonEl.innerText = JSON.stringify(plan, null, 2);
+      }
+
+      function resetTrainingPlanPreview() {
+        document.getElementById('trainingPlanStartDate').value = '';
+        document.getElementById('trainingPlanEndDate').value = '';
+        document.getElementById('trainingPlanOriginCity').value = '';
+        document.getElementById('trainingPlanDestinationCities').value = '';
+        document.getElementById('trainingPlanRequirements').value = '';
+        renderTrainingPlanPreview(null);
+        setTrainingPlanPreviewStatus('已清空需求測試表單。', 'ok');
+      }
+
+      async function runTrainingPlanPreview() {
+        const startDate = String(document.getElementById('trainingPlanStartDate')?.value || '').trim();
+        const endDate = String(document.getElementById('trainingPlanEndDate')?.value || '').trim();
+        const originCity = String(document.getElementById('trainingPlanOriginCity')?.value || '').trim();
+        const destinationCitiesText = String(document.getElementById('trainingPlanDestinationCities')?.value || '').trim();
+        const requirementsText = String(document.getElementById('trainingPlanRequirements')?.value || '').trim();
+        const destinationCities = destinationCitiesText
+          ? destinationCitiesText.split(/[,\n]/).map((value) => value.trim()).filter(Boolean)
+          : [];
+        if (!startDate || !endDate) {
+          setTrainingPlanPreviewStatus('開始日期與結束日期不可為空。', 'danger');
+          return;
+        }
+        if (!originCity) {
+          setTrainingPlanPreviewStatus('出發縣市不可為空。', 'danger');
+          return;
+        }
+        if (!destinationCities.length) {
+          setTrainingPlanPreviewStatus('至少需要一個目的縣市。', 'danger');
+          return;
+        }
+        try {
+          renderTrainingPlanPreview(null);
+          setTrainingPlanPreviewStatus('測試中，正在執行正式排程 API ...', 'muted');
+          const payload = {
+            interests: [],
+            startDate: `${startDate}T00:00:00.000Z`,
+            endDate: `${endDate}T00:00:00.000Z`,
+            originCity,
+            destinationCities,
+            requirementsText,
+          };
+          const data = await publicJsonFetch('/api/travel/plans', payload);
+          renderTrainingPlanPreview(data.data || {});
+          setTrainingPlanPreviewStatus(data.message || '已完成需求效果測試。', 'ok');
+        } catch (error) {
+          renderTrainingPlanPreview(null);
+          setTrainingPlanPreviewStatus(error.message || '需求效果測試失敗', 'danger');
+        }
+      }
+
       function buildTrainingMatchKey(sourceId, item) {
         if (item && item.overrideKey) return String(item.overrideKey);
         return [
@@ -1303,6 +1699,41 @@
         if (label) return label;
         const metadata = version?.metadata || {};
         return `samples=${metadata.samplesUsed || 0} / stops=${metadata.stopsUsed || 0}`;
+      }
+
+      function renderTrainingAgencyUrlPreview(preview) {
+        state.trainingAgencyUrlPreview = preview || null;
+        const summaryEl = document.getElementById('trainingAgencyUrlPreviewSummary');
+        const previewEl = document.getElementById('trainingAgencyUrlPreview');
+        const applyBtn = document.getElementById('applyTrainingAgencyUrlBtn');
+        if (!summaryEl || !previewEl || !applyBtn) return;
+        if (!preview || (!preview.source && !Array.isArray(preview.sources))) {
+          summaryEl.innerHTML = '<span class="muted">尚未抓取旅行社網址預覽。</span>';
+          previewEl.value = '';
+          applyBtn.disabled = true;
+          return;
+        }
+        const sources = Array.isArray(preview.sources) && preview.sources.length
+          ? preview.sources
+          : [preview.source].filter(Boolean);
+        const primarySource = sources[0] || {};
+        const dayCount = Array.isArray(primarySource.days) ? primarySource.days.length : 0;
+        const itemCount = Array.isArray(primarySource.days)
+          ? primarySource.days.reduce((sum, day) => sum + (Array.isArray(day.items) ? day.items.length : 0), 0)
+          : 0;
+        const warnings = Array.isArray(preview.warnings) ? preview.warnings : [];
+        const warningText = warnings.length
+          ? ` ｜ 警告 ${warnings.length} 筆`
+          : '';
+        const sourceCountText = sources.length > 1 ? ` ｜ ${sources.length} 筆分支樣本` : '';
+        summaryEl.innerHTML = `
+          <div class="kv"><strong>來源網址</strong><div>${escapeHtml(preview.url || '-')}</div></div>
+          <div class="kv"><strong>摘要</strong><div>${escapeHtml(primarySource.title || primarySource.id || '-')} ｜ ${dayCount} 天 ｜ ${itemCount} 個節點${sourceCountText}${warningText}</div></div>
+        `;
+        previewEl.value = sources.length > 1
+          ? JSON.stringify({ notes: '由網址預覽展開的分支樣本', sources }, null, 2)
+          : JSON.stringify(primarySource, null, 2);
+        applyBtn.disabled = false;
       }
 
       async function setTrainingOverride(key, action, placeId = '', placeName = '') {
@@ -1339,25 +1770,81 @@
         }
       }
 
-      async function searchTrainingPlaces(rowKey, query) {
+      function buildTrainingSearchQueries(query, city = '') {
         const trimmed = String(query || '').trim();
+        const cityTrimmed = String(city || '').trim();
         if (!trimmed) {
+          return [];
+        }
+        const variants = [];
+        const pushVariant = (value) => {
+          const next = String(value || '').trim();
+          if (!next) return;
+          if (!variants.includes(next)) {
+            variants.push(next);
+          }
+        };
+        pushVariant(trimmed);
+        pushVariant(
+          trimmed
+            .replace(/[~～].*$/, '')
+            .replace(/[（(][^）)]*[）)]/g, '')
+            .replace(/[【\[{].*[】\]}]/g, '')
+            .replace(/^(午餐|晚餐|早餐|下午茶)\s*[:：]?\s*/g, '')
+            .replace(/\s+/g, ' ')
+            .trim(),
+        );
+        pushVariant(
+          trimmed
+            .replace(/(單車遊|單車|步道|古道|步道采風|采風|飄移卡丁車|卡丁車|泡湯|溫泉泡湯|夜市|老街散策|散策|觀光工廠|互動農場|主題遊樂園|遊樂園)$/g, '')
+            .replace(/\s+/g, ' ')
+            .trim(),
+        );
+        pushVariant(
+          trimmed
+            .replace(/^.*?[~～]/, '')
+            .replace(/\s+/g, ' ')
+            .trim(),
+        );
+        if (cityTrimmed) {
+          for (const base of [...variants]) {
+            pushVariant(`${base} ${cityTrimmed}`);
+          }
+        }
+        return variants.filter((value) => value && value.length >= 2);
+      }
+
+      async function searchTrainingPlaces(rowKey, query, city = '') {
+        const searchQueries = buildTrainingSearchQueries(query, city);
+        if (!searchQueries.length) {
           setTrainingActionStatus('景點搜尋名稱不可為空。', 'danger');
           return;
         }
         try {
-          setTrainingActionStatus(`搜尋景點候選：${trimmed}`, 'muted');
-          const data = await apiFetch(
-            `/places?q=${encodeURIComponent(trimmed)}&category=&sort=rating&recent=0&incomplete=0`,
-          );
-          const places = data.data?.places || [];
-          state.trainingSearchResults[rowKey] = places.slice(0, 8);
+          setTrainingActionStatus(`搜尋景點候選：${searchQueries.join(' / ')}`, 'muted');
+          const merged = [];
+          const seenIds = new Set();
+          for (const q of searchQueries) {
+            const data = await apiFetch(
+              `/places?q=${encodeURIComponent(q)}&category=&sort=rating&recent=0&incomplete=0`,
+            );
+            const places = data.data?.places || [];
+            for (const place of places) {
+              const id = String(place.id || '');
+              if (!id || seenIds.has(id)) continue;
+              seenIds.add(id);
+              merged.push(place);
+              if (merged.length >= 8) break;
+            }
+            if (merged.length >= 8) break;
+          }
+          state.trainingSearchResults[rowKey] = merged;
           renderTrainingWorkspace(state.trainingSnapshot || {});
           setTrainingActionStatus(
-            places.length
-              ? `找到 ${places.length} 筆候選，請選擇要指派的景點。`
-              : '查無候選景點。',
-            places.length ? 'ok' : 'muted',
+            merged.length
+              ? `找到 ${merged.length} 筆候選，請選擇要指派的景點。`
+              : `查無候選景點。已嘗試：${searchQueries.join(' / ')}`,
+            merged.length ? 'ok' : 'muted',
           );
         } catch (error) {
           setTrainingActionStatus(error.message || '搜尋景點候選失敗', 'danger');
@@ -1435,6 +1922,7 @@
         const raw = snapshot.raw || {};
         state.trainingMatchOverrides = matchOverrides;
         state.trainingWeightVersions = weightVersions;
+        renderTrainingAgencyUrlPreview(state.trainingAgencyUrlPreview);
 
         document.getElementById('trainingStatsGrid').innerHTML = [
           ['原始來源數', files.agencyRaw?.sourceCount ?? 0],
@@ -1520,6 +2008,9 @@
           for (const item of source.unmatchedItems || []) {
             const rowKey = buildTrainingMatchKey(source.id || '', item);
             const override = matchOverrides[rowKey] || null;
+            if (override && (override.action === 'map' || override.action === 'ignore')) {
+              continue;
+            }
             const searchResults = state.trainingSearchResults[rowKey] || [];
             const candidates = (item.candidates || []).slice(0, 3).map((candidate) => {
               const score = candidate.score != null ? ` (${candidate.score})` : '';
@@ -1540,11 +2031,6 @@
                   </div>
                 `).join('')
               : '';
-            const overrideStatus = override
-              ? override.action === 'ignore'
-                ? `<div class="muted">已標記忽略</div>`
-                : `<div class="muted">已人工指派：${escapeHtml(override.placeName || override.placeId || '-')}</div>`
-              : '';
             unmatchedRows.push({
               key: rowKey,
               sourceTitle: source.title || source.id || '-',
@@ -1553,12 +2039,10 @@
               time: [item.arrivalTime, item.departureTime].filter(Boolean).join(' - ') || '-',
               candidates: candidates || '無候選',
               actions: `
-                ${overrideStatus}
                 <div class="inline-actions" style="margin-top:8px;">
-                  <button onclick='searchTrainingPlaces(${jsStringLiteral(rowKey)},${jsStringLiteral(item.name || '')})'>搜尋同名</button>
+                  <button onclick='searchTrainingPlaces(${jsStringLiteral(rowKey)},${jsStringLiteral(item.name || '')},${jsStringLiteral(item.city || '')})'>搜尋同名</button>
                   <button onclick='importTrainingPlaceFromGoogleUrl(${jsStringLiteral(rowKey)},${jsStringLiteral(item.name || '')},${jsStringLiteral(item.city || '')})'>貼網址補齊</button>
                   <button onclick='setTrainingOverride(${jsStringLiteral(rowKey)},"ignore")'>忽略</button>
-                  ${override ? `<button onclick='setTrainingOverride(${jsStringLiteral(rowKey)},"clear")'>清除修正</button>` : ''}
                 </div>
                 ${searched ? `<div style="margin-top:8px;">${searched}</div>` : ''}
               `,
@@ -1622,6 +2106,96 @@
           await loadTrainingWorkspace();
         } catch (error) {
           setTrainingActionStatus(error.message || '儲存原始資料失敗', 'danger');
+        }
+      }
+
+      async function fetchTrainingAgencyUrlPreview() {
+        const input = document.getElementById('trainingAgencyUrl');
+        const rawUrl = String(input?.value || '').trim();
+        if (!rawUrl) {
+          setTrainingActionStatus('旅行社行程網址不可為空。', 'danger');
+          return;
+        }
+        try {
+          renderTrainingAgencyUrlPreview(null);
+          setTrainingActionStatus('抓取中，正在解析旅行社網址...', 'muted');
+          const data = await apiFetch('/training/fetch-agency-url', {
+            method: 'POST',
+            body: JSON.stringify({ url: rawUrl }),
+          });
+          const preview = data.data || null;
+          renderTrainingAgencyUrlPreview(preview);
+          const warningCount = Array.isArray(preview?.warnings) ? preview.warnings.length : 0;
+          setTrainingActionStatus(
+            warningCount
+              ? `已抓取網址預覽，但有 ${warningCount} 筆警告，請先檢查後再套用。`
+              : '已抓取旅行社網址預覽，可直接套用到原始行程資料。',
+            'ok',
+          );
+        } catch (error) {
+          renderTrainingAgencyUrlPreview(null);
+          setTrainingActionStatus(error.message || '抓取旅行社網址預覽失敗', 'danger');
+        }
+      }
+
+      async function applyTrainingAgencyUrlPreview() {
+        const previewEl = document.getElementById('trainingAgencyUrlPreview');
+        const previewText = String(previewEl?.value || '').trim();
+        if (!previewText) {
+          setTrainingActionStatus('目前沒有可套用的網址預覽。', 'danger');
+          return;
+        }
+        let decoded = null;
+        try {
+          decoded = JSON.parse(previewText);
+        } catch (_) {
+          setTrainingActionStatus('網址預覽 JSON 格式錯誤，請先修正後再套用。', 'danger');
+          return;
+        }
+        const text = document.getElementById('trainingAgencyRaw').value.trim();
+        let payload = { notes: '由後台模型訓練流程維護', sources: [] };
+        if (text) {
+          try {
+            const decoded = JSON.parse(text);
+            if (decoded && typeof decoded === 'object') {
+              payload = decoded;
+            }
+          } catch (_) {
+            setTrainingActionStatus('目前原始行程 JSON 格式錯誤，無法套用網址預覽。', 'danger');
+            return;
+          }
+        }
+        const sources = Array.isArray(payload.sources) ? [...payload.sources] : [];
+        const nextSources = Array.isArray(decoded?.sources)
+          ? decoded.sources
+          : [decoded];
+        if (!nextSources.length || nextSources.some((item) => !item || typeof item !== 'object' || !item.id)) {
+          setTrainingActionStatus('網址預覽內容缺少必要欄位 id，無法套用。', 'danger');
+          return;
+        }
+        for (const nextSource of nextSources.map((item) => JSON.parse(JSON.stringify(item)))) {
+          const index = sources.findIndex((item) => item && item.id === nextSource.id);
+          if (index >= 0) {
+            sources[index] = nextSource;
+          } else {
+            sources.unshift(nextSource);
+          }
+        }
+        const nextPayload = {
+          ...payload,
+          sources,
+        };
+        document.getElementById('trainingAgencyRaw').value = JSON.stringify(nextPayload, null, 2);
+        try {
+          setTrainingActionStatus('正在套用網址預覽到原始行程資料...', 'muted');
+          const data = await apiFetch('/training/agency-raw', {
+            method: 'PUT',
+            body: JSON.stringify({ text: JSON.stringify(nextPayload, null, 2) }),
+          });
+          setTrainingActionStatus(`已套用網址預覽並儲存原始資料（來源 ${data.data?.sourceCount || 0} 筆）。`, 'ok');
+          await loadTrainingWorkspace();
+        } catch (error) {
+          setTrainingActionStatus(error.message || '套用網址預覽失敗', 'danger');
         }
       }
 
