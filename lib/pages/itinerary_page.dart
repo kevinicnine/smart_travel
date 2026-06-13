@@ -10,16 +10,23 @@ import '../services/backend_api.dart';
 import '../state/user_state.dart';
 
 class ItineraryPage extends StatefulWidget {
-  const ItineraryPage({super.key, required this.plan});
+  const ItineraryPage({
+    super.key,
+    required this.plan,
+    this.confirmOnOpen = false,
+  });
 
   final Map<String, dynamic> plan;
+  final bool confirmOnOpen;
 
   @override
   State<ItineraryPage> createState() => _ItineraryPageState();
 }
 
 class _ItineraryPageState extends State<ItineraryPage> {
-  static const _googleMapsApiKey = String.fromEnvironment('GOOGLE_MAPS_API_KEY');
+  static const _googleMapsApiKey = String.fromEnvironment(
+    'GOOGLE_MAPS_API_KEY',
+  );
   static const _contextPollingInterval = Duration(minutes: 3);
 
   final BackendApi _api = BackendApi.instance;
@@ -40,6 +47,7 @@ class _ItineraryPageState extends State<ItineraryPage> {
   int _contextAwarenessRequestSerial = 0;
   String? _lastContextReplanPromptKey;
   bool _showingContextReplanDialog = false;
+  bool _formalPlanConfirmationStarted = false;
   Timer? _contextAwarenessPollingTimer;
 
   @override
@@ -49,6 +57,11 @@ class _ItineraryPageState extends State<ItineraryPage> {
     _plan = _ItineraryPlan.fromJson(_planJson);
     _dayPageController = PageController();
     _hydrateArrangementPreferencesFromPlanMeta();
+    if (widget.confirmOnOpen) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_confirmFormalPlanAfterOpen());
+      });
+    }
     unawaited(_loadContextAwarenessForSelectedDay());
     unawaited(_syncActivePlanToCloud());
     _refreshContextAwarenessPolling();
@@ -171,9 +184,9 @@ class _ItineraryPageState extends State<ItineraryPage> {
 
     if (stops.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('這一天的景點沒有座標，無法顯示路線地圖。')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('這一天的景點沒有座標，無法顯示路線地圖。')));
       return;
     }
 
@@ -631,6 +644,7 @@ class _ItineraryPageState extends State<ItineraryPage> {
       final result = await _api.fetchContextAwareness(
         day: Map<String, dynamic>.from(rawDay),
         userId: UserState.userId,
+        triggerLinePush: false,
         currentTime: DateTime.now(),
       );
       if (!mounted || requestSerial != _contextAwarenessRequestSerial) return;
@@ -658,6 +672,29 @@ class _ItineraryPageState extends State<ItineraryPage> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _confirmFormalPlanAfterOpen() async {
+    if (_formalPlanConfirmationStarted) return;
+    _formalPlanConfirmationStarted = true;
+    final userId = UserState.userId?.trim() ?? '';
+    try {
+      await _api.confirmItinerary(userId: userId, plan: _planJson);
+      unawaited(
+        _reportEvent(
+          'formal_plan_confirmed',
+          payload: {'days': _plan.days.length},
+        ),
+      );
+    } on ApiClientException catch (error) {
+      unawaited(
+        _reportEvent(
+          'formal_plan_confirmation_failed',
+          payload: {'message': error.message},
+        ),
+      );
+      _showTopMessage('正式行程已開啟，但雲端確認失敗：${error.message}');
+    }
   }
 
   Future<void> _syncActivePlanToCloud() async {
@@ -698,15 +735,14 @@ class _ItineraryPageState extends State<ItineraryPage> {
     if (!_isSelectedDayToday() || (UserState.userId?.trim().isEmpty ?? true)) {
       return;
     }
-    _contextAwarenessPollingTimer = Timer.periodic(
-      _contextPollingInterval,
-      (_) {
-        if (!mounted || _loadingContextAwareness) {
-          return;
-        }
-        unawaited(_loadContextAwarenessForSelectedDay());
-      },
-    );
+    _contextAwarenessPollingTimer = Timer.periodic(_contextPollingInterval, (
+      _,
+    ) {
+      if (!mounted || _loadingContextAwareness) {
+        return;
+      }
+      unawaited(_loadContextAwarenessForSelectedDay());
+    });
   }
 
   String _dayEditKey(_ItineraryDay day) {
@@ -727,7 +763,10 @@ class _ItineraryPageState extends State<ItineraryPage> {
     }
     final dayMap = Map<String, dynamic>.from(rawDay);
     final sanitizedItems = items
-        .map((item) => Map<String, dynamic>.from(jsonDecode(jsonEncode(item)) as Map))
+        .map(
+          (item) =>
+              Map<String, dynamic>.from(jsonDecode(jsonEncode(item)) as Map),
+        )
         .toList();
     for (var i = 0; i < sanitizedItems.length; i++) {
       sanitizedItems[i].remove('transitToNext');
@@ -837,10 +876,7 @@ class _ItineraryPageState extends State<ItineraryPage> {
     _showTopMessage('已更新景點順序並重算時間');
   }
 
-  Future<int?> _promptStopDuration(
-    _ItineraryDay day,
-    int itemIndex,
-  ) async {
+  Future<int?> _promptStopDuration(_ItineraryDay day, int itemIndex) async {
     final controller = TextEditingController(
       text: (_resolvedItemDurationMinutes(day, itemIndex)).toString(),
     );
@@ -885,10 +921,7 @@ class _ItineraryPageState extends State<ItineraryPage> {
                   const SizedBox(height: 12),
                   const Text(
                     '建議至少 10 分鐘。',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Color(0xFF6D6880),
-                    ),
+                    style: TextStyle(fontSize: 13, color: Color(0xFF6D6880)),
                   ),
                   const Spacer(),
                   Row(
@@ -903,7 +936,9 @@ class _ItineraryPageState extends State<ItineraryPage> {
                       Expanded(
                         child: ElevatedButton(
                           onPressed: () {
-                            final minutes = int.tryParse(controller.text.trim());
+                            final minutes = int.tryParse(
+                              controller.text.trim(),
+                            );
                             if (minutes == null || minutes < 10) {
                               return;
                             }
@@ -988,17 +1023,15 @@ class _ItineraryPageState extends State<ItineraryPage> {
                   const SizedBox(height: 12),
                   const Text(
                     '刪除後會重新計算後續時間與交通。',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Color(0xFF6D6880),
-                    ),
+                    style: TextStyle(fontSize: 14, color: Color(0xFF6D6880)),
                   ),
                   const Spacer(),
                   Row(
                     children: [
                       Expanded(
                         child: OutlinedButton(
-                          onPressed: () => Navigator.of(routeContext).pop(false),
+                          onPressed: () =>
+                              Navigator.of(routeContext).pop(false),
                           child: const Text('取消'),
                         ),
                       ),
@@ -1046,11 +1079,7 @@ class _ItineraryPageState extends State<ItineraryPage> {
     unawaited(
       _reportEvent(
         'itinerary_stop_deleted',
-        payload: {
-          'day': day.day,
-          'index': itemIndex,
-          'place': item.place.name,
-        },
+        payload: {'day': day.day, 'index': itemIndex, 'place': item.place.name},
       ),
     );
     _showTopMessage('已刪除 ${item.place.name}');
@@ -1217,10 +1246,14 @@ class _ItineraryPageState extends State<ItineraryPage> {
     final foodSignalCount =
         strongFoodTags.where(tags.contains).length +
         softFoodTags.where(tags.contains).length +
-        foodKeywords.where((value) => text.contains(value.toLowerCase())).length;
+        foodKeywords
+            .where((value) => text.contains(value.toLowerCase()))
+            .length;
     final nonFoodSignalCount =
         strongNonFoodTags.where(tags.contains).length +
-        nonFoodKeywords.where((value) => text.contains(value.toLowerCase())).length;
+        nonFoodKeywords
+            .where((value) => text.contains(value.toLowerCase()))
+            .length;
 
     if (queryText.isNotEmpty &&
         !text.contains(queryText) &&
@@ -1287,12 +1320,12 @@ class _ItineraryPageState extends State<ItineraryPage> {
           mealType: mealType,
         );
       } else {
-      throw ApiClientException(
-        '餐廳即時搜尋失敗：${error.message}${error.message.contains('GOOGLE_MAPS_API_KEY') ? '。請先設定後端 Google Maps API key 並重啟後端。' : ''}',
-        statusCode: error.statusCode,
-        details: error.details,
-        cause: error,
-      );
+        throw ApiClientException(
+          '餐廳即時搜尋失敗：${error.message}${error.message.contains('GOOGLE_MAPS_API_KEY') ? '。請先設定後端 Google Maps API key 並重啟後端。' : ''}',
+          statusCode: error.statusCode,
+          details: error.details,
+          cause: error,
+        );
       }
     }
     final seen = <String>{};
@@ -1310,8 +1343,8 @@ class _ItineraryPageState extends State<ItineraryPage> {
       if (!seen.add(dedupeKey)) {
         continue;
       }
-      final fromPrevMinutes = previousItem != null &&
-              _hasValidPlaceCoordinate(previousItem.place)
+      final fromPrevMinutes =
+          previousItem != null && _hasValidPlaceCoordinate(previousItem.place)
           ? _estimateTransitByMode(previousItem.place, place, 'car').minutes
           : 0;
       final toNextMinutes =
@@ -1466,7 +1499,8 @@ class _ItineraryPageState extends State<ItineraryPage> {
     };
     final normalized = <Map<String, dynamic>>[];
     for (final result in results) {
-      final types = (result['types'] as List?)
+      final types =
+          (result['types'] as List?)
               ?.map((e) => e.toString().trim().toLowerCase())
               .where((e) => e.isNotEmpty)
               .toSet() ??
@@ -1490,9 +1524,13 @@ class _ItineraryPageState extends State<ItineraryPage> {
         continue;
       }
       final geometry = result['geometry'];
-      final geometryMap = geometry is Map ? Map<String, dynamic>.from(geometry) : const <String, dynamic>{};
+      final geometryMap = geometry is Map
+          ? Map<String, dynamic>.from(geometry)
+          : const <String, dynamic>{};
       final location = geometryMap['location'];
-      final locationMap = location is Map ? Map<String, dynamic>.from(location) : const <String, dynamic>{};
+      final locationMap = location is Map
+          ? Map<String, dynamic>.from(location)
+          : const <String, dynamic>{};
       final lat = (locationMap['lat'] as num?)?.toDouble();
       final lng = (locationMap['lng'] as num?)?.toDouble();
       if (lat == null || lng == null) {
@@ -1503,15 +1541,11 @@ class _ItineraryPageState extends State<ItineraryPage> {
       if (photos is List && photos.isNotEmpty && photos.first is Map) {
         final photoRef = (photos.first as Map)['photo_reference']?.toString();
         if (photoRef != null && photoRef.isNotEmpty) {
-          imageUrl = Uri.https(
-            'maps.googleapis.com',
-            '/maps/api/place/photo',
-            {
-              'maxwidth': '800',
-              'photo_reference': photoRef,
-              'key': _googleMapsApiKey,
-            },
-          ).toString();
+          imageUrl = Uri.https('maps.googleapis.com', '/maps/api/place/photo', {
+            'maxwidth': '800',
+            'photo_reference': photoRef,
+            'key': _googleMapsApiKey,
+          }).toString();
         }
       }
       normalized.add({
@@ -1520,10 +1554,9 @@ class _ItineraryPageState extends State<ItineraryPage> {
         'kind': 'place',
         'city': _extractCityFromAddress(address) ?? fallbackCity,
         'address': address,
-        'description':
-            mealType == 'dinner'
-                ? 'Google Places 即時搜尋到的晚餐候選。'
-                : 'Google Places 即時搜尋到的午餐候選。',
+        'description': mealType == 'dinner'
+            ? 'Google Places 即時搜尋到的晚餐候選。'
+            : 'Google Places 即時搜尋到的午餐候選。',
         'imageUrl': imageUrl,
         'tags': <String>[
           if (types.contains('restaurant')) 'restaurant',
@@ -1602,19 +1635,26 @@ class _ItineraryPageState extends State<ItineraryPage> {
       'nextPlaceName': nextItem?.place.name,
       'transitFromPrev': previousItem == null
           ? null
-          : _estimateTransitByMode(previousItem.place, candidate.place, 'car')
-                .primaryLine,
+          : _estimateTransitByMode(
+              previousItem.place,
+              candidate.place,
+              'car',
+            ).primaryLine,
       'transitToNext': nextItem == null
           ? null
-          : _estimateTransitByMode(candidate.place, nextItem.place, 'car')
-                .primaryLine,
+          : _estimateTransitByMode(
+              candidate.place,
+              nextItem.place,
+              'car',
+            ).primaryLine,
       'place': candidate.raw,
     };
     try {
       return await _api.explainItineraryStop(payload: payload);
     } catch (_) {
       return {
-        'summary': '${candidate.place.name} 位於前後站點之間，適合作為${mealItem.place.name}安排。',
+        'summary':
+            '${candidate.place.name} 位於前後站點之間，適合作為${mealItem.place.name}安排。',
         'whyIncluded':
             '前一站約 ${candidate.fromPrevMinutes} 分鐘、下一站約 ${candidate.toNextMinutes} 分鐘，動線仍屬合理。',
         'whyTiming': '餐期安排在 ${range.start}-${range.end}，可銜接前後景點並保留休息時間。',
@@ -1658,7 +1698,9 @@ class _ItineraryPageState extends State<ItineraryPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                if ((explanation['summary']?.toString() ?? '').trim().isNotEmpty)
+                if ((explanation['summary']?.toString() ?? '')
+                    .trim()
+                    .isNotEmpty)
                   Text(
                     explanation['summary'].toString(),
                     style: const TextStyle(fontWeight: FontWeight.w700),
@@ -1714,7 +1756,9 @@ class _ItineraryPageState extends State<ItineraryPage> {
         'meal_break_place_applied',
         payload: {
           'day': day.day,
-          'mealType': mealItem.place.tags.contains('dinner') ? 'dinner' : 'lunch',
+          'mealType': mealItem.place.tags.contains('dinner')
+              ? 'dinner'
+              : 'lunch',
           'place': candidate.place.name,
           'fromPrevMinutes': candidate.fromPrevMinutes,
           'toNextMinutes': candidate.toNextMinutes,
@@ -1762,11 +1806,13 @@ class _ItineraryPageState extends State<ItineraryPage> {
     final mealType = originalTags.contains('dinner') ? 'dinner' : 'lunch';
     selected['kind'] = 'meal_break';
     selected['tags'] = <String>{
-      ...((selected['tags'] as List?)?.map((e) => e.toString()) ?? const <String>[]),
+      ...((selected['tags'] as List?)?.map((e) => e.toString()) ??
+          const <String>[]),
       'meal_break',
       mealType,
     }.toList();
-    selected['description'] = selected['description']?.toString().trim().isNotEmpty == true
+    selected['description'] =
+        selected['description']?.toString().trim().isNotEmpty == true
         ? selected['description']
         : '已選擇${mealType == 'lunch' ? '午餐' : '晚餐'}餐廳，會依前後景點重新調整交通與時間。';
     items[itemIndex]['place'] = selected;
@@ -1781,8 +1827,11 @@ class _ItineraryPageState extends State<ItineraryPage> {
     final previousItem = _previousNonMealItem(day, itemIndex);
     final nextItem = _nextNonMealItem(day, itemIndex);
     final searchController = TextEditingController();
-    Future<List<_MealCandidateOption>> candidatesFuture =
-        _fetchMealCandidates(day: day, itemIndex: itemIndex, item: item);
+    Future<List<_MealCandidateOption>> candidatesFuture = _fetchMealCandidates(
+      day: day,
+      itemIndex: itemIndex,
+      item: item,
+    );
 
     final selectedCandidate = await showModalBottomSheet<_MealCandidateOption>(
       context: context,
@@ -1863,7 +1912,8 @@ class _ItineraryPageState extends State<ItineraryPage> {
                         child: FutureBuilder<List<_MealCandidateOption>>(
                           future: candidatesFuture,
                           builder: (context, snapshot) {
-                            if (snapshot.connectionState == ConnectionState.waiting) {
+                            if (snapshot.connectionState ==
+                                ConnectionState.waiting) {
                               return const Center(
                                 child: CircularProgressIndicator(),
                               );
@@ -1871,7 +1921,9 @@ class _ItineraryPageState extends State<ItineraryPage> {
                             if (snapshot.hasError) {
                               return Center(
                                 child: Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 20,
+                                  ),
                                   child: Text(
                                     _mealCandidateLoadErrorText(snapshot.error),
                                     textAlign: TextAlign.center,
@@ -1883,15 +1935,15 @@ class _ItineraryPageState extends State<ItineraryPage> {
                                 ),
                               );
                             }
-                            final candidates = snapshot.data ?? const <_MealCandidateOption>[];
+                            final candidates =
+                                snapshot.data ?? const <_MealCandidateOption>[];
                             if (candidates.isEmpty) {
-                              return const Center(
-                                child: Text('找不到符合的餐廳'),
-                              );
+                              return const Center(child: Text('找不到符合的餐廳'));
                             }
                             return ListView.separated(
                               itemCount: candidates.length,
-                              separatorBuilder: (_, __) => const SizedBox(height: 8),
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(height: 8),
                               itemBuilder: (context, index) {
                                 final candidate = candidates[index];
                                 return Container(
@@ -1904,10 +1956,12 @@ class _ItineraryPageState extends State<ItineraryPage> {
                                     ),
                                   ),
                                   child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
                                       Row(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
                                         children: [
                                           Expanded(
                                             child: Column(
@@ -1923,7 +1977,10 @@ class _ItineraryPageState extends State<ItineraryPage> {
                                                 ),
                                                 const SizedBox(height: 4),
                                                 Text(
-                                                  candidate.place.address.isNotEmpty
+                                                  candidate
+                                                          .place
+                                                          .address
+                                                          .isNotEmpty
                                                       ? candidate.place.address
                                                       : candidate.place.city,
                                                   style: const TextStyle(
@@ -1956,7 +2013,9 @@ class _ItineraryPageState extends State<ItineraryPage> {
                                         alignment: Alignment.centerRight,
                                         child: ElevatedButton(
                                           onPressed: () {
-                                            Navigator.of(context).pop(candidate);
+                                            Navigator.of(
+                                              context,
+                                            ).pop(candidate);
                                           },
                                           child: const Text('AI 檢查並套用'),
                                         ),
@@ -2801,7 +2860,8 @@ class _ItineraryPageState extends State<ItineraryPage> {
               color: Color(0xFF2F2B3F),
             ),
           ),
-          if (reminder.transitLabel.isNotEmpty || reminder.transitMinutes != null) ...[
+          if (reminder.transitLabel.isNotEmpty ||
+              reminder.transitMinutes != null) ...[
             const SizedBox(height: 4),
             Text(
               '建議交通：'
@@ -2891,7 +2951,7 @@ class _ItineraryPageState extends State<ItineraryPage> {
   }
 
   List<Widget> _buildTimelineChildren(_ItineraryDay day) {
-    if (day.items.isEmpty && day.originTransit == null) {
+    if (day.items.isEmpty) {
       return const [
         Padding(
           padding: EdgeInsets.symmetric(vertical: 32),
@@ -2906,9 +2966,6 @@ class _ItineraryPageState extends State<ItineraryPage> {
     }
 
     final children = <Widget>[];
-    if (day.originTransit != null) {
-      children.add(_buildOriginTransitRow(day));
-    }
     for (var stopIndex = 0; stopIndex < day.items.length; stopIndex++) {
       if (stopIndex > 0) {
         final fromIndex = stopIndex - 1;
@@ -2989,11 +3046,7 @@ class _ItineraryPageState extends State<ItineraryPage> {
       final item = day.items[stopIndex];
       final range = _buildTimeRange(day, stopIndex);
       final stopCard = item.place.isMealBreak
-          ? _buildMealBreakCard(
-              day: day,
-              itemIndex: stopIndex,
-              item: item,
-            )
+          ? _buildMealBreakCard(day: day, itemIndex: stopIndex, item: item)
           : _buildPlaceStopCard(
               day: day,
               itemIndex: stopIndex,
@@ -3006,7 +3059,9 @@ class _ItineraryPageState extends State<ItineraryPage> {
               onWillAcceptWithDetails: (details) {
                 final fromIndex = details.data;
                 if (fromIndex == stopIndex) return false;
-                if (fromIndex < 0 || fromIndex >= day.items.length) return false;
+                if (fromIndex < 0 || fromIndex >= day.items.length) {
+                  return false;
+                }
                 return !day.items[fromIndex].place.isMealBreak;
               },
               onAcceptWithDetails: (details) {
@@ -3023,10 +3078,7 @@ class _ItineraryPageState extends State<ItineraryPage> {
                       child: Opacity(opacity: 0.92, child: stopCard),
                     ),
                   ),
-                  childWhenDragging: Opacity(
-                    opacity: 0.35,
-                    child: stopCard,
-                  ),
+                  childWhenDragging: Opacity(opacity: 0.35, child: stopCard),
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 120),
                     padding: highlighted
@@ -3081,9 +3133,7 @@ class _ItineraryPageState extends State<ItineraryPage> {
                 ],
               ),
               const SizedBox(width: 10),
-              Expanded(
-                child: stopContent,
-              ),
+              Expanded(child: stopContent),
             ],
           ),
         ),
@@ -3091,113 +3141,6 @@ class _ItineraryPageState extends State<ItineraryPage> {
     }
 
     return children;
-  }
-
-  Widget _buildOriginTransitRow(_ItineraryDay day) {
-    final transit = day.originTransit!;
-    final info = transit.toTransitInfo();
-    final departure = _preferredDayStartDateTime(day);
-    final arrival = departure.add(Duration(minutes: transit.minutes));
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 64,
-            child: Text(
-              '${_toHm(departure)}\n${_toHm(arrival)}',
-              style: const TextStyle(
-                height: 1.2,
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF555266),
-              ),
-            ),
-          ),
-          Column(
-            children: [
-              Container(
-                width: 12,
-                height: 12,
-                decoration: const BoxDecoration(
-                  color: Color(0xFFEC8F64),
-                  shape: BoxShape.circle,
-                ),
-              ),
-              Container(
-                width: 2,
-                height: 70,
-                color: const Color(0xFFE2D7EA),
-              ),
-            ],
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFFFBF7),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: const Color(0xFFF0D8C9)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '從${transit.fromLabel ?? '出發地'}出發',
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w800,
-                      color: Color(0xFF574351),
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Row(
-                    children: [
-                      Icon(info.icon, size: 16, color: const Color(0xFF5B5779)),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          info.primaryLine,
-                          style: const TextStyle(
-                            color: Color(0xFF5B5779),
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    transit.toLabel == null || transit.toLabel!.isEmpty
-                        ? '預計抵達第一站'
-                        : '預計抵達 ${transit.toLabel}',
-                    style: const TextStyle(
-                      color: Color(0xFF726E88),
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  if (info.secondaryLine.isNotEmpty) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      info.secondaryLine,
-                      style: const TextStyle(
-                        color: Color(0xFF726E88),
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 
   Widget _imagePlaceholder() {
@@ -3238,7 +3181,9 @@ class _ItineraryPageState extends State<ItineraryPage> {
               ),
               alignment: Alignment.center,
               child: Icon(
-                isLunch ? Icons.lunch_dining_rounded : Icons.dinner_dining_rounded,
+                isLunch
+                    ? Icons.lunch_dining_rounded
+                    : Icons.dinner_dining_rounded,
                 color: const Color(0xFFB5623D),
               ),
             ),
@@ -3348,10 +3293,7 @@ class _ItineraryPageState extends State<ItineraryPage> {
                             value: 'duration',
                             child: Text('調整停留時間'),
                           ),
-                          PopupMenuItem(
-                            value: 'delete',
-                            child: Text('刪除景點'),
-                          ),
+                          PopupMenuItem(value: 'delete', child: Text('刪除景點')),
                         ],
                         child: const Padding(
                           padding: EdgeInsets.only(left: 6),
@@ -3371,10 +3313,7 @@ class _ItineraryPageState extends State<ItineraryPage> {
                         : item.place.city,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: Colors.black54,
-                    ),
+                    style: const TextStyle(fontSize: 12, color: Colors.black54),
                   ),
                   const SizedBox(height: 6),
                   Row(
@@ -3911,11 +3850,10 @@ class _ItineraryPageState extends State<ItineraryPage> {
 
   DateTime _resolvedTimelineStartTime(_ItineraryDay day, int index) {
     var current = _preferredDayStartDateTime(day);
-    if (day.originTransit != null) {
-      current = current.add(Duration(minutes: day.originTransit!.minutes));
-    }
     for (var i = 0; i < index; i++) {
-      current = current.add(Duration(minutes: _resolvedItemDurationMinutes(day, i)));
+      current = current.add(
+        Duration(minutes: _resolvedItemDurationMinutes(day, i)),
+      );
       current = current.add(
         Duration(minutes: _resolvedTransitMinutes(day, i, i + 1)),
       );
@@ -3941,7 +3879,11 @@ class _ItineraryPageState extends State<ItineraryPage> {
     return item.place.isMealBreak ? 60 : 90;
   }
 
-  int _resolvedTransitMinutes(_ItineraryDay day, int fromIndex, int nextItemIndex) {
+  int _resolvedTransitMinutes(
+    _ItineraryDay day,
+    int fromIndex,
+    int nextItemIndex,
+  ) {
     if (fromIndex < 0 || nextItemIndex >= day.items.length) {
       return 0;
     }
@@ -3987,7 +3929,8 @@ class _ItineraryPageState extends State<ItineraryPage> {
   }
 
   bool _canEstimateTransitBetween(_ItineraryItem from, _ItineraryItem to) {
-    return _hasValidPlaceCoordinate(from.place) && _hasValidPlaceCoordinate(to.place);
+    return _hasValidPlaceCoordinate(from.place) &&
+        _hasValidPlaceCoordinate(to.place);
   }
 
   bool _hasValidPlaceCoordinate(_ItineraryPlace place) {
@@ -4042,7 +3985,11 @@ class _ItineraryPageState extends State<ItineraryPage> {
     _ItineraryItem from,
     _ItineraryItem to,
   ) {
-    final resolvedTransit = _resolveSegmentTransit(day, segmentIndex, nextItemIndex);
+    final resolvedTransit = _resolveSegmentTransit(
+      day,
+      segmentIndex,
+      nextItemIndex,
+    );
     final transit =
         resolvedTransit?.toTransitInfo() ??
         _estimateTransitByMode(from.place, to.place, 'transit');
@@ -4076,11 +4023,7 @@ class _ItineraryPageState extends State<ItineraryPage> {
     required int segmentIndex,
     required String selected,
   }) {
-    const modeLabels = {
-      'transit': '大眾',
-      'car': '開車',
-      'walk': '步行',
-    };
+    const modeLabels = {'transit': '大眾', 'car': '開車', 'walk': '步行'};
     return Container(
       height: 24,
       decoration: BoxDecoration(
@@ -4325,7 +4268,9 @@ class _DayRouteMapSheet extends StatefulWidget {
 }
 
 class _DayRouteMapSheetState extends State<_DayRouteMapSheet> {
-  static const _googleMapsApiKey = String.fromEnvironment('GOOGLE_MAPS_API_KEY');
+  static const _googleMapsApiKey = String.fromEnvironment(
+    'GOOGLE_MAPS_API_KEY',
+  );
 
   GoogleMapController? _mapController;
   bool _didFitBounds = false;
@@ -4370,7 +4315,10 @@ class _DayRouteMapSheetState extends State<_DayRouteMapSheet> {
           polylineId: PolylineId('seg-$i'),
           points:
               _segmentRoadPaths[i] ??
-              [widget.segments[i].from.position, widget.segments[i].to.position],
+              [
+                widget.segments[i].from.position,
+                widget.segments[i].to.position,
+              ],
           color: _segmentColor(widget.segments[i].selectedMode),
           width: 5,
           geodesic: true,
@@ -4402,9 +4350,9 @@ class _DayRouteMapSheetState extends State<_DayRouteMapSheet> {
               child: Row(
                 children: [
                   Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                         Text(
                           '${widget.dateLabel} · 第${widget.day.day}天路線地圖',
                           style: const TextStyle(
@@ -4455,7 +4403,10 @@ class _DayRouteMapSheetState extends State<_DayRouteMapSheet> {
                 child: SizedBox(
                   height: 280,
                   child: GoogleMap(
-                    initialCameraPosition: CameraPosition(target: center, zoom: 11),
+                    initialCameraPosition: CameraPosition(
+                      target: center,
+                      zoom: 11,
+                    ),
                     markers: markers,
                     polylines: polylines,
                     myLocationButtonEnabled: false,
@@ -4574,15 +4525,18 @@ class _DayRouteMapSheetState extends State<_DayRouteMapSheet> {
   }) async {
     String? lastStatus;
     for (final mode in modes) {
-      final uri = Uri.https('maps.googleapis.com', '/maps/api/directions/json', {
-        'origin': '${origin.latitude},${origin.longitude}',
-        'destination': '${destination.latitude},${destination.longitude}',
-        'mode': mode,
-        'language': 'zh-TW',
-        'key': _googleMapsApiKey,
-      });
+      final uri =
+          Uri.https('maps.googleapis.com', '/maps/api/directions/json', {
+            'origin': '${origin.latitude},${origin.longitude}',
+            'destination': '${destination.latitude},${destination.longitude}',
+            'mode': mode,
+            'language': 'zh-TW',
+            'key': _googleMapsApiKey,
+          });
       try {
-        final response = await http.get(uri).timeout(const Duration(seconds: 8));
+        final response = await http
+            .get(uri)
+            .timeout(const Duration(seconds: 8));
         if (response.statusCode >= 400) {
           lastStatus = 'HTTP_${response.statusCode}';
           continue;
@@ -4650,11 +4604,7 @@ class _DayRouteMapSheetState extends State<_DayRouteMapSheet> {
   }
 
   Widget _buildLegend() {
-    final legend = const [
-      ('transit', '大眾'),
-      ('car', '開車'),
-      ('walk', '步行'),
-    ];
+    final legend = const [('transit', '大眾'), ('car', '開車'), ('walk', '步行')];
     return Wrap(
       spacing: 8,
       runSpacing: 6,
@@ -4789,7 +4739,11 @@ class _DayRouteMapSheetState extends State<_DayRouteMapSheet> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(segment.transit.icon, size: 16, color: _segmentColor(segment.selectedMode)),
+          Icon(
+            segment.transit.icon,
+            size: 16,
+            color: _segmentColor(segment.selectedMode),
+          ),
           const SizedBox(width: 8),
           Expanded(
             child: Column(
@@ -4825,7 +4779,10 @@ class _DayRouteMapSheetState extends State<_DayRouteMapSheet> {
                 const SizedBox(height: 4),
                 Text(
                   '${segment.from.item.place.name} -> ${segment.to.item.place.name}',
-                  style: const TextStyle(fontSize: 11, color: Color(0xFF7A7488)),
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF7A7488),
+                  ),
                 ),
               ],
             ),
@@ -4876,25 +4833,27 @@ class _DayRouteMapSheetState extends State<_DayRouteMapSheet> {
 
     final lats = widget.stops.map((e) => e.position.latitude).toList();
     final lngs = widget.stops.map((e) => e.position.longitude).toList();
-    final sw = LatLng(
-      lats.reduce(math.min),
-      lngs.reduce(math.min),
-    );
-    final ne = LatLng(
-      lats.reduce(math.max),
-      lngs.reduce(math.max),
-    );
+    final sw = LatLng(lats.reduce(math.min), lngs.reduce(math.min));
+    final ne = LatLng(lats.reduce(math.max), lngs.reduce(math.max));
 
     await Future<void>.delayed(const Duration(milliseconds: 280));
     if (!mounted || _mapController == null) return;
     try {
       await _mapController!.animateCamera(
-        CameraUpdate.newLatLngBounds(LatLngBounds(southwest: sw, northeast: ne), 60),
+        CameraUpdate.newLatLngBounds(
+          LatLngBounds(southwest: sw, northeast: ne),
+          60,
+        ),
       );
     } catch (_) {
       await _mapController!.animateCamera(
         CameraUpdate.newCameraPosition(
-          CameraPosition(target: _averageLatLng(widget.stops.map((e) => e.position).toList()), zoom: 11),
+          CameraPosition(
+            target: _averageLatLng(
+              widget.stops.map((e) => e.position).toList(),
+            ),
+            zoom: 11,
+          ),
         ),
       );
     }
@@ -5017,7 +4976,8 @@ class _ItineraryContextAwareness {
     return _ItineraryContextAwareness(
       summary: json['summary']?.toString() ?? '',
       severity: json['severity']?.toString() ?? 'ok',
-      alerts: (json['alerts'] as List?)
+      alerts:
+          (json['alerts'] as List?)
               ?.whereType<Map>()
               .map(
                 (item) => _ItineraryContextAlert.fromJson(
@@ -5029,7 +4989,8 @@ class _ItineraryContextAwareness {
       suggestions:
           (json['suggestions'] as List?)?.map((e) => e.toString()).toList() ??
           const [],
-      backupPlans: (json['backupPlans'] as List?)
+      backupPlans:
+          (json['backupPlans'] as List?)
               ?.whereType<Map>()
               .map(
                 (item) => _ItineraryContextBackupPlan.fromJson(
@@ -5117,7 +5078,8 @@ class _ItineraryContextNextAction {
       title: json['title']?.toString() ?? '',
       message: json['message']?.toString() ?? '',
       recommendedAction: json['recommendedAction']?.toString() ?? '',
-      alternatives: (json['alternatives'] as List?)
+      alternatives:
+          (json['alternatives'] as List?)
               ?.whereType<Map>()
               .map(
                 (item) => _ItineraryContextReplacement.fromJson(
@@ -5174,7 +5136,8 @@ class _ItineraryContextBackupPlan {
       targetPlaceId: json['targetPlaceId']?.toString() ?? '',
       targetPlaceName: json['targetPlaceName']?.toString() ?? '',
       reason: json['reason']?.toString() ?? '',
-      replacements: (json['replacements'] as List?)
+      replacements:
+          (json['replacements'] as List?)
               ?.whereType<Map>()
               .map(
                 (item) => _ItineraryContextReplacement.fromJson(
@@ -5211,7 +5174,9 @@ class _ItineraryContextReplacement {
       city: json['city']?.toString() ?? '',
       address: json['address']?.toString() ?? '',
       rating: (json['rating'] as num?)?.toDouble(),
-      tags: (json['tags'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+      tags:
+          (json['tags'] as List?)?.map((e) => e.toString()).toList() ??
+          const [],
     );
   }
 }

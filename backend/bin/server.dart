@@ -145,6 +145,8 @@ class _PlannerChatSession {
   String? transport;
   String? style;
   String? pacing;
+  final Set<String> requiredPlaces = <String>{};
+  final Set<String> excludedPlaces = <String>{};
 
   void touch() {
     updatedAt = DateTime.now();
@@ -5194,6 +5196,12 @@ Future<Map<String, dynamic>> _buildAdminMetricsSnapshot() async {
       .where((entry) => entry['status'] == 'success')
       .length;
   final linePushFailures = _linePushHistory.length - linePushSuccesses;
+  int successfulLinePushesByCategory(String category) => _linePushHistory
+      .where(
+        (entry) =>
+            entry['status'] == 'success' && entry['category'] == category,
+      )
+      .length;
   final reminderSuccesses = _reminderRunHistory.where((entry) {
     final status = entry['status']?.toString();
     return status == null || status == 'success';
@@ -5317,6 +5325,15 @@ Future<Map<String, dynamic>> _buildAdminMetricsSnapshot() async {
       'linePushSuccessRate': _linePushHistory.isEmpty
           ? 0.0
           : (linePushSuccesses / _linePushHistory.length * 100),
+      'itineraryGeneratedPushes': successfulLinePushesByCategory(
+        'itinerary_generated',
+      ),
+      'tomorrowSummaryPushes': successfulLinePushesByCategory(
+        'tomorrow_itinerary_summary',
+      ),
+      'upcomingReminderPushes': successfulLinePushesByCategory(
+        'upcoming_reminder',
+      ),
       'lastLinePushAt': _linePushHistory.isEmpty
           ? null
           : _linePushHistory.last['timestamp'],
@@ -5641,6 +5658,8 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan({
   var syncedPlans = 0;
   var pushed = 0;
   var tomorrowSummariesPushed = 0;
+  var upcomingRemindersPushed = 0;
+  var contextAlertsPushed = 0;
   var failedUsers = 0;
   final pushedUsers = <String>[];
   final errors = <String>[];
@@ -5679,6 +5698,13 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan({
         });
         if (result['linePushed'] == true) {
           pushed += 1;
+          final upcomingReminder = result['upcomingReminder'];
+          if (upcomingReminder is Map &&
+              upcomingReminder['shouldPush'] == true) {
+            upcomingRemindersPushed += 1;
+          } else {
+            contextAlertsPushed += 1;
+          }
           pushedUsers.add(user.username);
         }
       } catch (error) {
@@ -5719,6 +5745,8 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan({
     'syncedPlans': syncedPlans,
     'linePushed': pushed,
     'tomorrowSummariesPushed': tomorrowSummariesPushed,
+    'upcomingRemindersPushed': upcomingRemindersPushed,
+    'contextAlertsPushed': contextAlertsPushed,
     'failedUsers': failedUsers,
     'durationMs': durationMs,
     if (errors.isNotEmpty) 'errors': errors.take(10).toList(),
@@ -5821,7 +5849,7 @@ Future<Map<String, dynamic>> _buildContextAwareness(
 
   final day = Map<String, dynamic>.from(rawDay);
   final userId = _asString(body, 'userId').trim();
-  final triggerLinePush = body['triggerLinePush'] != false;
+  final triggerLinePush = body['triggerLinePush'] == true;
   final referenceTime =
       DateTime.tryParse(body['currentTime']?.toString() ?? '')?.toLocal() ??
       DateTime.now();
@@ -6300,7 +6328,11 @@ Future<Map<String, dynamic>> _buildContextAwareness(
     'linePushed': false,
   };
 
-  if (triggerLinePush && userId.isNotEmpty) {
+  final isToday =
+      dayDate.year == referenceTime.year &&
+      dayDate.month == referenceTime.month &&
+      dayDate.day == referenceTime.day;
+  if (triggerLinePush && isToday && userId.isNotEmpty) {
     result['linePushed'] = await _sendLineContextAwarenessNotification(
       userId: userId,
       dayDate: dayDate,
@@ -7617,6 +7649,12 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
       : _normalizeLocationText(location);
   final locationParts = _parseLocationParts(location);
   final requirementSignals = _extractRequirementSignals(requirementsText);
+  final effectiveWishlistPlaces = <String>{
+    ...wishlistPlaces
+        .map((place) => place.trim())
+        .where((place) => place.isNotEmpty),
+    ..._extractRequiredPlaceNames(requirementsText ?? ''),
+  }.toList();
   final preferredTags = {
     ...interests.map((tag) => tag.toLowerCase()),
     ...requirementSignals.preferredTags.map((tag) => tag.toLowerCase()),
@@ -7709,6 +7747,7 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
     destinationCities: destinationCities,
     location: location,
     requirementsText: requirementsText,
+    wishlistPlaces: effectiveWishlistPlaces,
   );
   if (discoveredPlaces.isNotEmpty) {
     final byId = <String, Place>{for (final place in places) place.id: place};
@@ -7738,6 +7777,24 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
     });
     candidates = [...candidates, ...nightMarkets];
   }
+  final requiredPlaceCandidates = <Place>[];
+  for (final requestedName in effectiveWishlistPlaces) {
+    final match = _findRequestedPlaceMatch(
+      places.where(matchesCityScope),
+      requestedName,
+    );
+    if (match == null ||
+        requiredPlaceCandidates.any((place) => place.id == match.id)) {
+      continue;
+    }
+    requiredPlaceCandidates.add(match);
+    if (!candidates.any((place) => place.id == match.id)) {
+      candidates.add(match);
+    }
+  }
+  final requiredPlaceIds = requiredPlaceCandidates
+      .map((place) => place.id)
+      .toSet();
 
   final plannerAssist = await _buildAiPlannerAssist(
     allPlaces: places,
@@ -7758,7 +7815,7 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
     dayStartTime: dayStartTime,
     dayEndTime: dayEndTime,
     extraSpots: extraSpots,
-    wishlistPlaces: wishlistPlaces,
+    wishlistPlaces: effectiveWishlistPlaces,
   );
   final prioritizedCities = _stringListFromJson(
     plannerAssist['prioritizedCities'],
@@ -7789,7 +7846,7 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
     travelBehavior: normalizedTravelBehavior,
     backpackerAnswers: backpackerAnswers,
   );
-  final wishKeywords = wishlistPlaces
+  final wishKeywords = effectiveWishlistPlaces
       .map(_normalizeLocationText)
       .where((e) => e.isNotEmpty)
       .toList();
@@ -7932,6 +7989,31 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
       if (dayPicked.isEmpty) {
         dayPicked = [remaining.first];
       }
+      final requiredForDay = <Place>[
+        for (
+          var i = dayIndex;
+          i < requiredPlaceCandidates.length;
+          i += totalDays
+        )
+          if (remaining.any(
+            (place) => place.id == requiredPlaceCandidates[i].id,
+          ))
+            requiredPlaceCandidates[i],
+      ];
+      if (requiredForDay.isNotEmpty) {
+        final selectedIds = dayPicked.map((place) => place.id).toSet();
+        dayPicked = [
+          ...requiredForDay.where((place) => !selectedIds.contains(place.id)),
+          ...dayPicked,
+        ];
+        while (dayPicked.length > perDay) {
+          final removableIndex = dayPicked.lastIndexWhere(
+            (place) => !requiredPlaceIds.contains(place.id),
+          );
+          if (removableIndex < 0) break;
+          dayPicked.removeAt(removableIndex);
+        }
+      }
 
       final dayStartAnchor = dayIndex == 0 ? originAnchor : null;
       var ordered = _orderPlacesByRoute(
@@ -7958,6 +8040,7 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
         weights: weights,
         startAnchor: dayStartAnchor,
         plannerAssist: plannerAssist,
+        protectedPlaceIds: requiredPlaceIds,
       );
       if (requiresNightMarketToday) {
         ordered = _ensureNightMarketInRoute(
@@ -8145,6 +8228,18 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
     plannerAssist: plannerAssist,
   );
   _attachTravelHighlightsToDays(days, mergedInsight['stopHighlights']);
+  final scheduledPlaceIds = globallyPicked.map((place) => place.id).toSet();
+  final scheduledRequiredPlaces = requiredPlaceCandidates
+      .where((place) => scheduledPlaceIds.contains(place.id))
+      .map((place) => place.name)
+      .toList();
+  final missingRequiredPlaces = effectiveWishlistPlaces.where((requestedName) {
+    final match = _findRequestedPlaceMatch(
+      requiredPlaceCandidates,
+      requestedName,
+    );
+    return match == null || !scheduledPlaceIds.contains(match.id);
+  }).toList();
 
   return {
     'meta': {
@@ -8166,7 +8261,9 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
       'dayStartTime': dayStartTime,
       'dayEndTime': dayEndTime,
       'extraSpots': extraSpots,
-      'wishlistPlaces': wishlistPlaces,
+      'wishlistPlaces': effectiveWishlistPlaces,
+      'requiredPlacesScheduled': scheduledRequiredPlaces,
+      'missingRequiredPlaces': missingRequiredPlaces,
       'requirementsSignals': requirementSignals.toJson(),
       'weights': weights.toJson(),
       'insightSource': mergedInsight['source'],
@@ -8203,6 +8300,7 @@ Future<List<Place>> _discoverItineraryPlacesFromGoogle({
   required List<String> destinationCities,
   required String? location,
   required String? requirementsText,
+  required List<String> wishlistPlaces,
 }) async {
   final key = Platform.environment['GOOGLE_MAPS_API_KEY'] ?? '';
   if (key.trim().isEmpty) {
@@ -8250,6 +8348,7 @@ Future<List<Place>> _discoverItineraryPlacesFromGoogle({
     totalDays: totalDays,
     cityHints: cityHints,
     requirementsText: requirementsText,
+    wishlistPlaces: wishlistPlaces,
   );
   if (queries.isEmpty) {
     return const <Place>[];
@@ -8277,6 +8376,15 @@ Future<List<Place>> _discoverItineraryPlacesFromGoogle({
       path: '/maps/api/place/textsearch/json',
       params: {'query': query, 'language': 'zh-TW', 'region': 'tw'},
     );
+    final requestedTarget = wishlistPlaces
+        .where(
+          (place) =>
+              place.trim().isNotEmpty &&
+              _normalizeLocationText(
+                query,
+              ).contains(_normalizeLocationText(place)),
+        )
+        .firstOrNull;
     final ranked =
         results.where((result) {
           return _isUsefulDiscoveredPlaceCandidate(
@@ -8284,8 +8392,24 @@ Future<List<Place>> _discoverItineraryPlacesFromGoogle({
             cityHints: cityHints,
           );
         }).toList()..sort((a, b) {
-          final aScore = _scoreDiscoveredGooglePlace(a, cityHints: cityHints);
-          final bScore = _scoreDiscoveredGooglePlace(b, cityHints: cityHints);
+          final aScore =
+              _scoreDiscoveredGooglePlace(a, cityHints: cityHints) +
+              (requestedTarget == null
+                  ? 0
+                  : _scoreGooglePlaceCandidate(
+                      a,
+                      rawName: requestedTarget,
+                      cityHint: cityHints.first,
+                    ));
+          final bScore =
+              _scoreDiscoveredGooglePlace(b, cityHints: cityHints) +
+              (requestedTarget == null
+                  ? 0
+                  : _scoreGooglePlaceCandidate(
+                      b,
+                      rawName: requestedTarget,
+                      cityHint: cityHints.first,
+                    ));
           return bScore.compareTo(aScore);
         });
     // Check several results because the top result is often already in the
@@ -8339,13 +8463,22 @@ Future<List<String>> _buildPlaceDiscoveryQueries({
   required int totalDays,
   required List<String> cityHints,
   required String? requirementsText,
+  required List<String> wishlistPlaces,
 }) async {
-  final fallback = _ruleBasedPlaceDiscoveryQueries(
-    preferredTags: preferredTags,
-    requirementSignals: requirementSignals,
-    cityHints: cityHints,
-    requirementsText: requirementsText,
-  );
+  final requiredQueries = <String>[
+    for (final city in cityHints)
+      for (final place in wishlistPlaces)
+        if (place.trim().isNotEmpty) '$city ${place.trim()}',
+  ];
+  final fallback = <String>[
+    ...requiredQueries,
+    ..._ruleBasedPlaceDiscoveryQueries(
+      preferredTags: preferredTags,
+      requirementSignals: requirementSignals,
+      cityHints: cityHints,
+      requirementsText: requirementsText,
+    ),
+  ].toSet().toList();
   final enableDiscoveryLlm =
       (Platform.environment['PLACE_DISCOVERY_LLM'] ?? 'true').toLowerCase() !=
       'false';
@@ -8388,6 +8521,7 @@ Future<List<String>> _buildPlaceDiscoveryQueries({
 - 查詢目標以實際可到訪景點為主；除非需求明確提到夜市或美食，否則避免只查餐廳。
 - 不要重複目前候選或資料庫已有景點，優先尋找能增加行程多樣性的新景點。
 - 必須優先遵守使用者原句，例如室內多一點、百貨逛街、情侶約會、低步行負擔、拍照等。
+- 使用者指定必去景點必須原名加入查詢：${wishlistPlaces.isEmpty ? '無' : wishlistPlaces.join('、')}
 - 具名景點可以大膽提出，但不得直接當成已驗證資料，最終由 Google Places 結果決定是否採用。
 
 城市：${cityHints.join('、')}
@@ -8849,6 +8983,7 @@ List<Place> _trimRouteToBudget(
   required _PlannerWeights weights,
   (double lat, double lng)? startAnchor,
   Map<String, dynamic>? plannerAssist,
+  Set<String> protectedPlaceIds = const <String>{},
 }) {
   var output = List<Place>.from(route);
   while (output.length > 1 &&
@@ -8858,6 +8993,7 @@ List<Place> _trimRouteToBudget(
     var removeScore = 999999.0;
     for (var i = 0; i < output.length; i++) {
       final place = output[i];
+      if (protectedPlaceIds.contains(place.id)) continue;
       final value = scores[place.id] ?? 0;
       final stay = _estimateStayMinutes(place, plannerAssist: plannerAssist);
       final valueDensity = value / max(30, stay);
@@ -8868,6 +9004,7 @@ List<Place> _trimRouteToBudget(
         removeIdx = i;
       }
     }
+    if (protectedPlaceIds.contains(output[removeIdx].id)) break;
     output.removeAt(removeIdx);
     output = _orderPlacesByRoute(
       output,
@@ -11144,6 +11281,7 @@ _PlannerChatSession _resolvePlannerChatSession({
     if ((requirementsText ?? '').trim().isNotEmpty) {
       existing.requirementsText = requirementsText!.trim();
       _updatePlannerChatKnownPreferences(existing, requirementsText);
+      _updatePlannerChatPlaceConstraints(existing, requirementsText);
     }
     existing.touch();
     return existing;
@@ -11160,6 +11298,7 @@ _PlannerChatSession _resolvePlannerChatSession({
     requirementsText: requirementsText,
   );
   _updatePlannerChatKnownPreferences(session, requirementsText ?? '');
+  _updatePlannerChatPlaceConstraints(session, requirementsText ?? '');
   _plannerChatSessions[id] = session;
   return session;
 }
@@ -11170,6 +11309,7 @@ Future<Map<String, dynamic>> _buildPlannerChatTurn({
 }) async {
   session.messages.add({'role': 'user', 'content': userMessage});
   _updatePlannerChatKnownPreferences(session, userMessage);
+  _updatePlannerChatPlaceConstraints(session, userMessage);
   final currentRequirements = session.requirementsText.trim();
   final normalizedCurrent = currentRequirements.replaceAll('；', '').trim();
   final normalizedMessage = userMessage.trim();
@@ -11306,6 +11446,10 @@ Future<Map<String, dynamic>> _buildPlannerChatTurn({
       'preferRelaxedPace': requirementSignals.preferRelaxedPacing,
       'preferLowWalkingLoad': requirementSignals.preferLowWalking,
     },
+    'hardConstraints': {
+      'requiredPlaces': session.requiredPlaces.toList(),
+      'excludedPlaces': session.excludedPlaces.toList(),
+    },
     'conversationState': {
       'companion': session.companion,
       'transport': session.transport,
@@ -11380,6 +11524,84 @@ void _updatePlannerChatKnownPreferences(
   }
 }
 
+void _updatePlannerChatPlaceConstraints(
+  _PlannerChatSession session,
+  String rawInput,
+) {
+  final input = rawInput.trim();
+  if (input.isEmpty) return;
+
+  final excludedPatterns = <RegExp>[
+    RegExp(r'(?:不要去|不想去|排除|移除|刪除|取消)([^，。；、,\n]+)'),
+  ];
+  var requiredSource = input;
+  for (final pattern in excludedPatterns) {
+    for (final match in pattern.allMatches(input)) {
+      final place = _cleanRequestedPlaceName(match.group(1) ?? '');
+      if (place == null) continue;
+      session.requiredPlaces.remove(place);
+      session.excludedPlaces.add(place);
+    }
+    requiredSource = requiredSource.replaceAll(pattern, '');
+  }
+
+  final requiredPatterns = <RegExp>[
+    RegExp(r'(?:想去|我要去|要去|必去|一定要去|希望去|排入|加入|保留)([^，。；、,\n]+)'),
+  ];
+  for (final place in _extractRequiredPlaceNames(
+    requiredSource,
+    patterns: requiredPatterns,
+  )) {
+    session.excludedPlaces.remove(place);
+    session.requiredPlaces.add(place);
+  }
+}
+
+List<String> _extractRequiredPlaceNames(
+  String input, {
+  List<RegExp>? patterns,
+}) {
+  final output = <String>{};
+  final effectivePatterns =
+      patterns ??
+      <RegExp>[RegExp(r'(?:想去|我要去|要去|必去|一定要去|希望去|排入|加入|保留)([^，。；、,\n]+)')];
+  for (final pattern in effectivePatterns) {
+    for (final match in pattern.allMatches(input)) {
+      final place = _cleanRequestedPlaceName(match.group(1) ?? '');
+      if (place != null) output.add(place);
+    }
+  }
+  return output.toList();
+}
+
+String? _cleanRequestedPlaceName(String raw) {
+  var value = raw.trim();
+  value = value
+      .split(RegExp(r'(?:然後|之後|接著|再去|晚上|白天|早上|下午|但是|但|可是|不過|卻|結果)'))
+      .first;
+  value = value
+      .replaceFirst(RegExp(r'^(?:的|到|逛|看看|走走)'), '')
+      .replaceFirst(RegExp(r'(?:逛街|拍照|打卡|走走|看看|吃飯)$'), '')
+      .trim();
+  const genericRequests = <String>{
+    '夜市',
+    '商場',
+    '百貨',
+    '景點',
+    '戶外',
+    '室內',
+    '博物館',
+    '美術館',
+    '老街',
+  };
+  if (value.length < 2 ||
+      value.length > 32 ||
+      genericRequests.contains(value)) {
+    return null;
+  }
+  return value;
+}
+
 bool _plannerChatReplyRepeatsKnownQuestion(
   _PlannerChatSession session,
   String reply,
@@ -11449,6 +11671,9 @@ Map<String, dynamic> _buildRuleBasedPlannerChatReply({
   }
   if (contains(const ['吃飯', '晚餐', '午餐', '小吃', '咖啡', '下午茶'], latestInput)) {
     latestHints.add('也會兼顧美食時段');
+  }
+  if (session.requiredPlaces.isNotEmpty) {
+    latestHints.add('必排景點會保留：${session.requiredPlaces.join('、')}');
   }
 
   if (contains(const ['獨旅', '一個人', '自己', '單人'])) currentStyle.add('獨旅');
@@ -11537,6 +11762,8 @@ String _buildPlannerChatContextPrompt({
 - 出發地：${session.originCity}
 - 目的地：${session.destinationCities.join('、')}
 - 目前累積需求原文：${session.requirementsText.isEmpty ? '未提供' : session.requirementsText}
+- 必排景點：${session.requiredPlaces.isEmpty ? '無' : session.requiredPlaces.join('、')}
+- 排除景點：${session.excludedPlaces.isEmpty ? '無' : session.excludedPlaces.join('、')}
 - 已確認同行對象：${session.companion ?? '未確認'}
 - 已確認交通方式：${session.transport ?? '未確認'}
 - 已確認旅遊風格：${session.style ?? '未確認'}
@@ -13587,6 +13814,21 @@ String _normalizePlaceNameForMatch(String input) {
     }
   }
   return text.trim();
+}
+
+Place? _findRequestedPlaceMatch(Iterable<Place> places, String requestedName) {
+  final target = _normalizePlaceNameForMatch(requestedName);
+  if (target.isEmpty) return null;
+  Place? partialMatch;
+  for (final place in places) {
+    final candidate = _normalizePlaceNameForMatch(place.name);
+    if (candidate == target) return place;
+    if (candidate.isNotEmpty &&
+        (candidate.contains(target) || target.contains(candidate))) {
+      partialMatch ??= place;
+    }
+  }
+  return partialMatch;
 }
 
 int _scoreGooglePlaceCandidate(

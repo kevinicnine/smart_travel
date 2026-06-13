@@ -78,9 +78,7 @@ class BackendApi {
     return _extractData(response);
   }
 
-  Future<void> sendLinePushTest({
-    required String userId,
-  }) async {
+  Future<void> sendLinePushTest({required String userId}) async {
     await _post('/api/line/push-test', {'userId': userId});
   }
 
@@ -102,6 +100,7 @@ class BackendApi {
     DateTime? endDate,
     String? originCity,
     List<String>? destinationCities,
+    String? requirementsText,
     String? tripPurpose,
     String? travelBehavior,
     String? location,
@@ -131,6 +130,9 @@ class BackendApi {
           .where((e) => e.trim().isNotEmpty)
           .map((e) => e.trim())
           .toList();
+    }
+    if (requirementsText != null && requirementsText.trim().isNotEmpty) {
+      payload['requirementsText'] = requirementsText.trim();
     }
     if (tripPurpose != null && tripPurpose.trim().isNotEmpty) {
       payload['tripPurpose'] = tripPurpose.trim();
@@ -169,8 +171,41 @@ class BackendApi {
     final response = await _post(
       '/api/travel/plans',
       payload,
-      timeout: const Duration(seconds: 60),
-      timeoutMessage: '行程生成較久，請稍候再試（可能正在查交通/天氣/GPT）。',
+      timeout: const Duration(seconds: 120),
+      timeoutMessage: '行程生成較久，請稍候再試（可能正在查景點、交通、天氣或 AI 建議）。',
+    );
+    return _extractData(response);
+  }
+
+  Future<Map<String, dynamic>> plannerChat({
+    String? conversationId,
+    String? userId,
+    required DateTime startDate,
+    required DateTime endDate,
+    required String originCity,
+    required List<String> destinationCities,
+    required String userMessage,
+    String? requirementsText,
+  }) async {
+    final response = await _post(
+      '/api/travel/planner-chat',
+      {
+        if (conversationId != null && conversationId.trim().isNotEmpty)
+          'conversationId': conversationId.trim(),
+        if (userId != null && userId.trim().isNotEmpty) 'userId': userId.trim(),
+        'startDate': startDate.toIso8601String(),
+        'endDate': endDate.toIso8601String(),
+        'originCity': originCity.trim(),
+        'destinationCities': destinationCities
+            .where((e) => e.trim().isNotEmpty)
+            .map((e) => e.trim())
+            .toList(),
+        'userMessage': userMessage.trim(),
+        if (requirementsText != null && requirementsText.trim().isNotEmpty)
+          'requirementsText': requirementsText.trim(),
+      },
+      timeout: const Duration(seconds: 75),
+      timeoutMessage: '對話回應較久，請稍候再試。',
     );
     return _extractData(response);
   }
@@ -181,7 +216,7 @@ class BackendApi {
     final response = await _post(
       '/api/travel/stop-explanation',
       payload,
-      timeout: const Duration(seconds: 20),
+      timeout: const Duration(seconds: 45),
       timeoutMessage: '景點說明生成較久，請稍候再試。',
     );
     return _extractData(response);
@@ -190,7 +225,7 @@ class BackendApi {
   Future<Map<String, dynamic>> fetchContextAwareness({
     required Map<String, dynamic> day,
     String? userId,
-    bool triggerLinePush = true,
+    bool triggerLinePush = false,
     DateTime? currentTime,
   }) async {
     final payload = <String, dynamic>{
@@ -222,6 +257,18 @@ class BackendApi {
     );
   }
 
+  Future<void> confirmItinerary({
+    required String userId,
+    required Map<String, dynamic> plan,
+  }) async {
+    await _post(
+      '/api/travel/confirm-plan',
+      {'userId': userId, 'plan': plan, 'source': 'formal_itinerary_page'},
+      timeout: const Duration(seconds: 30),
+      timeoutMessage: '正式行程確認較久，請稍候再試。',
+    );
+  }
+
   Future<void> reportAppEvent({
     required String event,
     String? page,
@@ -229,14 +276,19 @@ class BackendApi {
     String? sessionId,
     Map<String, dynamic>? payload,
   }) async {
-    await _post('/api/analytics/events', {
-      'event': event,
-      if (page != null && page.trim().isNotEmpty) 'page': page.trim(),
-      if (userId != null && userId.trim().isNotEmpty) 'userId': userId.trim(),
-      if (sessionId != null && sessionId.trim().isNotEmpty)
-        'sessionId': sessionId.trim(),
-      if (payload != null && payload.isNotEmpty) 'payload': payload,
-    }, timeout: const Duration(seconds: 8), timeoutMessage: '事件上報逾時');
+    await _post(
+      '/api/analytics/events',
+      {
+        'event': event,
+        if (page != null && page.trim().isNotEmpty) 'page': page.trim(),
+        if (userId != null && userId.trim().isNotEmpty) 'userId': userId.trim(),
+        if (sessionId != null && sessionId.trim().isNotEmpty)
+          'sessionId': sessionId.trim(),
+        if (payload != null && payload.isNotEmpty) 'payload': payload,
+      },
+      timeout: const Duration(seconds: 8),
+      timeoutMessage: '事件上報逾時',
+    );
   }
 
   Future<List<Map<String, dynamic>>> fetchPlaces({
@@ -319,7 +371,8 @@ class BackendApi {
             body: jsonEncode({
               if (previous != null) 'previous': previous,
               if (next != null) 'next': next,
-              if (query != null && query.trim().isNotEmpty) 'query': query.trim(),
+              if (query != null && query.trim().isNotEmpty)
+                'query': query.trim(),
               if (mealType != null && mealType.trim().isNotEmpty)
                 'mealType': mealType.trim(),
               if (city != null && city.trim().isNotEmpty) 'city': city.trim(),

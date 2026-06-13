@@ -29,9 +29,12 @@ services:
     plan: starter
     schedule: "*/5 * * * *"
     dockerCommand: >-
-      python3 -c "import os, urllib.request; req = urllib.request.Request(os.environ['APP_BASE_URL'].rstrip('/') + '/api/line/run-upcoming-reminders', data=b'', headers={'x-reminder-token': os.environ['REMINDER_CRON_TOKEN']}, method='POST'); urllib.request.urlopen(req, timeout=90).read()"
+      python3 -c "import os, urllib.request; base = 'http://' + os.environ['APP_HOSTPORT'].strip().rstrip('/'); req = urllib.request.Request(base + '/api/line/run-upcoming-reminders', data=b'', headers={'x-reminder-token': os.environ['REMINDER_CRON_TOKEN']}, method='POST'); print(urllib.request.urlopen(req, timeout=90).read().decode())"
     envVars:
-      - key: APP_BASE_URL
-        value: https://smart-travel-6zsf.onrender.com
+      - key: APP_HOSTPORT
+        fromService:
+          type: web
+          name: smart-travel-backend
+          property: hostport
       - key: REMINDER_CRON_TOKEN
         sync: false
