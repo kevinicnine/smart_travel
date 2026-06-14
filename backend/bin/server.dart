@@ -5652,6 +5652,9 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan({
   final startedAt = DateTime.now();
   final users = (await _store.read()).users;
   final now = _taipeiNow();
+  _log.info(
+    '提醒掃描開始：source=$triggerSource users=${users.length} checkedAt=${now.toIso8601String()}',
+  );
   final todayText = now.toIso8601String().substring(0, 10);
   final tomorrowText = now
       .add(const Duration(days: 1))
@@ -5774,6 +5777,12 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan({
     'checkedAt': now.toIso8601String(),
   };
   _recordReminderRun(source: triggerSource, result: result);
+  _log.info(
+    '提醒掃描完成：source=$triggerSource scannedUsers=$scanned syncedPlans=$syncedPlans '
+    'linePushed=$pushed upcomingRemindersPushed=$upcomingRemindersPushed '
+    'tomorrowSummariesPushed=$tomorrowSummariesPushed failedUsers=$failedUsers '
+    'durationMs=$durationMs',
+  );
   return result;
 }
 
