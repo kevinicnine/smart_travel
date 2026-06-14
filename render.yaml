@@ -16,6 +16,8 @@ services:
         sync: false
       - key: REMINDER_NEXT_STOP_MINUTES
         value: "20"
+      - key: REMINDER_NEXT_STOP_GRACE_MINUTES
+        value: "30"
       - key: REMINDER_EVENING_START_HOUR
         value: "20"
       - key: REMINDER_EVENING_END_HOUR

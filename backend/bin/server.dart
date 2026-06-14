@@ -5592,6 +5592,13 @@ int _nextStopReminderMinutes() {
   return parsed == null ? 20 : parsed.clamp(5, 90);
 }
 
+int _nextStopReminderGraceMinutes() {
+  final parsed = int.tryParse(
+    Platform.environment['REMINDER_NEXT_STOP_GRACE_MINUTES']?.trim() ?? '',
+  );
+  return parsed == null ? 30 : parsed.clamp(5, 120);
+}
+
 Future<bool> _lineReminderWasSent(String signature) async {
   final appState = await _readAppState();
   final raw = appState[_lineReminderSignaturesStateKey];
@@ -5662,6 +5669,7 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan({
   var contextAlertsPushed = 0;
   var failedUsers = 0;
   final pushedUsers = <String>[];
+  final upcomingChecks = <Map<String, dynamic>>[];
   final errors = <String>[];
 
   for (final user in users) {
@@ -5696,9 +5704,20 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan({
           'triggerLinePush': true,
           'currentTime': now.toIso8601String(),
         });
+        final upcomingReminder = result['upcomingReminder'];
+        if (upcomingReminder is Map) {
+          upcomingChecks.add({
+            'username': user.username,
+            'targetPlaceName': upcomingReminder['targetPlaceName'],
+            'scheduledTime': upcomingReminder['scheduledTime'],
+            'departureTime': upcomingReminder['departureTime'],
+            'minutesUntilDeparture': upcomingReminder['minutesUntilDeparture'],
+            'shouldPush': upcomingReminder['shouldPush'] == true,
+            'linePushed': result['linePushed'] == true,
+          });
+        }
         if (result['linePushed'] == true) {
           pushed += 1;
-          final upcomingReminder = result['upcomingReminder'];
           if (upcomingReminder is Map &&
               upcomingReminder['shouldPush'] == true) {
             upcomingRemindersPushed += 1;
@@ -5751,6 +5770,7 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan({
     'durationMs': durationMs,
     if (errors.isNotEmpty) 'errors': errors.take(10).toList(),
     'pushedUsers': pushedUsers,
+    'upcomingChecks': upcomingChecks.take(20).toList(),
     'checkedAt': now.toIso8601String(),
   };
   _recordReminderRun(source: triggerSource, result: result);
@@ -6414,15 +6434,11 @@ Map<String, dynamic>? _buildContextUpcomingReminder({
       : place['name']?.toString().trim() ?? '下一站';
   final transitMinutes = _asIntValue(transit?['minutes']);
   final distanceText = transit?['distanceText']?.toString().trim() ?? '';
-  var triggerMinutesUntil = minutesUntil;
-  if (focus.phase == 'current') {
-    final currentEndMinute = _parseHmToMinute(
-      focus.targetItem['endTime']?.toString(),
-    );
-    if (currentEndMinute != null) {
-      triggerMinutesUntil = currentEndMinute - nowMinute;
-    }
-  }
+  // Remind at the recommended departure time instead of relying on the
+  // previous stop's end time. This also handles long meal/rest gaps.
+  final estimatedTransitMinutes = transitMinutes ?? 20;
+  final departureMinute = startMinute - estimatedTransitMinutes;
+  final minutesUntilDeparture = departureMinute - nowMinute;
   final cautionNotes = <String>[];
   for (final alert in alerts) {
     final title = alert['title']?.toString() ?? '';
@@ -6466,16 +6482,22 @@ Map<String, dynamic>? _buildContextUpcomingReminder({
     transitMode: transit?['mode']?.toString(),
   );
   final triggerWindow = _nextStopReminderMinutes();
+  final graceWindow = _nextStopReminderGraceMinutes();
   final shouldPush =
       isToday &&
-      triggerMinutesUntil >= 0 &&
-      triggerMinutesUntil <= triggerWindow;
+      minutesUntilDeparture <= triggerWindow &&
+      minutesUntilDeparture >= -graceWindow &&
+      minutesUntil >= -graceWindow;
   return {
     'phase': focus.phase == 'current' ? 'after_current' : 'upcoming',
     'targetIndex': targetIndex,
     'targetPlaceName': place['name']?.toString() ?? '下一站',
     'scheduledTime': scheduledTime,
     'minutesUntil': minutesUntil,
+    'departureTime': _minutesToHm(departureMinute),
+    'minutesUntilDeparture': minutesUntilDeparture,
+    'triggerWindowMinutes': triggerWindow,
+    'graceWindowMinutes': graceWindow,
     'fromLabel': fromLabel,
     'toLabel': toLabel,
     'transitLabel': transitLabel,
@@ -7127,6 +7149,8 @@ String _buildLineContextAwarenessSummary({
   if (upcomingReminder != null) {
     final target = upcomingReminder['targetPlaceName']?.toString() ?? '下一站';
     final scheduled = upcomingReminder['scheduledTime']?.toString() ?? '';
+    final departureTime =
+        upcomingReminder['departureTime']?.toString().trim() ?? '';
     final endTime = upcomingReminder['endTime']?.toString() ?? '';
     final transitLabel = upcomingReminder['transitLabel']?.toString() ?? '';
     final transitMinutes = _asIntValue(upcomingReminder['transitMinutes']);
@@ -7152,6 +7176,9 @@ String _buildLineContextAwarenessSummary({
             .toList() ??
         const <String>[];
     lines.add('$dateLabel 下一站提醒：$target');
+    if (departureTime.isNotEmpty) {
+      lines.add('⏰ 建議 $departureTime 開始前往');
+    }
     if (description.isNotEmpty) {
       lines.add('📍 ${_shortLine(description, 140)}');
     }
