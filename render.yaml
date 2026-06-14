@@ -32,6 +32,8 @@ services:
     schedule: "*/5 * * * *"
     dockerCommand: python3 scripts/run_reminder_cron.py
     envVars:
+      - key: SERVICE_MODE
+        value: reminder-cron
       - key: REMINDER_API_BASE
         value: https://smart-travel-6zsf.onrender.com
       - key: REMINDER_CRON_TOKEN
