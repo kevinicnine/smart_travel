@@ -61,6 +61,11 @@ int _totalErrorCount = 0;
 int _totalAiRequestCount = 0;
 int _totalAiErrorCount = 0;
 
+String _secretFingerprint(String? value) {
+  if (value == null || value.isEmpty) return 'missing';
+  return sha256.convert(utf8.encode(value)).toString().substring(0, 12);
+}
+
 class _AiUsageRecord {
   const _AiUsageRecord({
     required this.feature,
@@ -431,6 +436,9 @@ Future<void> main(List<String> args) async {
   _log.info(
     'LLM enabled: ${_isLlmConfigured()} provider=${_currentLlmProvider()}'
     '${_currentLlmProvider() == 'gemini' ? ' geminiKeys=${_geminiApiKeys.length}' : ''}',
+  );
+  _log.info(
+    'Reminder cron token fingerprint: ${_secretFingerprint(_reminderCronToken)}',
   );
   _log.info(
     'Itinerary learning profile enabled: ${_itineraryLearningProfile.enabled}'
@@ -5511,6 +5519,11 @@ Future<Response> _withReminderCron(
   }
   final token = request.headers['x-reminder-token']?.trim();
   if (token == null || token != _reminderCronToken) {
+    _log.warning(
+      'Reminder cron unauthorized: expectedFingerprint='
+      '${_secretFingerprint(_reminderCronToken)} '
+      'receivedFingerprint=${_secretFingerprint(token)}',
+    );
     return jsonResponse(401, errorBody('未授權'));
   }
   return _handle(action);
