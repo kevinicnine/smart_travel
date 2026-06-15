@@ -61,9 +61,10 @@ class _ItineraryPageState extends State<ItineraryPage> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         unawaited(_confirmFormalPlanAfterOpen());
       });
+    } else {
+      unawaited(_syncActivePlanToCloud());
     }
     unawaited(_loadContextAwarenessForSelectedDay());
-    unawaited(_syncActivePlanToCloud());
     _refreshContextAwarenessPolling();
     unawaited(
       _reportEvent(

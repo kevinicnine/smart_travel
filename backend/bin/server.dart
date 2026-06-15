@@ -1831,33 +1831,50 @@ Future<void> main(List<String> args) async {
           throw ApiException(400, '缺少行程資料');
         }
         final plan = Map<String, dynamic>.from(rawPlan);
+        User? syncedUser;
         if (userId.isNotEmpty) {
-          await _syncUserActivePlan(userId: userId, plan: plan);
+          syncedUser = await _syncUserActivePlan(userId: userId, plan: plan);
         }
-        final reviewRecord = await _recordFormalPlanForReview(
-          userId: userId,
-          plan: plan,
-        );
-        final lineNotificationSent =
-            userId.isNotEmpty && source == 'formal_itinerary_page';
-        if (lineNotificationSent) {
-          await _sendLineItineraryGeneratedNotification(
+        Map<String, dynamic>? reviewRecord;
+        try {
+          reviewRecord = await _recordFormalPlanForReview(
             userId: userId,
+            username: syncedUser?.username,
             plan: plan,
           );
+        } catch (error, stack) {
+          _log.warning(
+            '正式行程已同步，但管理員評分紀錄寫入失敗：user=$userId error=$error',
+            error,
+            stack,
+          );
+        }
+        var lineNotificationSent = false;
+        if (userId.isNotEmpty && source == 'formal_itinerary_page') {
+          try {
+            await _sendLineItineraryGeneratedNotification(
+              userId: userId,
+              plan: plan,
+            );
+            lineNotificationSent = true;
+          } catch (error, stack) {
+            _log.warning(
+              '正式行程已同步，但 LINE 行程建立通知發送失敗：user=$userId error=$error',
+              error,
+              stack,
+            );
+          }
         } else if (userId.isNotEmpty) {
           _log.info('略過 LINE 行程推播：確認來源不是正式行程頁 source=$source');
         }
-        final updatedUser = userId.isEmpty
-            ? null
-            : await _store.findUserById(userId);
         return successBody(
           message: '正式行程已確認',
           data: {
             'confirmed': true,
-            'reviewRecordId': reviewRecord['id'],
+            'reviewRecorded': reviewRecord != null,
+            'reviewRecordId': reviewRecord?['id'],
             'lineNotificationSent': lineNotificationSent,
-            'activePlanUpdatedAt': updatedUser?.activePlanUpdatedAt
+            'activePlanUpdatedAt': syncedUser?.activePlanUpdatedAt
                 ?.toIso8601String(),
           },
         );
@@ -1875,13 +1892,15 @@ Future<void> main(List<String> args) async {
           throw ApiException(400, '缺少行程資料');
         }
         final plan = Map<String, dynamic>.from(rawPlan);
-        await _syncUserActivePlan(userId: userId, plan: plan);
-        final updatedUser = await _store.findUserById(userId);
+        final updatedUser = await _syncUserActivePlan(
+          userId: userId,
+          plan: plan,
+        );
         return successBody(
           message: '已同步目前行程到雲端提醒',
           data: {
             'activePlanSynced': true,
-            'activePlanUpdatedAt': updatedUser?.activePlanUpdatedAt
+            'activePlanUpdatedAt': updatedUser.activePlanUpdatedAt
                 ?.toIso8601String(),
           },
         );
@@ -2334,15 +2353,18 @@ Future<void> _writeFormalPlanReviews(List<Map<String, dynamic>> reviews) async {
 
 Future<Map<String, dynamic>> _recordFormalPlanForReview({
   required String userId,
+  String? username,
   required Map<String, dynamic> plan,
 }) async {
   final reviews = await _readFormalPlanReviews();
-  final user = userId.isEmpty ? null : await _store.findUserById(userId);
+  final user = userId.isEmpty || username != null
+      ? null
+      : await _store.findUserById(userId);
   final now = DateTime.now().toUtc();
   final record = <String, dynamic>{
     'id': const Uuid().v4(),
     'userId': userId.isEmpty ? null : userId,
-    'username': user?.username ?? '匿名使用者',
+    'username': username ?? user?.username ?? '匿名使用者',
     'confirmedAt': now.toIso8601String(),
     'status': 'pending',
     'score': null,
@@ -5576,23 +5598,31 @@ Future<User?> _findUserById(String userId) async {
   return _store.findUserById(userId);
 }
 
-Future<void> _syncUserActivePlan({
+Future<User> _syncUserActivePlan({
   required String userId,
   required Map<String, dynamic> plan,
 }) async {
-  final user = await _store.findUserById(userId);
-  if (user == null) {
-    throw ApiException(404, '找不到使用者');
-  }
-  final normalizedPlan = Map<String, dynamic>.from(
-    jsonDecode(jsonEncode(plan)) as Map,
-  );
-  await _store.updateUser(
-    user.copyWith(
+  try {
+    final user = await _store.findUserById(userId);
+    if (user == null) {
+      throw ApiException(404, '找不到使用者');
+    }
+    final normalizedPlan = Map<String, dynamic>.from(
+      jsonDecode(jsonEncode(plan)) as Map,
+    );
+    final updatedAt = DateTime.now();
+    final updatedUser = user.copyWith(
       activePlan: normalizedPlan,
-      activePlanUpdatedAt: DateTime.now(),
-    ),
-  );
+      activePlanUpdatedAt: updatedAt,
+    );
+    await _store.updateUser(updatedUser);
+    return updatedUser;
+  } on ApiException {
+    rethrow;
+  } catch (error, stack) {
+    _log.severe('同步正式行程失敗：user=$userId error=$error', error, stack);
+    throw ApiException(503, '正式行程雲端同步暫時失敗，請稍後再試');
+  }
 }
 
 DateTime _taipeiNow() {

@@ -501,8 +501,8 @@ class PostgresDataStore implements DataStore {
   Future<void> updateUser(User updated) async {
     await _ensureInitialized();
     final conn = await _ensureConnection();
-    final count = await conn.query(
-      'UPDATE users SET username=@username, email=@email, phone=@phone, password_hash=@password_hash, line_user_id=@line_user_id, line_linked_at=@line_linked_at, line_push_enabled=@line_push_enabled, interests_json=@interests_json, active_plan_json=@active_plan_json, active_plan_updated_at=@active_plan_updated_at WHERE id=@id',
+    final rows = await conn.query(
+      'UPDATE users SET username=@username, email=@email, phone=@phone, password_hash=@password_hash, line_user_id=@line_user_id, line_linked_at=@line_linked_at, line_push_enabled=@line_push_enabled, interests_json=@interests_json, active_plan_json=@active_plan_json, active_plan_updated_at=@active_plan_updated_at WHERE id=@id RETURNING id',
       substitutionValues: {
         'id': updated.id,
         'username': updated.username,
@@ -517,7 +517,7 @@ class PostgresDataStore implements DataStore {
         'active_plan_updated_at': updated.activePlanUpdatedAt?.toUtc(),
       },
     );
-    if (count.isEmpty) {
+    if (rows.isEmpty) {
       throw StateError('User ${updated.id} not found');
     }
   }
