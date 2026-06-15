@@ -18,6 +18,36 @@ services:
         value: 8080
       - key: SMART_TRAVEL_EXPOSE_CODES
         value: "false"
+      - key: DB_HOST
+        sync: false
+      - key: DB_NAME
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_PORT
+        value: "5432"
+      - key: DB_SSL
+        value: "true"
+      - key: GOOGLE_MAPS_API_KEY
+        sync: false
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false
+      - key: LINE_CHANNEL_SECRET
+        sync: false
+      - key: LINE_ADD_FRIEND_URL
+        sync: false
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_TOKEN
+        sync: false
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: GEMINI_API_KEYS
+        sync: false
       - fromGroup: smart-travel-reminder-shared
       - key: REMINDER_NEXT_STOP_MINUTES
         value: "20"
