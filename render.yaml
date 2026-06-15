@@ -1,3 +1,9 @@
+envVarGroups:
+  - name: smart-travel-reminder-shared
+    envVars:
+      - key: REMINDER_CRON_TOKEN
+        generateValue: true
+
 services:
   - type: web
     name: smart-travel-backend
@@ -12,8 +18,7 @@ services:
         value: 8080
       - key: SMART_TRAVEL_EXPOSE_CODES
         value: "false"
-      - key: REMINDER_CRON_TOKEN
-        sync: false
+      - fromGroup: smart-travel-reminder-shared
       - key: REMINDER_NEXT_STOP_MINUTES
         value: "20"
       - key: REMINDER_NEXT_STOP_GRACE_MINUTES
@@ -36,5 +41,4 @@ services:
         value: reminder-cron
       - key: REMINDER_API_BASE
         value: https://smart-travel-6zsf.onrender.com
-      - key: REMINDER_CRON_TOKEN
-        sync: false
+      - fromGroup: smart-travel-reminder-shared
