@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 
 
-DEFAULT_API_BASE = "https://smart-travel-6zsf.onrender.com"
+DEFAULT_API_BASE = "https://smart-travel-backend-6ant.onrender.com"
 RETRYABLE_STATUS_CODES = {429, 502, 503, 504}
 RETRY_DELAYS_SECONDS = (0, 10, 30)
 

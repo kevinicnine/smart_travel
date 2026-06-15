@@ -70,5 +70,5 @@ services:
       - key: SERVICE_MODE
         value: reminder-cron
       - key: REMINDER_API_BASE
-        value: https://smart-travel-6zsf.onrender.com
+        value: https://smart-travel-backend-6ant.onrender.com
       - fromGroup: smart-travel-reminder-shared
