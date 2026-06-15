@@ -66,6 +66,11 @@ String _secretFingerprint(String? value) {
   return sha256.convert(utf8.encode(value)).toString().substring(0, 12);
 }
 
+String? _normalizedSecret(String? value) {
+  final normalized = value?.trim();
+  return normalized == null || normalized.isEmpty ? null : normalized;
+}
+
 class _AiUsageRecord {
   const _AiUsageRecord({
     required this.feature,
@@ -426,7 +431,9 @@ Future<void> main(List<String> args) async {
   _geminiModel = Platform.environment['GEMINI_MODEL'] ?? 'gemini-2.5-flash';
   _lineChannelSecret = Platform.environment['LINE_CHANNEL_SECRET'];
   _lineAddFriendUrl = Platform.environment['LINE_ADD_FRIEND_URL'];
-  _reminderCronToken = Platform.environment['REMINDER_CRON_TOKEN'];
+  _reminderCronToken = _normalizedSecret(
+    Platform.environment['REMINDER_CRON_TOKEN'],
+  );
   _reloadItineraryLearningProfile();
 
   _log.info('Using data directory: $_dataDir');
@@ -5524,7 +5531,16 @@ Future<Response> _withReminderCron(
       '${_secretFingerprint(_reminderCronToken)} '
       'receivedFingerprint=${_secretFingerprint(token)}',
     );
-    return jsonResponse(401, errorBody('未授權'));
+    return jsonResponse(
+      401,
+      errorBody(
+        '未授權',
+        details: {
+          'expectedTokenFingerprint': _secretFingerprint(_reminderCronToken),
+          'receivedTokenFingerprint': _secretFingerprint(token),
+        },
+      ),
+    );
   }
   return _handle(action);
 }
