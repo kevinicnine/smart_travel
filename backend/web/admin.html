@@ -564,7 +564,12 @@
                       <th>來源</th>
                       <th>有效行程</th>
                       <th>實際掃描</th>
+                      <th>今天/明天</th>
+                      <th>LINE 可推播</th>
+                      <th>略過原因</th>
                       <th>已推播</th>
+                      <th>前晚摘要</th>
+                      <th>下一站提醒</th>
                       <th>狀態</th>
                       <th>耗時</th>
                       <th>錯誤</th>
@@ -1334,6 +1339,9 @@
           ['LINE 推播嘗試', notifications.linePushAttempts ?? 0],
           ['LINE 推播成功率', formatPercent(notifications.linePushSuccessRate ?? 0)],
           ['LINE 推播失敗', notifications.linePushFailures ?? 0],
+          ['生成完成推播', notifications.itineraryGeneratedPushes ?? 0],
+          ['前晚摘要推播', notifications.tomorrowSummaryPushes ?? 0],
+          ['下一站提醒推播', notifications.upcomingReminderPushes ?? 0],
           ['提醒掃描次數', notifications.reminderRuns ?? 0],
           ['提醒掃描成功率', formatPercent(notifications.reminderSuccessRate ?? 0)],
           ['Cron 執行次數', notifications.cronRuns ?? 0],
@@ -1354,13 +1362,20 @@
               <td>${escapeHtml(row.source || '-')}</td>
               <td>${row.syncedPlans ?? 0}</td>
               <td>${row.scannedUsers ?? 0}</td>
+              <td>${row.todayPlanUsers ?? 0} / ${row.tomorrowPlanUsers ?? 0}</td>
+              <td>${row.lineEligibleUsers ?? 0}</td>
+              <td class="muted" title="未綁 LINE / 推播未開 / 行程格式錯誤">
+                ${row.skippedNoLineBinding ?? 0} / ${row.skippedPushDisabled ?? 0} / ${row.skippedInvalidPlan ?? 0}
+              </td>
               <td>${row.linePushed ?? 0}</td>
+              <td>${row.tomorrowSummariesPushed ?? 0}</td>
+              <td>${row.upcomingRemindersPushed ?? 0}</td>
               <td>${row.status === 'success' || !row.status ? badge('成功', 'ok') : badge(row.status === 'partial' ? '部分失敗' : '失敗', 'danger')}</td>
               <td>${row.durationMs ?? 0} ms</td>
               <td title="${escapeHtml(JSON.stringify(row.errors || []))}">${row.failedUsers ?? 0}</td>
             </tr>
           `,
-          8,
+          10,
           '尚無提醒掃描紀錄',
         );
         renderSyncCapabilities(sync);

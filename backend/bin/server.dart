@@ -5695,6 +5695,12 @@ Future<Map<String, dynamic>> _runTrackedUpcomingReminderScan({
         'durationMs': DateTime.now().difference(startedAt).inMilliseconds,
         'scannedUsers': 0,
         'syncedPlans': 0,
+        'lineEligibleUsers': 0,
+        'todayPlanUsers': 0,
+        'tomorrowPlanUsers': 0,
+        'skippedNoLineBinding': 0,
+        'skippedPushDisabled': 0,
+        'skippedInvalidPlan': 0,
         'linePushed': 0,
         'failedUsers': 0,
         'errors': [error.toString()],
@@ -5725,6 +5731,12 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan({
       now.hour >= eveningStart && now.hour <= eveningEnd;
   var scanned = 0;
   var syncedPlans = 0;
+  var lineEligibleUsers = 0;
+  var todayPlanUsers = 0;
+  var tomorrowPlanUsers = 0;
+  var skippedNoLineBinding = 0;
+  var skippedPushDisabled = 0;
+  var skippedInvalidPlan = 0;
   var pushed = 0;
   var tomorrowSummariesPushed = 0;
   var upcomingRemindersPushed = 0;
@@ -5735,11 +5747,6 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan({
   final errors = <String>[];
 
   for (final user in users) {
-    if (user.lineUserId == null ||
-        user.lineUserId!.trim().isEmpty ||
-        user.linePushEnabled != true) {
-      continue;
-    }
     final plan = user.activePlan;
     if (plan == null) {
       continue;
@@ -5747,18 +5754,44 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan({
     syncedPlans += 1;
     final rawDays = plan['days'];
     if (rawDays is! List) {
+      skippedInvalidPlan += 1;
       continue;
     }
     final days = rawDays
         .whereType<Map>()
         .map((item) => Map<String, dynamic>.from(item))
         .toList();
+    if (days.isEmpty) {
+      skippedInvalidPlan += 1;
+      continue;
+    }
+    scanned += 1;
     final todayDay = days.firstWhere(
       (item) => item['date']?.toString().startsWith(todayText) == true,
       orElse: () => const <String, dynamic>{},
     );
+    final tomorrowDay = days.firstWhere(
+      (item) => item['date']?.toString().startsWith(tomorrowText) == true,
+      orElse: () => const <String, dynamic>{},
+    );
     if (todayDay.isNotEmpty) {
-      scanned += 1;
+      todayPlanUsers += 1;
+    }
+    if (tomorrowDay.isNotEmpty) {
+      tomorrowPlanUsers += 1;
+    }
+
+    if (user.lineUserId == null || user.lineUserId!.trim().isEmpty) {
+      skippedNoLineBinding += 1;
+      continue;
+    }
+    if (user.linePushEnabled != true) {
+      skippedPushDisabled += 1;
+      continue;
+    }
+    lineEligibleUsers += 1;
+
+    if (todayDay.isNotEmpty) {
       try {
         final result = await _buildContextAwareness({
           'day': todayDay,
@@ -5796,10 +5829,6 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan({
     }
 
     if (shouldSendTomorrowSummary) {
-      final tomorrowDay = days.firstWhere(
-        (item) => item['date']?.toString().startsWith(tomorrowText) == true,
-        orElse: () => const <String, dynamic>{},
-      );
       if (tomorrowDay.isNotEmpty) {
         try {
           if (await _sendLineTomorrowSummaryNotification(
@@ -5824,6 +5853,12 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan({
     'status': failedUsers == 0 ? 'success' : 'partial',
     'scannedUsers': scanned,
     'syncedPlans': syncedPlans,
+    'lineEligibleUsers': lineEligibleUsers,
+    'todayPlanUsers': todayPlanUsers,
+    'tomorrowPlanUsers': tomorrowPlanUsers,
+    'skippedNoLineBinding': skippedNoLineBinding,
+    'skippedPushDisabled': skippedPushDisabled,
+    'skippedInvalidPlan': skippedInvalidPlan,
     'linePushed': pushed,
     'tomorrowSummariesPushed': tomorrowSummariesPushed,
     'upcomingRemindersPushed': upcomingRemindersPushed,
@@ -5838,6 +5873,9 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan({
   _recordReminderRun(source: triggerSource, result: result);
   _log.info(
     '提醒掃描完成：source=$triggerSource scannedUsers=$scanned syncedPlans=$syncedPlans '
+    'lineEligibleUsers=$lineEligibleUsers todayPlanUsers=$todayPlanUsers '
+    'tomorrowPlanUsers=$tomorrowPlanUsers skippedNoLineBinding=$skippedNoLineBinding '
+    'skippedPushDisabled=$skippedPushDisabled skippedInvalidPlan=$skippedInvalidPlan '
     'linePushed=$pushed upcomingRemindersPushed=$upcomingRemindersPushed '
     'tomorrowSummariesPushed=$tomorrowSummariesPushed failedUsers=$failedUsers '
     'durationMs=$durationMs',
