@@ -2226,6 +2226,7 @@ const String _trainingWeightVersionsStateKey = 'training.weightVersions';
 const String _formalPlanReviewsStateKey = 'quality.formalPlanReviews';
 const String _lineReminderSignaturesStateKey =
     'notifications.lineReminderSignatures';
+const String _lineReminderPlansStateKey = 'notifications.lineReminderPlans';
 
 String _trainingDataPath(String filename) => p.join(_dataDir, filename);
 
@@ -2349,6 +2350,105 @@ Future<void> _writeFormalPlanReviews(List<Map<String, dynamic>> reviews) async {
   final appState = await _readAppState();
   appState[_formalPlanReviewsStateKey] = reviews;
   await _writeAppState(appState);
+}
+
+List<String> _planDateKeys(Map<String, dynamic> plan) {
+  final rawDays = plan['days'];
+  if (rawDays is! List) return const <String>[];
+  final dates = <String>{};
+  for (final rawDay in rawDays) {
+    if (rawDay is! Map) continue;
+    final dateKey = _reminderDayDateKey(Map<String, dynamic>.from(rawDay));
+    if (dateKey != null && dateKey.isNotEmpty) {
+      dates.add(dateKey);
+    }
+  }
+  final sorted = dates.toList()..sort();
+  return sorted;
+}
+
+bool _reminderPlanIsRelevant(List<String> dateKeys, DateTime now) {
+  if (dateKeys.isEmpty) return false;
+  final today = DateTime(now.year, now.month, now.day);
+  final cutoff = today.subtract(const Duration(days: 2));
+  for (final dateKey in dateKeys) {
+    final parsed = DateTime.tryParse(dateKey);
+    if (parsed == null) continue;
+    final date = DateTime(parsed.year, parsed.month, parsed.day);
+    if (!date.isBefore(cutoff)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+String _lineReminderPlanKey(String userId, Map<String, dynamic> plan) {
+  final dates = _planDateKeys(plan).join(',');
+  final cities =
+      (plan['destinationCities'] as List?)
+          ?.map((item) => item.toString().trim())
+          .where((item) => item.isNotEmpty)
+          .join(',') ??
+      '';
+  final title = plan['title']?.toString().trim() ?? '';
+  return '$userId|$dates|$cities|$title';
+}
+
+Future<List<Map<String, dynamic>>> _readLineReminderPlanRecords() async {
+  final appState = await _readAppState();
+  final raw = appState[_lineReminderPlansStateKey];
+  if (raw is! List) return <Map<String, dynamic>>[];
+  final now = _taipeiNow();
+  final records = raw
+      .whereType<Map>()
+      .map((entry) => Map<String, dynamic>.from(entry))
+      .where((entry) {
+        final dateKeys =
+            (entry['planDates'] as List?)
+                ?.map((item) => item.toString())
+                .where((item) => item.isNotEmpty)
+                .toList() ??
+            const <String>[];
+        return _reminderPlanIsRelevant(dateKeys, now);
+      })
+      .toList();
+  if (records.length != raw.length) {
+    appState[_lineReminderPlansStateKey] = records;
+    await _writeAppState(appState);
+  }
+  return records;
+}
+
+Future<void> _writeLineReminderPlanRecords(
+  List<Map<String, dynamic>> records,
+) async {
+  final appState = await _readAppState();
+  appState[_lineReminderPlansStateKey] = records;
+  await _writeAppState(appState);
+}
+
+Future<void> _rememberLineReminderPlan({
+  required User user,
+  required Map<String, dynamic> plan,
+  required DateTime updatedAt,
+}) async {
+  final dateKeys = _planDateKeys(plan);
+  if (!_reminderPlanIsRelevant(dateKeys, _taipeiNow())) return;
+  final records = await _readLineReminderPlanRecords();
+  final key = _lineReminderPlanKey(user.id, plan);
+  records.removeWhere((entry) => entry['id']?.toString() == key);
+  records.insert(0, {
+    'id': key,
+    'userId': user.id,
+    'username': user.username,
+    'planDates': dateKeys,
+    'updatedAt': updatedAt.toUtc().toIso8601String(),
+    'plan': Map<String, dynamic>.from(plan),
+  });
+  if (records.length > 200) {
+    records.removeRange(200, records.length);
+  }
+  await _writeLineReminderPlanRecords(records);
 }
 
 Future<Map<String, dynamic>> _recordFormalPlanForReview({
@@ -5616,6 +5716,11 @@ Future<User> _syncUserActivePlan({
       activePlanUpdatedAt: updatedAt,
     );
     await _store.updateUser(updatedUser);
+    await _rememberLineReminderPlan(
+      user: updatedUser,
+      plan: normalizedPlan,
+      updatedAt: updatedAt,
+    );
     return updatedUser;
   } on ApiException {
     rethrow;
@@ -5637,6 +5742,43 @@ DateTime _taipeiNow() {
     taipei.millisecond,
     taipei.microsecond,
   );
+}
+
+String _reminderDateKey(DateTime value) {
+  final year = value.year.toString().padLeft(4, '0');
+  final month = value.month.toString().padLeft(2, '0');
+  final day = value.day.toString().padLeft(2, '0');
+  return '$year-$month-$day';
+}
+
+String? _reminderDayDateKey(Map<String, dynamic> day) {
+  final raw = day['date']?.toString().trim() ?? '';
+  if (raw.isEmpty) return null;
+  final match = RegExp(r'^(\d{4}-\d{2}-\d{2})').firstMatch(raw);
+  return match?.group(1);
+}
+
+DateTime _parseTaipeiReferenceTime(Object? raw) {
+  final text = raw?.toString().trim() ?? '';
+  final parsed = DateTime.tryParse(text);
+  if (parsed == null) {
+    return _taipeiNow();
+  }
+  final hasTimezone = RegExp(r'(Z|[+-]\d{2}:?\d{2})$').hasMatch(text);
+  if (parsed.isUtc || hasTimezone) {
+    final taipei = parsed.toUtc().add(const Duration(hours: 8));
+    return DateTime(
+      taipei.year,
+      taipei.month,
+      taipei.day,
+      taipei.hour,
+      taipei.minute,
+      taipei.second,
+      taipei.millisecond,
+      taipei.microsecond,
+    );
+  }
+  return parsed;
 }
 
 int _reminderEnvHour(String name, int fallback) {
@@ -5694,12 +5836,14 @@ Future<Map<String, dynamic>> _runTrackedUpcomingReminderScan({
         'status': 'failed',
         'durationMs': DateTime.now().difference(startedAt).inMilliseconds,
         'scannedUsers': 0,
+        'actualScanned': 0,
         'syncedPlans': 0,
         'lineEligibleUsers': 0,
         'todayPlanUsers': 0,
         'tomorrowPlanUsers': 0,
         'skippedNoLineBinding': 0,
         'skippedPushDisabled': 0,
+        'skippedNoTodayPlan': 0,
         'skippedInvalidPlan': 0,
         'linePushed': 0,
         'failedUsers': 0,
@@ -5717,25 +5861,65 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan({
   final startedAt = DateTime.now();
   final users = (await _store.read()).users;
   final now = _taipeiNow();
+  final userById = {for (final user in users) user.id: user};
+  final planCandidates = <Map<String, dynamic>>[];
+  final seenPlanKeys = <String>{};
+
+  for (final user in users) {
+    final plan = user.activePlan;
+    if (plan == null) {
+      continue;
+    }
+    final key = _lineReminderPlanKey(user.id, plan);
+    seenPlanKeys.add(key);
+    planCandidates.add({
+      'user': user,
+      'plan': plan,
+      'source': 'active_plan',
+      'key': key,
+    });
+  }
+
+  final reminderPlanRecords = await _readLineReminderPlanRecords();
+  for (final record in reminderPlanRecords) {
+    final userId = record['userId']?.toString().trim() ?? '';
+    final user = userById[userId];
+    final rawPlan = record['plan'];
+    if (user == null || rawPlan is! Map) {
+      continue;
+    }
+    final plan = Map<String, dynamic>.from(rawPlan);
+    final recordId = record['id']?.toString().trim() ?? '';
+    final key = recordId.isNotEmpty ? recordId : _lineReminderPlanKey(user.id, plan);
+    if (!seenPlanKeys.add(key)) {
+      continue;
+    }
+    planCandidates.add({
+      'user': user,
+      'plan': plan,
+      'source': 'reminder_history',
+      'key': key,
+    });
+  }
+
   _log.info(
-    '提醒掃描開始：source=$triggerSource users=${users.length} checkedAt=${now.toIso8601String()}',
+    '提醒掃描開始：source=$triggerSource users=${users.length} planCandidates=${planCandidates.length} checkedAt=${now.toIso8601String()}',
   );
-  final todayText = now.toIso8601String().substring(0, 10);
-  final tomorrowText = now
-      .add(const Duration(days: 1))
-      .toIso8601String()
-      .substring(0, 10);
+  final todayText = _reminderDateKey(now);
+  final tomorrowText = _reminderDateKey(now.add(const Duration(days: 1)));
   final eveningStart = _reminderEnvHour('REMINDER_EVENING_START_HOUR', 20);
   final eveningEnd = _reminderEnvHour('REMINDER_EVENING_END_HOUR', 23);
   final shouldSendTomorrowSummary =
       now.hour >= eveningStart && now.hour <= eveningEnd;
   var scanned = 0;
+  var actualScanned = 0;
   var syncedPlans = 0;
   var lineEligibleUsers = 0;
   var todayPlanUsers = 0;
   var tomorrowPlanUsers = 0;
   var skippedNoLineBinding = 0;
   var skippedPushDisabled = 0;
+  var skippedNoTodayPlan = 0;
   var skippedInvalidPlan = 0;
   var pushed = 0;
   var tomorrowSummariesPushed = 0;
@@ -5746,11 +5930,11 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan({
   final upcomingChecks = <Map<String, dynamic>>[];
   final errors = <String>[];
 
-  for (final user in users) {
-    final plan = user.activePlan;
-    if (plan == null) {
-      continue;
-    }
+  for (final candidate in planCandidates) {
+    final user = candidate['user'] as User;
+    final plan = Map<String, dynamic>.from(candidate['plan'] as Map);
+    final candidateSource = candidate['source']?.toString() ?? 'unknown';
+    final planDates = _planDateKeys(plan);
     syncedPlans += 1;
     final rawDays = plan['days'];
     if (rawDays is! List) {
@@ -5767,11 +5951,11 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan({
     }
     scanned += 1;
     final todayDay = days.firstWhere(
-      (item) => item['date']?.toString().startsWith(todayText) == true,
+      (item) => _reminderDayDateKey(item) == todayText,
       orElse: () => const <String, dynamic>{},
     );
     final tomorrowDay = days.firstWhere(
-      (item) => item['date']?.toString().startsWith(tomorrowText) == true,
+      (item) => _reminderDayDateKey(item) == tomorrowText,
       orElse: () => const <String, dynamic>{},
     );
     if (todayDay.isNotEmpty) {
@@ -5791,7 +5975,23 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan({
     }
     lineEligibleUsers += 1;
 
-    if (todayDay.isNotEmpty) {
+    if (todayDay.isEmpty) {
+      skippedNoTodayPlan += 1;
+      upcomingChecks.add({
+        'username': user.username,
+        'source': candidateSource,
+        'planDates': planDates,
+        'status': 'skipped',
+        'reason': 'no_today_plan',
+        'todayDate': todayText,
+        'availableDates': days
+            .map(_reminderDayDateKey)
+            .whereType<String>()
+            .toSet()
+            .toList(),
+      });
+    } else {
+      actualScanned += 1;
       try {
         final result = await _buildContextAwareness({
           'day': todayDay,
@@ -5801,14 +6001,31 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan({
         });
         final upcomingReminder = result['upcomingReminder'];
         if (upcomingReminder is Map) {
+          final shouldPush = upcomingReminder['shouldPush'] == true;
+          final linePushed = result['linePushed'] == true;
           upcomingChecks.add({
             'username': user.username,
+            'source': candidateSource,
+            'planDates': planDates,
+            'status': linePushed
+                ? 'pushed'
+                : (shouldPush ? 'push_blocked_or_duplicate' : 'not_due'),
             'targetPlaceName': upcomingReminder['targetPlaceName'],
             'scheduledTime': upcomingReminder['scheduledTime'],
             'departureTime': upcomingReminder['departureTime'],
             'minutesUntilDeparture': upcomingReminder['minutesUntilDeparture'],
-            'shouldPush': upcomingReminder['shouldPush'] == true,
-            'linePushed': result['linePushed'] == true,
+            'triggerWindowMinutes': upcomingReminder['triggerWindowMinutes'],
+            'graceWindowMinutes': upcomingReminder['graceWindowMinutes'],
+            'shouldPush': shouldPush,
+            'linePushed': linePushed,
+          });
+        } else {
+          upcomingChecks.add({
+            'username': user.username,
+            'source': candidateSource,
+            'planDates': planDates,
+            'status': 'no_upcoming_stop',
+            'todayDate': todayText,
           });
         }
         if (result['linePushed'] == true) {
@@ -5852,12 +6069,14 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan({
   final result = {
     'status': failedUsers == 0 ? 'success' : 'partial',
     'scannedUsers': scanned,
+    'actualScanned': actualScanned,
     'syncedPlans': syncedPlans,
     'lineEligibleUsers': lineEligibleUsers,
     'todayPlanUsers': todayPlanUsers,
     'tomorrowPlanUsers': tomorrowPlanUsers,
     'skippedNoLineBinding': skippedNoLineBinding,
     'skippedPushDisabled': skippedPushDisabled,
+    'skippedNoTodayPlan': skippedNoTodayPlan,
     'skippedInvalidPlan': skippedInvalidPlan,
     'linePushed': pushed,
     'tomorrowSummariesPushed': tomorrowSummariesPushed,
@@ -5872,10 +6091,11 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan({
   };
   _recordReminderRun(source: triggerSource, result: result);
   _log.info(
-    '提醒掃描完成：source=$triggerSource scannedUsers=$scanned syncedPlans=$syncedPlans '
+    '提醒掃描完成：source=$triggerSource scannedUsers=$scanned actualScanned=$actualScanned syncedPlans=$syncedPlans '
     'lineEligibleUsers=$lineEligibleUsers todayPlanUsers=$todayPlanUsers '
     'tomorrowPlanUsers=$tomorrowPlanUsers skippedNoLineBinding=$skippedNoLineBinding '
-    'skippedPushDisabled=$skippedPushDisabled skippedInvalidPlan=$skippedInvalidPlan '
+    'skippedPushDisabled=$skippedPushDisabled skippedNoTodayPlan=$skippedNoTodayPlan '
+    'skippedInvalidPlan=$skippedInvalidPlan '
     'linePushed=$pushed upcomingRemindersPushed=$upcomingRemindersPushed '
     'tomorrowSummariesPushed=$tomorrowSummariesPushed failedUsers=$failedUsers '
     'durationMs=$durationMs',
@@ -5976,9 +6196,7 @@ Future<Map<String, dynamic>> _buildContextAwareness(
   final day = Map<String, dynamic>.from(rawDay);
   final userId = _asString(body, 'userId').trim();
   final triggerLinePush = body['triggerLinePush'] == true;
-  final referenceTime =
-      DateTime.tryParse(body['currentTime']?.toString() ?? '')?.toLocal() ??
-      DateTime.now();
+  final referenceTime = _parseTaipeiReferenceTime(body['currentTime']);
   final dayDate = _parseDate(day['date']?.toString());
   final dayDateText = dayDate?.toIso8601String().substring(0, 10);
   if (dayDate == null || dayDateText == null) {
@@ -6529,9 +6747,7 @@ Map<String, dynamic>? _buildContextUpcomingReminder({
   final dayDate = _parseDate(dateText);
   final isToday =
       dayDate != null &&
-      dayDate.year == referenceTime.year &&
-      dayDate.month == referenceTime.month &&
-      dayDate.day == referenceTime.day;
+      _reminderDateKey(dayDate) == _reminderDateKey(referenceTime);
 
   final transitLabel = transit?['label']?.toString().trim() ?? '';
   final fromLabel = transit?['fromLabel']?.toString().trim() ?? '';
