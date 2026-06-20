@@ -48,6 +48,8 @@ late _ItineraryLearningProfile _itineraryLearningProfile;
 late final DataStore _store;
 late final NotificationService _notificationService;
 _CrawlJob? _crawlJob;
+List<Place>? _trainingPlacesExportCache;
+Map<String, List<Place>>? _trainingPlacesExportIndexCache;
 final Map<String, _LineLinkCode> _lineLinkCodes = {};
 final Map<String, DateTime> _lineContextPushCooldown = {};
 final Map<String, int> _requestPathCounts = {};
@@ -14029,15 +14031,189 @@ Future<List<Place>> _backfillVisiblePlaces(
 ) async {
   final normalized = <Place>[];
   for (final place in places) {
-    if (_needsPriceBackfill(place)) {
-      final updated = _normalizePlaceForStorage(place);
-      await store.upsertPlace(updated);
-      normalized.add(updated);
-    } else {
-      normalized.add(place);
+    var updated = place;
+    var changed = false;
+    final localExportMatch = await _findTrainingExportBackfill(place);
+    if (localExportMatch != null) {
+      final merged = _mergePlaceWithBackfillCandidate(updated, localExportMatch);
+      changed = changed || !_samePlaceData(updated, merged);
+      updated = merged;
     }
+    if (_needsPriceBackfill(updated)) {
+      updated = _normalizePlaceForStorage(updated);
+      changed = true;
+    }
+    if (changed) {
+      await store.upsertPlace(updated);
+    }
+    normalized.add(updated);
   }
   return normalized;
+}
+
+Future<Place?> _findTrainingExportBackfill(Place place) async {
+  if (!_needsLocalExportBackfill(place)) {
+    return null;
+  }
+  final index = await _trainingPlacesExportIndex();
+  final normalizedName = _normalizePlaceNameForMatch(place.name);
+  if (normalizedName.isEmpty) {
+    return null;
+  }
+
+  final exactCandidates = index[normalizedName] ?? const <Place>[];
+  final exactMatch = _bestTrainingExportMatch(place, exactCandidates);
+  if (exactMatch != null) {
+    return exactMatch;
+  }
+
+  final allPlaces = _trainingPlacesExportCache ?? const <Place>[];
+  final partialCandidates = allPlaces.where((candidate) {
+    final candidateName = _normalizePlaceNameForMatch(candidate.name);
+    if (candidateName.isEmpty) {
+      return false;
+    }
+    return candidateName.contains(normalizedName) ||
+        normalizedName.contains(candidateName);
+  });
+  return _bestTrainingExportMatch(place, partialCandidates);
+}
+
+bool _needsLocalExportBackfill(Place place) {
+  return place.imageUrl.trim().isEmpty ||
+      place.rating == null ||
+      place.userRatingsTotal == null;
+}
+
+Future<Map<String, List<Place>>> _trainingPlacesExportIndex() async {
+  final cached = _trainingPlacesExportIndexCache;
+  if (cached != null) {
+    return cached;
+  }
+
+  final file = File(p.join(_dataDir, 'training_places_export.json'));
+  if (!await file.exists()) {
+    _trainingPlacesExportCache = const <Place>[];
+    _trainingPlacesExportIndexCache = const <String, List<Place>>{};
+    return _trainingPlacesExportIndexCache!;
+  }
+
+  try {
+    final decoded = jsonDecode(await file.readAsString());
+    final rawPlaces = decoded is List
+        ? decoded
+        : decoded is Map<String, dynamic>
+        ? (decoded['places'] as List? ?? const [])
+        : const [];
+    final parsed = rawPlaces
+        .whereType<Map>()
+        .map((item) => Place.fromJson(Map<String, dynamic>.from(item)))
+        .toList();
+    final index = <String, List<Place>>{};
+    for (final place in parsed) {
+      final key = _normalizePlaceNameForMatch(place.name);
+      if (key.isEmpty) continue;
+      index.putIfAbsent(key, () => <Place>[]).add(place);
+    }
+    _trainingPlacesExportCache = parsed;
+    _trainingPlacesExportIndexCache = index;
+    return index;
+  } catch (error, stack) {
+    _log.warning('Load training_places_export.json failed: $error', error, stack);
+    _trainingPlacesExportCache = const <Place>[];
+    _trainingPlacesExportIndexCache = const <String, List<Place>>{};
+    return _trainingPlacesExportIndexCache!;
+  }
+}
+
+Place? _bestTrainingExportMatch(Place target, Iterable<Place> candidates) {
+  final normalizedCity = _normalizeLocationText(target.city);
+  final normalizedAddress = _normalizeLocationText(target.address);
+  Place? best;
+  var bestScore = -1;
+
+  for (final candidate in candidates) {
+    var score = 0;
+    if (candidate.imageUrl.trim().isNotEmpty) score += 500;
+    if (candidate.rating != null) score += 60;
+    if (candidate.userRatingsTotal != null) score += 30;
+
+    final candidateCity = _normalizeLocationText(candidate.city);
+    final candidateAddress = _normalizeLocationText(candidate.address);
+    if (normalizedCity.isNotEmpty && candidateCity == normalizedCity) {
+      score += 220;
+    }
+    if (normalizedAddress.isNotEmpty &&
+        candidateAddress.isNotEmpty &&
+        (candidateAddress.contains(normalizedAddress) ||
+            normalizedAddress.contains(candidateAddress))) {
+      score += 180;
+    }
+    if (candidate.lat != 0 || candidate.lng != 0) {
+      score += 20;
+    }
+
+    if (score > bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+
+  return bestScore >= 220 ? best : null;
+}
+
+Place _mergePlaceWithBackfillCandidate(Place current, Place candidate) {
+  return Place(
+    id: current.id,
+    name: current.name,
+    tags: current.tags.isNotEmpty ? current.tags : candidate.tags,
+    city: current.city.trim().isNotEmpty ? current.city : candidate.city,
+    address: current.address.trim().isNotEmpty
+        ? current.address
+        : candidate.address,
+    lat: current.lat != 0 ? current.lat : candidate.lat,
+    lng: current.lng != 0 ? current.lng : candidate.lng,
+    description: current.description.trim().isNotEmpty
+        ? current.description
+        : candidate.description,
+    imageUrl: current.imageUrl.trim().isNotEmpty
+        ? current.imageUrl
+        : candidate.imageUrl,
+    rating: current.rating ?? candidate.rating,
+    userRatingsTotal: current.userRatingsTotal ?? candidate.userRatingsTotal,
+    priceLevel: current.priceLevel ?? candidate.priceLevel,
+    priceCategory: current.priceCategory ?? candidate.priceCategory,
+    openingHours: current.openingHours ?? candidate.openingHours,
+    source: current.source ?? candidate.source,
+    updatedAt: DateTime.now().toUtc(),
+  );
+}
+
+bool _samePlaceData(Place a, Place b) {
+  return a.id == b.id &&
+      a.name == b.name &&
+      _listEquals(a.tags, b.tags) &&
+      a.city == b.city &&
+      a.address == b.address &&
+      a.lat == b.lat &&
+      a.lng == b.lng &&
+      a.description == b.description &&
+      a.imageUrl == b.imageUrl &&
+      a.rating == b.rating &&
+      a.userRatingsTotal == b.userRatingsTotal &&
+      a.priceLevel == b.priceLevel &&
+      a.priceCategory == b.priceCategory &&
+      jsonEncode(a.openingHours) == jsonEncode(b.openingHours) &&
+      a.source == b.source;
+}
+
+bool _listEquals<T>(List<T> a, List<T> b) {
+  if (identical(a, b)) return true;
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
 }
 
 Map<String, dynamic> _placeToApiJson(Place place) {
