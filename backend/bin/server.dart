@@ -2224,8 +2224,10 @@ _RequirementSignals _extractRequirementSignals(String? requirementsText) {
 
 String? _extractScopedAreaConstraint(String raw) {
   final patterns = <RegExp>[
-    RegExp(r'(?:只在|限定在|只去|只想去|只待在|都在|都排在|只排在|範圍只在)([^，。；、,\n]+)'),
-    RegExp(r'(?:可以|可不可以|能不能)(?:只在|限定在)([^，。；、,\n]+)'),
+    RegExp(r'(?:只在|限定在|限制在|只去|只想去|只待在|都在|都排在|只排在|範圍只在)([^，。；、,\n]+)'),
+    RegExp(r'(?:地區|地點|旅遊地點|旅遊的地方|行程地點|範圍)(?:要|想要|希望)?(?:限制|限定)?在([^，。；、,\n]+)'),
+    RegExp(r'(?:可以|可不可以|能不能)(?:只在|限定在|限制在)([^，。；、,\n]+)'),
+    RegExp(r'(?:在)([^，。；、,\n]+?)(?:就好|即可|就可以)(?![\\u4e00-\\u9fff])'),
   ];
   for (final pattern in patterns) {
     for (final match in pattern.allMatches(raw)) {
