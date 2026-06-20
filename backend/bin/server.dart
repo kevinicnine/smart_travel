@@ -1988,6 +1988,7 @@ String _normalizeText(String input) {
 class _RequirementSignals {
   const _RequirementSignals({
     required this.preferredTags,
+    required this.scopedArea,
     required this.preferOutdoor,
     required this.preferIndoor,
     required this.preferPhotoSpots,
@@ -2002,6 +2003,7 @@ class _RequirementSignals {
   });
 
   final Set<String> preferredTags;
+  final String? scopedArea;
   final bool preferOutdoor;
   final bool preferIndoor;
   final bool preferPhotoSpots;
@@ -2016,6 +2018,7 @@ class _RequirementSignals {
 
   bool get isEmpty =>
       preferredTags.isEmpty &&
+      (scopedArea == null || scopedArea!.trim().isEmpty) &&
       !preferOutdoor &&
       !preferIndoor &&
       !preferPhotoSpots &&
@@ -2031,6 +2034,9 @@ class _RequirementSignals {
     final parts = <String>[];
     if (preferredTags.isNotEmpty) {
       parts.add('偏好標籤：${preferredTags.join('、')}');
+    }
+    if (scopedArea != null && scopedArea!.trim().isNotEmpty) {
+      parts.add('限定區域：${scopedArea!.trim()}');
     }
     if (preferOutdoor) parts.add('偏好戶外');
     if (preferIndoor) parts.add('偏好室內與逛街');
@@ -2052,6 +2058,7 @@ class _RequirementSignals {
 
   Map<String, dynamic> toJson() => {
     'preferredTags': preferredTags.toList(),
+    'scopedArea': scopedArea,
     'preferOutdoor': preferOutdoor,
     'preferIndoor': preferIndoor,
     'preferPhotoSpots': preferPhotoSpots,
@@ -2071,6 +2078,7 @@ _RequirementSignals _extractRequirementSignals(String? requirementsText) {
   if (raw.isEmpty) {
     return const _RequirementSignals(
       preferredTags: <String>{},
+      scopedArea: null,
       preferOutdoor: false,
       preferIndoor: false,
       preferPhotoSpots: false,
@@ -2154,6 +2162,7 @@ _RequirementSignals _extractRequirementSignals(String? requirementsText) {
       : null;
 
   final preferredTags = <String>{};
+  final scopedArea = _extractScopedAreaConstraint(raw);
   if (preferOutdoor) {
     preferredTags.addAll(const ['national_park', 'lake_river', 'bike']);
   }
@@ -2198,6 +2207,7 @@ _RequirementSignals _extractRequirementSignals(String? requirementsText) {
 
   return _RequirementSignals(
     preferredTags: preferredTags,
+    scopedArea: scopedArea,
     preferOutdoor: preferOutdoor,
     preferIndoor: preferIndoor,
     preferPhotoSpots: preferPhotoSpots,
@@ -2210,6 +2220,46 @@ _RequirementSignals _extractRequirementSignals(String? requirementsText) {
     nightMarketDayIndex: nightMarketDayIndex,
     requirementKeywords: keywords,
   );
+}
+
+String? _extractScopedAreaConstraint(String raw) {
+  final patterns = <RegExp>[
+    RegExp(r'(?:只在|限定在|只去|只想去|只待在|都在|都排在|只排在|範圍只在)([^，。；、,\n]+)'),
+    RegExp(r'(?:可以|可不可以|能不能)(?:只在|限定在)([^，。；、,\n]+)'),
+  ];
+  for (final pattern in patterns) {
+    for (final match in pattern.allMatches(raw)) {
+      final cleaned = _cleanScopedAreaText(match.group(1) ?? '');
+      if (cleaned != null) {
+        return cleaned;
+      }
+    }
+  }
+  return null;
+}
+
+String? _cleanScopedAreaText(String raw) {
+  var value = raw.trim();
+  value = value
+      .split(RegExp(r'(?:就好|即可|就可以|嗎|呢|吧|然後|之後|接著|但是|但|可是|不過|並且|而且)'))
+      .first
+      .trim();
+  value = value
+      .replaceFirst(RegExp(r'^(?:在|於|到|去|往)'), '')
+      .replaceFirst(RegExp(r'(?:附近|一帶|這邊|那邊)$'), '')
+      .trim();
+  const generic = <String>{
+    '這裡',
+    '那裡',
+    '當地',
+    '同一區',
+    '同一個地方',
+    '單一城市',
+  };
+  if (value.length < 2 || value.length > 20 || generic.contains(value)) {
+    return null;
+  }
+  return value;
 }
 
 int? _extractRequestedNightMarketDayIndex(String raw) {
@@ -8250,6 +8300,11 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
       : _normalizeLocationText(location);
   final locationParts = _parseLocationParts(location);
   final requirementSignals = _extractRequirementSignals(requirementsText);
+  final scopedArea = requirementSignals.scopedArea?.trim();
+  final normalizedScopedArea = scopedArea == null || scopedArea.isEmpty
+      ? null
+      : _normalizeLocationText(scopedArea);
+  final scopedLocationParts = _parseLocationParts(scopedArea);
   final effectiveWishlistPlaces = <String>{
     ...wishlistPlaces
         .map((place) => place.trim())
@@ -8270,6 +8325,17 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
   }
 
   bool matchesCityScope(Place place) {
+    if (normalizedScopedArea != null && normalizedScopedArea.isNotEmpty) {
+      final scopedCity = scopedLocationParts.$1;
+      if (scopedCity != null && scopedCity.isNotEmpty) {
+        return containsLoc(place.city, scopedCity) ||
+            containsLoc(place.address, scopedCity);
+      }
+      final scopedHaystack = _normalizeText(
+        '${place.name} ${place.city} ${place.address}',
+      );
+      return scopedHaystack.contains(normalizedScopedArea);
+    }
     if (normalizedDestinationCities.isNotEmpty) {
       return normalizedDestinationCities.any(
         (city) =>
@@ -8284,6 +8350,14 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
   }
 
   bool matchesTownshipScope(Place place) {
+    if (normalizedScopedArea != null && normalizedScopedArea.isNotEmpty) {
+      final scopedTownship = scopedLocationParts.$2;
+      if (scopedTownship != null && scopedTownship.isNotEmpty) {
+        return containsLoc(place.address, scopedTownship) ||
+            containsLoc(place.city, scopedTownship);
+      }
+      return true;
+    }
     if (normalizedDestinationCities.isNotEmpty) {
       return true;
     }
@@ -12046,6 +12120,7 @@ Future<Map<String, dynamic>> _buildPlannerChatTurn({
       'preferLowWalkingLoad': requirementSignals.preferLowWalking,
     },
     'hardConstraints': {
+      'scopedArea': requirementSignals.scopedArea,
       'requiredPlaces': session.requiredPlaces.toList(),
       'excludedPlaces': session.excludedPlaces.toList(),
     },
@@ -12363,6 +12438,7 @@ String _buildPlannerChatContextPrompt({
 - 目前累積需求原文：${session.requirementsText.isEmpty ? '未提供' : session.requirementsText}
 - 必排景點：${session.requiredPlaces.isEmpty ? '無' : session.requiredPlaces.join('、')}
 - 排除景點：${session.excludedPlaces.isEmpty ? '無' : session.excludedPlaces.join('、')}
+- 限定區域：${requirementSignals.scopedArea?.trim().isNotEmpty == true ? requirementSignals.scopedArea!.trim() : '無'}
 - 已確認同行對象：${session.companion ?? '未確認'}
 - 已確認交通方式：${session.transport ?? '未確認'}
 - 已確認旅遊風格：${session.style ?? '未確認'}

@@ -39,11 +39,20 @@ class BackendApi {
     }
 
     final uri = Uri.tryParse(trimmed);
-    if (uri == null) return trimmed;
+    if (uri == null) {
+      return normalizedPlaceId.isEmpty
+          ? trimmed
+          : buildPhotoProxyUrl(photoReference: trimmed);
+    }
     if (!uri.hasScheme && uri.path == '/api/place-photo') {
       return Uri.parse(baseUrl)
           .replace(path: uri.path, queryParameters: uri.queryParameters)
           .toString();
+    }
+    if (!uri.hasScheme) {
+      return normalizedPlaceId.isEmpty
+          ? trimmed
+          : buildPhotoProxyUrl(photoReference: trimmed);
     }
 
     final isGooglePhoto = uri.host == 'maps.googleapis.com' &&
