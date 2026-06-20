@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:logging/logging.dart';
@@ -489,6 +490,7 @@ Future<void> main(List<String> args) async {
     ..get('/favicon.ico', _emptySiteIconHandler)
     ..get('/apple-touch-icon.png', _emptySiteIconHandler)
     ..get('/apple-touch-icon-precomposed.png', _emptySiteIconHandler)
+    ..get('/api/place-photo', _placePhotoProxyHandler)
     ..get(
       '/api/places',
       (req) => _json(req, (_) async {
@@ -5685,6 +5687,77 @@ Future<Response> _adminPageHandler(Request request) async {
       'X-Admin-Build-Time': modifiedAt.toUtc().toIso8601String(),
     },
   );
+}
+
+Future<Response> _placePhotoProxyHandler(Request request) async {
+  final googleKey = Platform.environment['GOOGLE_MAPS_API_KEY']?.trim() ?? '';
+  if (googleKey.isEmpty) {
+    return jsonResponse(503, errorBody('尚未設定 GOOGLE_MAPS_API_KEY'));
+  }
+
+  final photoReference =
+      request.url.queryParameters['photo_reference']?.trim() ?? '';
+  if (photoReference.isEmpty) {
+    return jsonResponse(400, errorBody('缺少 photo_reference'));
+  }
+
+  final requestedMaxWidth = int.tryParse(
+    request.url.queryParameters['maxwidth'] ?? '',
+  );
+  final maxWidth = (requestedMaxWidth ?? 800).clamp(64, 1600);
+  final uri = Uri.https('maps.googleapis.com', '/maps/api/place/photo', {
+    'maxwidth': '$maxWidth',
+    'photo_reference': photoReference,
+    'key': googleKey,
+  });
+
+  final client = HttpClient()..connectionTimeout = const Duration(seconds: 12);
+  try {
+    final upstreamRequest = await client.getUrl(uri);
+    final upstreamResponse =
+        await upstreamRequest.close().timeout(const Duration(seconds: 20));
+    if (upstreamResponse.statusCode != 200) {
+      final body = await utf8.decodeStream(upstreamResponse).catchError(
+        (_) => '',
+      );
+      _log.warning(
+        'Place photo proxy failed: status=${upstreamResponse.statusCode} '
+        'photoReference=${photoReference.substring(0, min(12, photoReference.length))} '
+        'body=${body.toString().trim()}',
+      );
+      return Response(
+        upstreamResponse.statusCode,
+        body: body.isEmpty ? 'Failed to fetch place photo' : body,
+        headers: const {'content-type': 'text/plain; charset=utf-8'},
+      );
+    }
+
+    final bytesBuilder = await upstreamResponse.fold<BytesBuilder>(
+      BytesBuilder(copy: false),
+      (builder, chunk) {
+        builder.add(chunk);
+        return builder;
+      },
+    );
+    final contentType =
+        upstreamResponse.headers.contentType?.mimeType ?? 'image/jpeg';
+    return Response(
+      200,
+      body: bytesBuilder.takeBytes(),
+      headers: {
+        'content-type': contentType,
+        'cache-control': 'public, max-age=86400',
+      },
+    );
+  } on TimeoutException catch (error) {
+    _log.warning('Place photo proxy timeout: $error');
+    return jsonResponse(504, errorBody('景點圖片讀取逾時'));
+  } catch (error, stack) {
+    _log.warning('Place photo proxy error: $error', error, stack);
+    return jsonResponse(502, errorBody('景點圖片代理失敗'));
+  } finally {
+    client.close(force: true);
+  }
 }
 
 Response _emptySiteIconHandler(Request request) {

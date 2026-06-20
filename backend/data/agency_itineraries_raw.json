@@ -2,10 +2,616 @@
   "notes": "旅行社或部落格行程先整理成這個格式，再用 backend/scripts/import_agency_itineraries.py 轉成 historical_itineraries.json 可吃的 sample。type=place 的項目會優先嘗試對應資料庫景點；meal/hotel/note/departure 預設只進報表，不直接進訓練樣本。",
   "sources": [
     {
+      "id": "agency-www-welovetravel-com-tw-tw1d20008-branch-bb",
+      "title": "冬山河生態綠舟˙清水地熱˙飄移卡丁車˙赫蒂法莊園二日（分支 bb）",
+      "url": "https://www.welovetravel.com.tw/go67616/fun01/sche.php?c=TW1D20008",
+      "weight": 0.25,
+      "context": {
+        "interests": [
+          "handcraft_shop",
+          "hot_spring",
+          "national_park",
+          "night_market",
+          "restaurant",
+          "street_food"
+        ],
+        "tripPurpose": "relax",
+        "travelBehavior": "family",
+        "targetPrice": "mid",
+        "destinationCities": [
+          "宜蘭縣"
+        ]
+      },
+      "days": [
+        {
+          "date": "2026-01-01",
+          "dayStartTime": "10:10",
+          "title": "出發~雪隧~冬山河生態綠舟(安排電動小船)~甲富哥午餐~清水地熱(含接駁車)~三星落羽松~羅東夜市",
+          "items": [
+            {
+              "name": "冬山河生態綠舟",
+              "arrivalTime": "10:10",
+              "departureTime": "11:30",
+              "type": "place",
+              "notes": "冬山河生態綠舟是一個位於宜蘭冬山河畔的公園，佔地約18公頃，有豐富的自然生態和互動裝置，適合親子遊玩，園區中有鴨母船、駁..."
+            },
+            {
+              "name": "甲富哥活海產",
+              "arrivalTime": "12:00",
+              "departureTime": "13:00",
+              "type": "meal"
+            },
+            {
+              "name": "清水地熱谷",
+              "arrivalTime": "13:30",
+              "departureTime": "16:00",
+              "type": "place",
+              "notes": "可泡腳、溫泉蛋體驗"
+            },
+            {
+              "name": "三星落羽松",
+              "arrivalTime": "16:20",
+              "departureTime": "17:00",
+              "type": "place",
+              "notes": "三星落羽松是宜蘭縣三星鄉的一個秘境景點，位於安農溪畔，有近200株落羽松樹排列成兩排，中間是一片綠色的草坪，形成一道美麗...",
+              "city": "宜蘭縣"
+            },
+            {
+              "name": "下榻飯店",
+              "arrivalTime": "17:30",
+              "type": "hotel",
+              "notes": "在地小吃"
+            },
+            {
+              "name": "飯店晚餐",
+              "arrivalTime": "18:30",
+              "departureTime": "19:30",
+              "type": "meal"
+            }
+          ]
+        },
+        {
+          "date": "2026-01-02",
+          "dayStartTime": "09:30",
+          "title": "早餐~心花鹿Fun或 斑比山丘~飄移卡丁車或梅花湖單車~午餐~赫蒂法莊園~HOME快樂賦歸",
+          "items": [
+            {
+              "name": "斑比山丘",
+              "type": "place",
+              "arrivalTime": "09:30",
+              "departureTime": "10:30",
+              "notes": "和水豚君、小毛驢互動！ ※須配合預約入園時段"
+            },
+            {
+              "name": "梅花湖單車遊",
+              "type": "place",
+              "arrivalTime": "10:40",
+              "departureTime": "11:40",
+              "notes": "● 可依照個人需求來選擇&費用已包含"
+            },
+            {
+              "name": "中式桌餐",
+              "arrivalTime": "12:00",
+              "departureTime": "13:00",
+              "type": "meal"
+            },
+            {
+              "name": "赫蒂法莊園",
+              "arrivalTime": "13:30",
+              "departureTime": "14:30",
+              "type": "place",
+              "notes": "DIY體驗"
+            },
+            {
+              "name": "平安賦歸",
+              "arrivalTime": "17:00",
+              "type": "arrival"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "agency-www-welovetravel-com-tw-tw1d20008-branch-ba",
+      "title": "冬山河生態綠舟˙清水地熱˙飄移卡丁車˙赫蒂法莊園二日（分支 ba）",
+      "url": "https://www.welovetravel.com.tw/go67616/fun01/sche.php?c=TW1D20008",
+      "weight": 0.25,
+      "context": {
+        "interests": [
+          "handcraft_shop",
+          "hot_spring",
+          "national_park",
+          "night_market",
+          "restaurant",
+          "street_food"
+        ],
+        "tripPurpose": "relax",
+        "travelBehavior": "family",
+        "targetPrice": "mid",
+        "destinationCities": [
+          "宜蘭縣"
+        ]
+      },
+      "days": [
+        {
+          "date": "2026-01-01",
+          "dayStartTime": "10:10",
+          "title": "出發~雪隧~冬山河生態綠舟(安排電動小船)~甲富哥午餐~清水地熱(含接駁車)~三星落羽松~羅東夜市",
+          "items": [
+            {
+              "name": "冬山河生態綠舟",
+              "arrivalTime": "10:10",
+              "departureTime": "11:30",
+              "type": "place",
+              "notes": "冬山河生態綠舟是一個位於宜蘭冬山河畔的公園，佔地約18公頃，有豐富的自然生態和互動裝置，適合親子遊玩，園區中有鴨母船、駁..."
+            },
+            {
+              "name": "甲富哥活海產",
+              "arrivalTime": "12:00",
+              "departureTime": "13:00",
+              "type": "meal"
+            },
+            {
+              "name": "清水地熱谷",
+              "arrivalTime": "13:30",
+              "departureTime": "16:00",
+              "type": "place",
+              "notes": "可泡腳、溫泉蛋體驗"
+            },
+            {
+              "name": "三星落羽松",
+              "arrivalTime": "16:20",
+              "departureTime": "17:00",
+              "type": "place",
+              "notes": "三星落羽松是宜蘭縣三星鄉的一個秘境景點，位於安農溪畔，有近200株落羽松樹排列成兩排，中間是一片綠色的草坪，形成一道美麗...",
+              "city": "宜蘭縣"
+            },
+            {
+              "name": "下榻飯店",
+              "arrivalTime": "17:30",
+              "type": "hotel",
+              "notes": "在地小吃"
+            },
+            {
+              "name": "飯店晚餐",
+              "arrivalTime": "18:30",
+              "departureTime": "19:30",
+              "type": "meal"
+            }
+          ]
+        },
+        {
+          "date": "2026-01-02",
+          "dayStartTime": "09:30",
+          "title": "早餐~心花鹿Fun或 斑比山丘~飄移卡丁車或梅花湖單車~午餐~赫蒂法莊園~HOME快樂賦歸",
+          "items": [
+            {
+              "name": "斑比山丘",
+              "type": "place",
+              "arrivalTime": "09:30",
+              "departureTime": "10:30",
+              "notes": "和水豚君、小毛驢互動！ ※須配合預約入園時段"
+            },
+            {
+              "name": "梅花湖飄移卡丁車",
+              "type": "place",
+              "arrivalTime": "10:40",
+              "departureTime": "11:40",
+              "notes": "哇~現在梅花湖旁也有卡丁車賽車場囉!安全又能享受飄移的快感!!"
+            },
+            {
+              "name": "中式桌餐",
+              "arrivalTime": "12:00",
+              "departureTime": "13:00",
+              "type": "meal"
+            },
+            {
+              "name": "赫蒂法莊園",
+              "arrivalTime": "13:30",
+              "departureTime": "14:30",
+              "type": "place",
+              "notes": "DIY體驗"
+            },
+            {
+              "name": "平安賦歸",
+              "arrivalTime": "17:00",
+              "type": "arrival"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "agency-www-welovetravel-com-tw-tw1d20008-branch-ab",
+      "title": "冬山河生態綠舟˙清水地熱˙飄移卡丁車˙赫蒂法莊園二日（分支 ab）",
+      "url": "https://www.welovetravel.com.tw/go67616/fun01/sche.php?c=TW1D20008",
+      "weight": 0.25,
+      "context": {
+        "interests": [
+          "handcraft_shop",
+          "hot_spring",
+          "national_park",
+          "night_market",
+          "restaurant",
+          "street_food"
+        ],
+        "tripPurpose": "relax",
+        "travelBehavior": "family",
+        "targetPrice": "mid",
+        "destinationCities": [
+          "宜蘭縣"
+        ]
+      },
+      "days": [
+        {
+          "date": "2026-01-01",
+          "dayStartTime": "10:10",
+          "title": "出發~雪隧~冬山河生態綠舟(安排電動小船)~甲富哥午餐~清水地熱(含接駁車)~三星落羽松~羅東夜市",
+          "items": [
+            {
+              "name": "冬山河生態綠舟",
+              "arrivalTime": "10:10",
+              "departureTime": "11:30",
+              "type": "place",
+              "notes": "冬山河生態綠舟是一個位於宜蘭冬山河畔的公園，佔地約18公頃，有豐富的自然生態和互動裝置，適合親子遊玩，園區中有鴨母船、駁..."
+            },
+            {
+              "name": "甲富哥活海產",
+              "arrivalTime": "12:00",
+              "departureTime": "13:00",
+              "type": "meal"
+            },
+            {
+              "name": "清水地熱谷",
+              "arrivalTime": "13:30",
+              "departureTime": "16:00",
+              "type": "place",
+              "notes": "可泡腳、溫泉蛋體驗"
+            },
+            {
+              "name": "三星落羽松",
+              "arrivalTime": "16:20",
+              "departureTime": "17:00",
+              "type": "place",
+              "notes": "三星落羽松是宜蘭縣三星鄉的一個秘境景點，位於安農溪畔，有近200株落羽松樹排列成兩排，中間是一片綠色的草坪，形成一道美麗...",
+              "city": "宜蘭縣"
+            },
+            {
+              "name": "下榻飯店",
+              "arrivalTime": "17:30",
+              "type": "hotel",
+              "notes": "在地小吃"
+            },
+            {
+              "name": "飯店晚餐",
+              "arrivalTime": "18:30",
+              "departureTime": "19:30",
+              "type": "meal"
+            }
+          ]
+        },
+        {
+          "date": "2026-01-02",
+          "dayStartTime": "09:30",
+          "title": "早餐~心花鹿Fun或 斑比山丘~飄移卡丁車或梅花湖單車~午餐~赫蒂法莊園~HOME快樂賦歸",
+          "items": [
+            {
+              "name": "心花鹿Fun",
+              "type": "place",
+              "arrivalTime": "09:30",
+              "departureTime": "10:30",
+              "notes": "宜蘭梅花湖互動農場，零距離餵食小動物 ※須配合預約入園時段"
+            },
+            {
+              "name": "梅花湖單車遊",
+              "type": "place",
+              "arrivalTime": "10:40",
+              "departureTime": "11:40",
+              "notes": "● 可依照個人需求來選擇&費用已包含"
+            },
+            {
+              "name": "中式桌餐",
+              "arrivalTime": "12:00",
+              "departureTime": "13:00",
+              "type": "meal"
+            },
+            {
+              "name": "赫蒂法莊園",
+              "arrivalTime": "13:30",
+              "departureTime": "14:30",
+              "type": "place",
+              "notes": "DIY體驗"
+            },
+            {
+              "name": "平安賦歸",
+              "arrivalTime": "17:00",
+              "type": "arrival"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "agency-www-welovetravel-com-tw-tw1d20008-branch-aa",
+      "title": "冬山河生態綠舟˙清水地熱˙飄移卡丁車˙赫蒂法莊園二日（分支 aa）",
+      "url": "https://www.welovetravel.com.tw/go67616/fun01/sche.php?c=TW1D20008",
+      "weight": 0.25,
+      "context": {
+        "interests": [
+          "handcraft_shop",
+          "hot_spring",
+          "national_park",
+          "night_market",
+          "restaurant",
+          "street_food"
+        ],
+        "tripPurpose": "relax",
+        "travelBehavior": "family",
+        "targetPrice": "mid",
+        "destinationCities": [
+          "宜蘭縣"
+        ]
+      },
+      "days": [
+        {
+          "date": "2026-01-01",
+          "dayStartTime": "10:10",
+          "title": "出發~雪隧~冬山河生態綠舟(安排電動小船)~甲富哥午餐~清水地熱(含接駁車)~三星落羽松~羅東夜市",
+          "items": [
+            {
+              "name": "冬山河生態綠舟",
+              "arrivalTime": "10:10",
+              "departureTime": "11:30",
+              "type": "place",
+              "notes": "冬山河生態綠舟是一個位於宜蘭冬山河畔的公園，佔地約18公頃，有豐富的自然生態和互動裝置，適合親子遊玩，園區中有鴨母船、駁..."
+            },
+            {
+              "name": "甲富哥活海產",
+              "arrivalTime": "12:00",
+              "departureTime": "13:00",
+              "type": "meal"
+            },
+            {
+              "name": "清水地熱谷",
+              "arrivalTime": "13:30",
+              "departureTime": "16:00",
+              "type": "place",
+              "notes": "可泡腳、溫泉蛋體驗"
+            },
+            {
+              "name": "三星落羽松",
+              "arrivalTime": "16:20",
+              "departureTime": "17:00",
+              "type": "place",
+              "notes": "三星落羽松是宜蘭縣三星鄉的一個秘境景點，位於安農溪畔，有近200株落羽松樹排列成兩排，中間是一片綠色的草坪，形成一道美麗...",
+              "city": "宜蘭縣"
+            },
+            {
+              "name": "下榻飯店",
+              "arrivalTime": "17:30",
+              "type": "hotel",
+              "notes": "在地小吃"
+            },
+            {
+              "name": "飯店晚餐",
+              "arrivalTime": "18:30",
+              "departureTime": "19:30",
+              "type": "meal"
+            }
+          ]
+        },
+        {
+          "date": "2026-01-02",
+          "dayStartTime": "09:30",
+          "title": "早餐~心花鹿Fun或 斑比山丘~飄移卡丁車或梅花湖單車~午餐~赫蒂法莊園~HOME快樂賦歸",
+          "items": [
+            {
+              "name": "心花鹿Fun",
+              "type": "place",
+              "arrivalTime": "09:30",
+              "departureTime": "10:30",
+              "notes": "宜蘭梅花湖互動農場，零距離餵食小動物 ※須配合預約入園時段"
+            },
+            {
+              "name": "梅花湖飄移卡丁車",
+              "type": "place",
+              "arrivalTime": "10:40",
+              "departureTime": "11:40",
+              "notes": "哇~現在梅花湖旁也有卡丁車賽車場囉!安全又能享受飄移的快感!!"
+            },
+            {
+              "name": "中式桌餐",
+              "arrivalTime": "12:00",
+              "departureTime": "13:00",
+              "type": "meal"
+            },
+            {
+              "name": "赫蒂法莊園",
+              "arrivalTime": "13:30",
+              "departureTime": "14:30",
+              "type": "place",
+              "notes": "DIY體驗"
+            },
+            {
+              "name": "平安賦歸",
+              "arrivalTime": "17:00",
+              "type": "arrival"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "agency-www-welovetravel-com-tw-pkg2d20001",
+      "title": "【包車限定】火炎山步道˙日新島˙好望角˙享沐時光二日",
+      "url": "https://www.welovetravel.com.tw/go67616/fun01/sche.php?c=PKG2D20001",
+      "weight": 0.7,
+      "context": {
+        "interests": [
+          "handcraft_shop",
+          "hot_spring",
+          "national_park",
+          "restaurant",
+          "street_food"
+        ],
+        "tripPurpose": "relax",
+        "travelBehavior": "family",
+        "targetPrice": "mid",
+        "destinationCities": [
+          "苗栗縣",
+          "臺中市"
+        ]
+      },
+      "days": [
+        {
+          "date": "2026-01-01",
+          "dayStartTime": "09:30",
+          "title": "專車報到/出發~抵達苗栗~功維敘隧道~地瓜伯焦糖地瓜{每人一顆} ~ 鱺魚小吃店{38年在地老店}~ 日新島湖中島{下午茶、賞油桐} ~ 後龍好望角~苑裡在地小吃{金光魚丸&肉圓&香腸) ~ 享沐時光莊園{溫泉泡湯}",
+          "items": [
+            {
+              "name": "功維敘隧道",
+              "arrivalTime": "09:30",
+              "departureTime": "11:00",
+              "type": "place",
+              "notes": "導覽"
+            },
+            {
+              "name": "地瓜伯焦糖地瓜",
+              "arrivalTime": "11:20",
+              "departureTime": "11:30",
+              "type": "place",
+              "notes": "陳伯伯的地瓜從凌晨四五點就開始準備囉!每一爐烤好地瓜約需要80~90分鐘，大約從06:30擺攤到16:00多左右，地瓜伯..."
+            },
+            {
+              "name": "明德水庫日新島",
+              "arrivalTime": "13:15",
+              "departureTime": "15:00",
+              "type": "place",
+              "notes": "單車探索"
+            },
+            {
+              "name": "後龍~半天寮好望角",
+              "arrivalTime": "15:30",
+              "departureTime": "16:30",
+              "type": "place",
+              "notes": "後龍好望角位處濱海山丘制高點，居高臨下所望去的數拾公里港灣之美以及潮起、潮落、白浪滔滔一望無際的海洋"
+            },
+            {
+              "name": "苑裡美食",
+              "arrivalTime": "17:00",
+              "departureTime": "18:00",
+              "type": "place",
+              "notes": "金光肉圓： 飽滿Q彈的肉圓、口感帶點甜味的小魚丸焿湯、飄著淡淡酒香的香腸就是小店獨家的特色， 飄香近50載， 扎扎實實的..."
+            },
+            {
+              "name": "下榻飯店",
+              "arrivalTime": "18:30",
+              "type": "hotel",
+              "notes": "住宿與溫泉設施"
+            },
+            {
+              "name": "飯店晚餐",
+              "arrivalTime": "18:30",
+              "departureTime": "19:30",
+              "type": "meal"
+            }
+          ]
+        },
+        {
+          "date": "2026-01-02",
+          "dayStartTime": "08:00",
+          "title": "早餐 ~ 火炎山步道+南鞍古道 ~ 三義鄉村麵食館or開心小吃店 ~ 九鼎軒米食推薦 ~ 銅鑼茶廠 ~ 回程",
+          "items": [
+            {
+              "name": "火炎山自然步道 +南鞍古道",
+              "arrivalTime": "08:00",
+              "departureTime": "13:00",
+              "type": "place",
+              "notes": "巧克力DIY"
+            },
+            {
+              "name": "午餐",
+              "arrivalTime": "13:00",
+              "departureTime": "14:00",
+              "type": "meal"
+            },
+            {
+              "name": "九鼎軒",
+              "arrivalTime": "14:10",
+              "departureTime": "14:40",
+              "type": "place",
+              "notes": "這裡賣著各式客家米食，有好吃的肚臍餅、紅豆糕、艾草糕等等，價格略高一些，但是包裝很精美，是很精緻的伴手禮，也很適合自己買..."
+            },
+            {
+              "name": "銅鑼茶廠",
+              "arrivalTime": "15:00",
+              "departureTime": "16:00",
+              "type": "place",
+              "notes": "導覽"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "agency-www-welovetravel-com-tw-tw2d10013",
+      "title": "大坑步道˙東山棧米其林必比登推薦˙創意紙箱王一日",
+      "url": "https://www.welovetravel.com.tw/go67616/fun01/sche.php?c=TW2D10013",
+      "weight": 1,
+      "context": {
+        "interests": [
+          "national_park",
+          "restaurant",
+          "street_food"
+        ],
+        "tripPurpose": "explore",
+        "travelBehavior": "family",
+        "targetPrice": "low",
+        "destinationCities": [
+          "臺中市"
+        ]
+      },
+      "days": [
+        {
+          "date": "2026-01-01",
+          "dayStartTime": "09:30",
+          "title": "出發~大坑9+10號步道~東山棧|米其林必比登推薦~創意紙箱王~快樂賦歸!",
+          "items": [
+            {
+              "name": "大坑步道",
+              "arrivalTime": "09:30",
+              "departureTime": "12:00",
+              "type": "place",
+              "notes": "在地小吃"
+            },
+            {
+              "name": "東山棧",
+              "arrivalTime": "12:15",
+              "departureTime": "14:00",
+              "type": "meal",
+              "notes": "這間已經蟬連二年的米其林餐廳，連續於2020、2021、2022榮登台中米其林必比登推薦美食餐廳殊榮，這間從鐵皮屋發跡，..."
+            },
+            {
+              "name": "紙箱王創意園區",
+              "arrivalTime": "14:10",
+              "departureTime": "15:10",
+              "type": "place",
+              "notes": "台中大坑風景區一定要來逛逛獨特的紙箱王休閒園區 『世界獨創、台灣中部唯一的紙箱動物園』 紙箱動物園裡展示著各種用紙做成的..."
+            },
+            {
+              "name": "結束活動",
+              "arrivalTime": "16:00",
+              "type": "arrival"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "agency-taichung-3d2n-001",
       "title": "台中三天兩夜旅行社行程",
       "url": "https://example.com/taichung-3d2n",
-      "weight": 1.0,
+      "weight": 1,
       "context": {
         "interests": [
           "heritage",
@@ -223,7 +829,7 @@
       "id": "agency-miaoli-2d1n-001a",
       "title": "苗栗泰安溫泉二日遊 A版",
       "url": "https://www.welovetravel.com.tw/go67616/fun01/sche.php?c=TW1D20207",
-      "weight": 1.0,
+      "weight": 1,
       "context": {
         "interests": [
           "heritage",

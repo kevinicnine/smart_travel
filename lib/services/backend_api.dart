@@ -5,14 +5,39 @@ import 'package:http/http.dart' as http;
 
 class BackendApi {
   BackendApi._internal()
-    : baseUrl = const String.fromEnvironment(
-        'SMART_TRAVEL_API_BASE',
-        defaultValue: 'http://localhost:8080',
-      );
+      : baseUrl = const String.fromEnvironment(
+          'SMART_TRAVEL_API_BASE',
+          defaultValue: 'https://smart-travel-backend-6ant.onrender.com',
+        );
 
   static final BackendApi instance = BackendApi._internal();
 
   final String baseUrl;
+
+  String resolveImageUrl(String imageUrl) {
+    final trimmed = imageUrl.trim();
+    if (trimmed.isEmpty) return '';
+    final uri = Uri.tryParse(trimmed);
+    if (uri == null) return trimmed;
+
+    final isGooglePhoto = uri.host == 'maps.googleapis.com' &&
+        uri.path == '/maps/api/place/photo';
+    final photoReference = uri.queryParameters['photo_reference'];
+    if (!isGooglePhoto || photoReference == null || photoReference.isEmpty) {
+      return trimmed;
+    }
+
+    final maxWidth = uri.queryParameters['maxwidth'] ?? '800';
+    return Uri.parse(baseUrl)
+        .replace(
+          path: '/api/place-photo',
+          queryParameters: {
+            'photo_reference': photoReference,
+            'maxwidth': maxWidth,
+          },
+        )
+        .toString();
+  }
 
   Future<Map<String, dynamic>> sendEmailCode(String email) async {
     final response = await _post('/api/auth/send-email-code', {'email': email});

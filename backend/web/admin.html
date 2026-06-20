@@ -390,6 +390,85 @@
         gap: 20px;
         grid-template-columns: 1.2fr 1fr;
       }
+      .detail-stack {
+        display: grid;
+        gap: 16px;
+      }
+      .detail-card {
+        background: linear-gradient(180deg, #fff, #faf7f2);
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 16px;
+      }
+      .detail-card h4 {
+        margin: 0 0 10px;
+      }
+      .detail-card p {
+        margin: 0;
+        line-height: 1.6;
+      }
+      .detail-list {
+        margin: 8px 0 0;
+        padding-left: 18px;
+        display: grid;
+        gap: 6px;
+      }
+      .detail-list.compact {
+        gap: 4px;
+      }
+      .detail-sections {
+        display: grid;
+        gap: 12px;
+      }
+      .day-pills {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      .day-pill {
+        border-radius: 999px;
+        padding: 8px 12px;
+        font-size: 12px;
+      }
+      .day-pill.active {
+        background: var(--accent-soft);
+        border-color: #d9e2ff;
+        color: #37539a;
+      }
+      .mini-kv {
+        display: grid;
+        gap: 6px;
+        font-size: 13px;
+      }
+      .context-callout {
+        border-radius: 16px;
+        padding: 14px;
+        border: 1px solid var(--border);
+        background: #f9f6f2;
+      }
+      .context-callout.high {
+        background: #fff3e9;
+        border-color: #f2d1b2;
+      }
+      .context-callout.medium {
+        background: #fbf6ea;
+        border-color: #ead9b8;
+      }
+      .context-callout.low {
+        background: #f4f6fb;
+        border-color: #d8dff0;
+      }
+      .context-callout.ok {
+        background: #eef7f1;
+        border-color: #d2e6d7;
+      }
+      .subtle-panel {
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 12px;
+        background: rgba(255, 255, 255, 0.7);
+      }
       @media (max-width: 1100px) {
         .layout {
           grid-template-columns: 1fr;
@@ -959,7 +1038,11 @@
           </div>
           <button onclick="closePlanModal()">關閉</button>
         </div>
-        <div id="planSummary" style="margin-top:18px;"></div>
+        <div id="planSummary" class="detail-card" style="margin-top:18px;"></div>
+        <div class="detail-stack" style="margin-top:18px;">
+          <div id="planInsightPanel"></div>
+          <div id="planContextPanel"></div>
+        </div>
         <pre id="planJson" style="margin-top:18px;"></pre>
       </div>
     </div>
@@ -971,6 +1054,7 @@
         metrics: null,
         metricsTimer: null,
         crawlTimer: null,
+        activePlan: null,
         trainingSnapshot: null,
         trainingPlanPreview: null,
         trainingAgencyUrlPreview: null,
@@ -1067,6 +1151,264 @@
         const num = Number(value ?? 0);
         if (!Number.isFinite(num)) return '0%';
         return `${num.toFixed(1)}%`;
+      }
+
+      function todayTaipeiDateKey() {
+        const formatter = new Intl.DateTimeFormat('en-US', {
+          timeZone: 'Asia/Taipei',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+        });
+        const parts = formatter.formatToParts(new Date());
+        const year = parts.find((part) => part.type === 'year')?.value || '0000';
+        const month = parts.find((part) => part.type === 'month')?.value || '00';
+        const day = parts.find((part) => part.type === 'day')?.value || '00';
+        return `${year}-${month}-${day}`;
+      }
+
+      function normalizePlanDateKey(value) {
+        return String(value || '').trim().slice(0, 10);
+      }
+
+      function findRelevantPlanDayIndex(days) {
+        if (!Array.isArray(days) || !days.length) return 0;
+        const today = todayTaipeiDateKey();
+        const todayIndex = days.findIndex((day) => normalizePlanDateKey(day?.date) === today);
+        if (todayIndex >= 0) return todayIndex;
+        const upcomingIndex = days.findIndex((day) => {
+          const date = normalizePlanDateKey(day?.date);
+          return date && date >= today;
+        });
+        return upcomingIndex >= 0 ? upcomingIndex : 0;
+      }
+
+      function renderDetailList(items, cls = '') {
+        if (!Array.isArray(items) || !items.length) return '';
+        return `<ul class="detail-list ${cls}">${items
+          .map((item) => `<li>${escapeHtml(item)}</li>`)
+          .join('')}</ul>`;
+      }
+
+      function contextSeverityBadge(severity) {
+        if (severity === 'high') return badge('高風險', 'danger');
+        if (severity === 'medium') return badge('注意', 'warn');
+        if (severity === 'low') return badge('提醒', 'info');
+        return badge('正常', 'ok');
+      }
+
+      function renderPlanSummary(plan, selectedDayIndex) {
+        const days = Array.isArray(plan?.days) ? plan.days : [];
+        const totalStops = days.reduce((sum, day) => {
+          const items = Array.isArray(day?.items) ? day.items : [];
+          return sum + items.length;
+        }, 0);
+        const selectedDay = days[selectedDayIndex] || null;
+        const selectedDayDate = normalizePlanDateKey(selectedDay?.date);
+        const startDate = normalizePlanDateKey(plan?.meta?.startDate) || plan?.meta?.startDate || '-';
+        const endDate = normalizePlanDateKey(plan?.meta?.endDate) || plan?.meta?.endDate || '-';
+        return `
+          <h4>有效行程摘要</h4>
+          <div class="kv"><strong>地區</strong><div>${escapeHtml(plan?.meta?.location || '-')}</div></div>
+          <div class="kv"><strong>日期</strong><div>${escapeHtml(startDate)} ~ ${escapeHtml(endDate)}</div></div>
+          <div class="kv"><strong>天數 / 景點數</strong><div>${days.length} 天 / ${totalStops} 站</div></div>
+          <div class="kv"><strong>目前檢視</strong><div>${selectedDay ? `第 ${selectedDayIndex + 1} 天${selectedDayDate ? ` · ${escapeHtml(selectedDayDate)}` : ''}` : '-'}</div></div>
+        `;
+      }
+
+      function renderPlanInsightPanel(insight) {
+        const container = document.getElementById('planInsightPanel');
+        if (!insight || typeof insight !== 'object') {
+          container.innerHTML = `
+            <div class="detail-card">
+              <h4>行程解釋</h4>
+              <div class="empty">這份有效行程目前沒有行程解釋資料。</div>
+            </div>
+          `;
+          return;
+        }
+        const sections = [
+          insight.summary
+            ? `<div><strong>摘要</strong><p style="margin-top:6px;">${escapeHtml(insight.summary)}</p></div>`
+            : '',
+          insight.planningFocus
+            ? `<div><strong>AI 規劃焦點</strong><p style="margin-top:6px;">${escapeHtml(insight.planningFocus)}</p></div>`
+            : '',
+          insight.alternativePlan
+            ? `<div><strong>替代方案</strong><p style="margin-top:6px;">${escapeHtml(insight.alternativePlan)}</p></div>`
+            : '',
+          insight.routeReason
+            ? `<div><strong>順路原因</strong><p style="margin-top:6px;">${escapeHtml(insight.routeReason)}</p></div>`
+            : '',
+          insight.userLikeReason
+            ? `<div><strong>喜好匹配</strong><p style="margin-top:6px;">${escapeHtml(insight.userLikeReason)}</p></div>`
+            : '',
+          insight.pacing
+            ? `<div><strong>節奏判斷</strong><p style="margin-top:6px;">${escapeHtml(insight.pacing)}</p></div>`
+            : '',
+          insight.mealPlan
+            ? `<div><strong>餐食安排</strong><p style="margin-top:6px;">${escapeHtml(insight.mealPlan)}</p></div>`
+            : '',
+          Array.isArray(insight.warnings) && insight.warnings.length
+            ? `<div><strong>AI 提醒</strong>${renderDetailList(insight.warnings.slice(0, 3), 'compact')}</div>`
+            : '',
+          Array.isArray(insight.improvements) && insight.improvements.length
+            ? `<div><strong>AI 改善建議</strong>${renderDetailList(insight.improvements.slice(0, 3), 'compact')}</div>`
+            : '',
+          Array.isArray(insight.tips) && insight.tips.length
+            ? `<div><strong>補充提示</strong>${renderDetailList(insight.tips.slice(0, 3), 'compact')}</div>`
+            : '',
+        ].filter(Boolean);
+        container.innerHTML = `
+          <div class="detail-card">
+            <h4>${escapeHtml(insight.source === 'gpt' ? 'GPT 行程解釋' : '行程解釋')}</h4>
+            <div class="detail-sections">${sections.join('') || '<div class="empty">沒有可顯示內容。</div>'}</div>
+          </div>
+        `;
+      }
+
+      function renderContextReminder(reminder) {
+        if (!reminder || typeof reminder !== 'object') return '';
+        const notes = Array.isArray(reminder.notes) ? reminder.notes.slice(0, 2) : [];
+        return `
+          <div class="subtle-panel">
+            <strong>即將前往 ${escapeHtml(reminder.targetPlaceName || '下一站')}${reminder.scheduledTime ? ` · ${escapeHtml(reminder.scheduledTime)}` : ''}</strong>
+            <div class="mini-kv" style="margin-top:8px;">
+              ${reminder.transitLabel || reminder.transitMinutes != null ? `<div>建議交通：${escapeHtml(reminder.transitLabel || '依目前路況前往')}${reminder.transitMinutes != null ? `，約 ${escapeHtml(reminder.transitMinutes)} 分鐘` : ''}</div>` : ''}
+              ${reminder.minutesUntil != null ? `<div>距離出發約 ${escapeHtml(reminder.minutesUntil)} 分鐘。</div>` : ''}
+            </div>
+            ${renderDetailList(notes, 'compact')}
+          </div>
+        `;
+      }
+
+      function renderContextNextAction(action) {
+        if (!action || typeof action !== 'object') return '';
+        const alts = Array.isArray(action.alternatives) ? action.alternatives.slice(0, 2) : [];
+        return `
+          <div class="subtle-panel">
+            <strong>${escapeHtml(action.title || '調整建議')}</strong>
+            <p style="margin-top:8px;">${escapeHtml(action.message || '')}</p>
+            ${action.recommendedAction ? `<p style="margin-top:8px;"><strong>建議操作</strong>：${escapeHtml(action.recommendedAction)}</p>` : ''}
+            ${alts.length ? `<div style="margin-top:8px;"><strong>替代點</strong>${renderDetailList(alts.map((alt) => `${alt.name || '未命名景點'}${alt.rating != null ? ` ${Number(alt.rating).toFixed(1)}★` : ''}${alt.city ? ` · ${alt.city}` : ''}`), 'compact')}</div>` : ''}
+          </div>
+        `;
+      }
+
+      function renderContextBackupPlans(plans) {
+        if (!Array.isArray(plans) || !plans.length) return '';
+        return plans.slice(0, 2).map((plan) => {
+          const replacements = Array.isArray(plan.replacements) ? plan.replacements.slice(0, 2) : [];
+          return `
+            <div class="subtle-panel">
+              <strong>${escapeHtml(plan.targetPlaceName || '原景點')}</strong>
+              <p style="margin-top:8px;">${escapeHtml(plan.reason || '')}</p>
+              ${replacements.length ? `<div style="margin-top:8px;"><strong>備案</strong>${renderDetailList(replacements.map((item) => `${item.name || '未命名景點'}${item.rating != null ? ` ${Number(item.rating).toFixed(1)}★` : ''}${item.city ? ` · ${item.city}` : ''}`), 'compact')}</div>` : ''}
+            </div>
+          `;
+        }).join('');
+      }
+
+      function renderPlanContextPanel(plan, selectedDayIndex, options = {}) {
+        const container = document.getElementById('planContextPanel');
+        const days = Array.isArray(plan?.days) ? plan.days : [];
+        if (!days.length) {
+          container.innerHTML = '';
+          return;
+        }
+        const selectedDay = days[selectedDayIndex] || null;
+        const dayButtons = days.map((day, index) => `
+          <button class="day-pill ${index === selectedDayIndex ? 'active' : ''}" onclick="selectActivePlanDay(${index})">
+            第 ${index + 1} 天${normalizePlanDateKey(day?.date) ? ` · ${escapeHtml(normalizePlanDateKey(day?.date))}` : ''}
+          </button>
+        `).join('');
+        let body = '<div class="empty">尚未載入情境感知資料。</div>';
+        if (options.loading) {
+          body = '<div class="context-callout low"><p>正在分析這一天的天氣、營業時間與交通狀況...</p></div>';
+        } else if (options.error) {
+          body = `<div class="empty">${escapeHtml(options.error)}</div>`;
+        } else if (options.result) {
+          const result = options.result;
+          const alerts = Array.isArray(result.alerts) ? result.alerts.slice(0, 3) : [];
+          const suggestions = Array.isArray(result.suggestions) ? result.suggestions.slice(0, 3) : [];
+          const sections = [
+            renderContextReminder(result.upcomingReminder),
+            renderContextNextAction(result.nextAction),
+            alerts.length
+              ? `<div><strong>提醒項目</strong>${renderDetailList(alerts.map((item) => `${item.title || '提醒'}：${item.message || ''}`), 'compact')}</div>`
+              : '',
+            suggestions.length
+              ? `<div><strong>即時建議</strong>${renderDetailList(suggestions, 'compact')}</div>`
+              : '',
+            result.backupPlans?.length
+              ? `<div><strong>雨備／室內備案</strong><div class="detail-stack" style="margin-top:8px;">${renderContextBackupPlans(result.backupPlans)}</div></div>`
+              : '',
+          ].filter(Boolean);
+          body = `
+            <div class="context-callout ${escapeHtml(result.severity || 'ok')}">
+              <div class="inline-actions" style="justify-content:space-between; align-items:center;">
+                <strong>情境總結</strong>
+                <span>${contextSeverityBadge(result.severity || 'ok')}</span>
+              </div>
+              <p style="margin-top:8px;">${escapeHtml(result.summary || '目前沒有重大異常。')}</p>
+              ${result.linePushed ? `<div style="margin-top:8px;">${badge('已推播到 LINE', 'ok')}</div>` : ''}
+            </div>
+            <div class="detail-sections" style="margin-top:12px;">
+              ${sections.join('') || '<div class="empty">這一天目前沒有額外提醒。</div>'}
+            </div>
+          `;
+        }
+        container.innerHTML = `
+          <div class="detail-card">
+            <h4>情境感知提醒${normalizePlanDateKey(selectedDay?.date) ? ` · ${escapeHtml(normalizePlanDateKey(selectedDay?.date))}` : ''}</h4>
+            <div class="day-pills">${dayButtons}</div>
+            ${body}
+          </div>
+        `;
+      }
+
+      async function selectActivePlanDay(index) {
+        const activePlan = state.activePlan;
+        if (!activePlan || !Array.isArray(activePlan.plan?.days)) return;
+        if (index < 0 || index >= activePlan.plan.days.length) return;
+        activePlan.selectedDayIndex = index;
+        document.getElementById('planSummary').innerHTML = renderPlanSummary(
+          activePlan.plan,
+          activePlan.selectedDayIndex,
+        );
+        renderPlanContextPanel(activePlan.plan, activePlan.selectedDayIndex, {
+          loading: true,
+        });
+        const day = activePlan.plan.days[index];
+        if (!day || typeof day !== 'object') {
+          renderPlanContextPanel(activePlan.plan, activePlan.selectedDayIndex, {
+            error: '這一天的行程資料格式不正確。',
+          });
+          return;
+        }
+        const requestId = (activePlan.contextRequestId || 0) + 1;
+        activePlan.contextRequestId = requestId;
+        try {
+          const data = await publicJsonFetch('/api/travel/context-awareness', {
+            day,
+            userId: activePlan.userId,
+            triggerLinePush: false,
+            currentTime: new Date().toISOString(),
+          });
+          if (!state.activePlan || state.activePlan.contextRequestId !== requestId) {
+            return;
+          }
+          renderPlanContextPanel(activePlan.plan, activePlan.selectedDayIndex, {
+            result: data.data || null,
+          });
+        } catch (error) {
+          if (!state.activePlan || state.activePlan.contextRequestId !== requestId) {
+            return;
+          }
+          renderPlanContextPanel(activePlan.plan, activePlan.selectedDayIndex, {
+            error: error.message || '讀取情境感知失敗',
+          });
+        }
       }
 
       function statusBadge(ok, okText = '正常', badText = '未設定') {
@@ -1361,15 +1703,15 @@
               <td>${formatDateTime(row.timestamp)}</td>
               <td>${escapeHtml(row.source || '-')}</td>
               <td>${row.syncedPlans ?? 0}</td>
-              <td>${row.scannedUsers ?? 0}</td>
+              <td title="${escapeHtml(JSON.stringify(row.upcomingChecks || []))}">${row.actualScanned ?? row.scannedUsers ?? 0}</td>
               <td>${row.todayPlanUsers ?? 0} / ${row.tomorrowPlanUsers ?? 0}</td>
               <td>${row.lineEligibleUsers ?? 0}</td>
-              <td class="muted" title="未綁 LINE / 推播未開 / 行程格式錯誤">
-                ${row.skippedNoLineBinding ?? 0} / ${row.skippedPushDisabled ?? 0} / ${row.skippedInvalidPlan ?? 0}
+              <td class="muted" title="未綁 LINE / 推播未開 / 無今日行程 / 行程格式錯誤">
+                ${row.skippedNoLineBinding ?? 0} / ${row.skippedPushDisabled ?? 0} / ${row.skippedNoTodayPlan ?? 0} / ${row.skippedInvalidPlan ?? 0}
               </td>
               <td>${row.linePushed ?? 0}</td>
               <td>${row.tomorrowSummariesPushed ?? 0}</td>
-              <td>${row.upcomingRemindersPushed ?? 0}</td>
+              <td title="${escapeHtml(JSON.stringify(row.upcomingChecks || []))}">${row.upcomingRemindersPushed ?? 0}</td>
               <td>${row.status === 'success' || !row.status ? badge('成功', 'ok') : badge(row.status === 'partial' ? '部分失敗' : '失敗', 'danger')}</td>
               <td>${row.durationMs ?? 0} ms</td>
               <td title="${escapeHtml(JSON.stringify(row.errors || []))}">${row.failedUsers ?? 0}</td>
@@ -1385,7 +1727,7 @@
             <tr>
               <td>${formatDateTime(row.timestamp)}</td>
               <td>${escapeHtml(row.source || '-')}</td>
-              <td>${row.scannedUsers ?? 0}</td>
+              <td>${row.actualScanned ?? row.scannedUsers ?? 0}</td>
               <td>${row.linePushed ?? 0}</td>
             </tr>
           `,
@@ -2594,22 +2936,29 @@
           document.getElementById('planModalMeta').innerText = data.data?.activePlanUpdatedAt
             ? `最後同步：${formatDateTime(data.data.activePlanUpdatedAt)}`
             : '尚未同步有效行程';
+          state.activePlan = null;
           if (!plan || !Array.isArray(plan.days)) {
-            document.getElementById('planSummary').innerHTML = '<div class="empty">目前沒有有效行程資料。</div>';
+            document.getElementById('planSummary').innerHTML = '<h4>有效行程摘要</h4><div class="empty">目前沒有有效行程資料。</div>';
+            document.getElementById('planInsightPanel').innerHTML = '';
+            document.getElementById('planContextPanel').innerHTML = '';
             document.getElementById('planJson').innerText = '';
           } else {
-            const days = plan.days || [];
-            const totalStops = days.reduce((sum, day) => {
-              const items = Array.isArray(day.items) ? day.items : [];
-              return sum + items.length;
-            }, 0);
-            const summaryHtml = `
-              <div class="kv"><strong>地區</strong><div>${escapeHtml(plan.meta?.location || '-')}</div></div>
-              <div class="kv"><strong>日期</strong><div>${escapeHtml(plan.meta?.startDate || '-')} ~ ${escapeHtml(plan.meta?.endDate || '-')}</div></div>
-              <div class="kv"><strong>天數 / 景點數</strong><div>${days.length} 天 / ${totalStops} 站</div></div>
-            `;
-            document.getElementById('planSummary').innerHTML = summaryHtml;
+            const selectedDayIndex = findRelevantPlanDayIndex(plan.days);
+            state.activePlan = {
+              userId,
+              username,
+              plan,
+              selectedDayIndex,
+              contextRequestId: 0,
+            };
+            document.getElementById('planSummary').innerHTML = renderPlanSummary(
+              plan,
+              selectedDayIndex,
+            );
+            renderPlanInsightPanel(plan.insight);
+            renderPlanContextPanel(plan, selectedDayIndex, { loading: true });
             document.getElementById('planJson').innerText = JSON.stringify(plan, null, 2);
+            void selectActivePlanDay(selectedDayIndex);
           }
           document.getElementById('planModal').classList.add('open');
         } catch (error) {
@@ -2618,6 +2967,7 @@
       }
 
       function closePlanModal() {
+        state.activePlan = null;
         document.getElementById('planModal').classList.remove('open');
       }
 
@@ -2647,7 +2997,8 @@
         status.innerText = '提醒掃描執行中...';
         try {
           const data = await apiFetch('/reminders/run-now', { method: 'POST' });
-          status.innerText = `掃描完成：${data.data.scannedUsers || 0} 位，已推播 ${data.data.linePushed || 0} 則。`;
+          const actualScanned = data.data.actualScanned ?? data.data.scannedUsers ?? 0;
+          status.innerText = `掃描完成：實際掃描 ${actualScanned} 位，已推播 ${data.data.linePushed || 0} 則。`;
           loadMetrics();
         } catch (error) {
           status.innerText = error.message || '提醒掃描失敗';

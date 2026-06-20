@@ -1,17 +1,474 @@
 {
-  "generatedAt": "2026-06-04T16:40:57.845226Z",
+  "generatedAt": "2026-06-07T17:20:44.699209Z",
   "source": "/Users/kevinicnine/Desktop/smart_travel/backend/data/agency_itineraries_raw.json",
-  "placesSource": "remote",
-  "samplesGenerated": 2,
-  "matchedItems": 6,
-  "unmatchedItems": 20,
-  "skippedItems": 10,
+  "placesSource": "local",
+  "samplesGenerated": 9,
+  "matchedItems": 59,
+  "unmatchedItems": 0,
+  "skippedItems": 46,
   "sources": [
+    {
+      "id": "agency-www-welovetravel-com-tw-tw1d20101",
+      "title": "大板根森林溫泉˙北埔文化導覽˙番茄園˙三峽二日遊[2026]",
+      "url": "https://www.welovetravel.com.tw/go67616/fun01/sche.php?c=TW1D20101",
+      "matchedItems": [
+        {
+          "sourceName": "北埔老街",
+          "matchedPlaceId": "ChIJ_____09PaDQR8ZY0EY7i9Os",
+          "matchedPlaceName": "北埔老街"
+        },
+        {
+          "sourceName": "金勇番茄園",
+          "matchedPlaceId": "ChIJTYYcPbk-aDQRxw1Af1m6ZsU",
+          "matchedPlaceName": "金勇番茄農場",
+          "override": true
+        },
+        {
+          "sourceName": "三峽老街散策",
+          "matchedPlaceId": "ChIJAQAAAAD_ZzQRNBVBgWpAXiE",
+          "matchedPlaceName": "三峽老街"
+        },
+        {
+          "sourceName": "手信坊創意和菓子文化館",
+          "matchedPlaceId": "ChIJ1TXpWMICaDQRwDyaYsuHArs",
+          "matchedPlaceName": "手信坊創意和菓子文化館"
+        }
+      ],
+      "unmatchedItems": [],
+      "skippedItems": [
+        {
+          "name": "泥磚屋客家菜餐廳",
+          "type": "meal",
+          "reason": "manual_override_ignore"
+        },
+        {
+          "name": "三峽， 準備下榻大板根溫泉飯店",
+          "type": "hotel",
+          "reason": "item_type_skipped"
+        },
+        {
+          "name": "飯店晚餐",
+          "type": "meal",
+          "reason": "manual_override_ignore"
+        },
+        {
+          "name": "飯店退房出發",
+          "type": "departure",
+          "reason": "item_type_skipped"
+        },
+        {
+          "name": "返回",
+          "type": "place",
+          "reason": "manual_override_ignore"
+        },
+        {
+          "name": "平安賦歸",
+          "type": "arrival",
+          "reason": "item_type_skipped"
+        }
+      ]
+    },
+    {
+      "id": "agency-www-welovetravel-com-tw-tw1d20008-branch-bb",
+      "title": "冬山河生態綠舟˙清水地熱˙飄移卡丁車˙赫蒂法莊園二日（分支 bb）",
+      "url": "https://www.welovetravel.com.tw/go67616/fun01/sche.php?c=TW1D20008",
+      "matchedItems": [
+        {
+          "sourceName": "冬山河生態綠舟",
+          "matchedPlaceId": "C1_376420000A_000259",
+          "matchedPlaceName": "冬山河生態綠舟"
+        },
+        {
+          "sourceName": "清水地熱谷",
+          "matchedPlaceId": "ChIJ41ndNUKuQjQRMNxmakljOCI",
+          "matchedPlaceName": "地熱谷"
+        },
+        {
+          "sourceName": "三星落羽松",
+          "matchedPlaceId": "ChIJJe85GwbhZzQRbFfvUuLovSM",
+          "matchedPlaceName": "三星落羽松",
+          "override": true
+        },
+        {
+          "sourceName": "斑比山丘",
+          "matchedPlaceId": "ChIJwT71ucHnZzQRes_f4T3OmrE",
+          "matchedPlaceName": "宜蘭-斑比山丘",
+          "override": true
+        },
+        {
+          "sourceName": "梅花湖單車遊",
+          "matchedPlaceId": "ChIJ7RubbibnZzQRA8A3eSqKblM",
+          "matchedPlaceName": "梅花湖",
+          "override": true
+        },
+        {
+          "sourceName": "赫蒂法莊園",
+          "matchedPlaceId": "ChIJh23SAonpZzQR5Bf7yysU_30",
+          "matchedPlaceName": "Healtdeva 赫蒂法莊園"
+        }
+      ],
+      "unmatchedItems": [],
+      "skippedItems": [
+        {
+          "name": "甲富哥活海產",
+          "type": "meal",
+          "reason": "manual_override_ignore"
+        },
+        {
+          "name": "下榻飯店",
+          "type": "hotel",
+          "reason": "item_type_skipped"
+        },
+        {
+          "name": "飯店晚餐",
+          "type": "meal",
+          "reason": "manual_override_ignore"
+        },
+        {
+          "name": "中式桌餐",
+          "type": "meal",
+          "reason": "manual_override_ignore"
+        },
+        {
+          "name": "平安賦歸",
+          "type": "arrival",
+          "reason": "item_type_skipped"
+        }
+      ]
+    },
+    {
+      "id": "agency-www-welovetravel-com-tw-tw1d20008-branch-ba",
+      "title": "冬山河生態綠舟˙清水地熱˙飄移卡丁車˙赫蒂法莊園二日（分支 ba）",
+      "url": "https://www.welovetravel.com.tw/go67616/fun01/sche.php?c=TW1D20008",
+      "matchedItems": [
+        {
+          "sourceName": "冬山河生態綠舟",
+          "matchedPlaceId": "C1_376420000A_000259",
+          "matchedPlaceName": "冬山河生態綠舟"
+        },
+        {
+          "sourceName": "清水地熱谷",
+          "matchedPlaceId": "ChIJ41ndNUKuQjQRMNxmakljOCI",
+          "matchedPlaceName": "地熱谷"
+        },
+        {
+          "sourceName": "三星落羽松",
+          "matchedPlaceId": "ChIJJe85GwbhZzQRbFfvUuLovSM",
+          "matchedPlaceName": "三星落羽松",
+          "override": true
+        },
+        {
+          "sourceName": "斑比山丘",
+          "matchedPlaceId": "ChIJwT71ucHnZzQRes_f4T3OmrE",
+          "matchedPlaceName": "宜蘭-斑比山丘",
+          "override": true
+        },
+        {
+          "sourceName": "梅花湖飄移卡丁車",
+          "matchedPlaceId": "ChIJk8Vt_rXnZzQRayQXKEtst9o",
+          "matchedPlaceName": "梅花湖卡丁車",
+          "override": true
+        },
+        {
+          "sourceName": "赫蒂法莊園",
+          "matchedPlaceId": "ChIJh23SAonpZzQR5Bf7yysU_30",
+          "matchedPlaceName": "Healtdeva 赫蒂法莊園"
+        }
+      ],
+      "unmatchedItems": [],
+      "skippedItems": [
+        {
+          "name": "甲富哥活海產",
+          "type": "meal",
+          "reason": "manual_override_ignore"
+        },
+        {
+          "name": "下榻飯店",
+          "type": "hotel",
+          "reason": "item_type_skipped"
+        },
+        {
+          "name": "飯店晚餐",
+          "type": "meal",
+          "reason": "manual_override_ignore"
+        },
+        {
+          "name": "中式桌餐",
+          "type": "meal",
+          "reason": "manual_override_ignore"
+        },
+        {
+          "name": "平安賦歸",
+          "type": "arrival",
+          "reason": "item_type_skipped"
+        }
+      ]
+    },
+    {
+      "id": "agency-www-welovetravel-com-tw-tw1d20008-branch-ab",
+      "title": "冬山河生態綠舟˙清水地熱˙飄移卡丁車˙赫蒂法莊園二日（分支 ab）",
+      "url": "https://www.welovetravel.com.tw/go67616/fun01/sche.php?c=TW1D20008",
+      "matchedItems": [
+        {
+          "sourceName": "冬山河生態綠舟",
+          "matchedPlaceId": "C1_376420000A_000259",
+          "matchedPlaceName": "冬山河生態綠舟"
+        },
+        {
+          "sourceName": "清水地熱谷",
+          "matchedPlaceId": "ChIJ41ndNUKuQjQRMNxmakljOCI",
+          "matchedPlaceName": "地熱谷"
+        },
+        {
+          "sourceName": "三星落羽松",
+          "matchedPlaceId": "ChIJJe85GwbhZzQRbFfvUuLovSM",
+          "matchedPlaceName": "三星落羽松",
+          "override": true
+        },
+        {
+          "sourceName": "心花鹿Fun",
+          "matchedPlaceId": "ChIJpXCVcA3nZzQR1zyfvFCudf4",
+          "matchedPlaceName": "心花鹿Fun農場",
+          "override": true
+        },
+        {
+          "sourceName": "梅花湖單車遊",
+          "matchedPlaceId": "ChIJ7RubbibnZzQRA8A3eSqKblM",
+          "matchedPlaceName": "梅花湖",
+          "override": true
+        },
+        {
+          "sourceName": "赫蒂法莊園",
+          "matchedPlaceId": "ChIJh23SAonpZzQR5Bf7yysU_30",
+          "matchedPlaceName": "Healtdeva 赫蒂法莊園"
+        }
+      ],
+      "unmatchedItems": [],
+      "skippedItems": [
+        {
+          "name": "甲富哥活海產",
+          "type": "meal",
+          "reason": "manual_override_ignore"
+        },
+        {
+          "name": "下榻飯店",
+          "type": "hotel",
+          "reason": "item_type_skipped"
+        },
+        {
+          "name": "飯店晚餐",
+          "type": "meal",
+          "reason": "manual_override_ignore"
+        },
+        {
+          "name": "中式桌餐",
+          "type": "meal",
+          "reason": "manual_override_ignore"
+        },
+        {
+          "name": "平安賦歸",
+          "type": "arrival",
+          "reason": "item_type_skipped"
+        }
+      ]
+    },
+    {
+      "id": "agency-www-welovetravel-com-tw-tw1d20008-branch-aa",
+      "title": "冬山河生態綠舟˙清水地熱˙飄移卡丁車˙赫蒂法莊園二日（分支 aa）",
+      "url": "https://www.welovetravel.com.tw/go67616/fun01/sche.php?c=TW1D20008",
+      "matchedItems": [
+        {
+          "sourceName": "冬山河生態綠舟",
+          "matchedPlaceId": "C1_376420000A_000259",
+          "matchedPlaceName": "冬山河生態綠舟"
+        },
+        {
+          "sourceName": "清水地熱谷",
+          "matchedPlaceId": "ChIJ41ndNUKuQjQRMNxmakljOCI",
+          "matchedPlaceName": "地熱谷"
+        },
+        {
+          "sourceName": "三星落羽松",
+          "matchedPlaceId": "ChIJJe85GwbhZzQRbFfvUuLovSM",
+          "matchedPlaceName": "三星落羽松",
+          "override": true
+        },
+        {
+          "sourceName": "心花鹿Fun",
+          "matchedPlaceId": "ChIJpXCVcA3nZzQR1zyfvFCudf4",
+          "matchedPlaceName": "心花鹿Fun農場",
+          "override": true
+        },
+        {
+          "sourceName": "梅花湖飄移卡丁車",
+          "matchedPlaceId": "ChIJk8Vt_rXnZzQRayQXKEtst9o",
+          "matchedPlaceName": "梅花湖卡丁車",
+          "override": true
+        },
+        {
+          "sourceName": "赫蒂法莊園",
+          "matchedPlaceId": "ChIJh23SAonpZzQR5Bf7yysU_30",
+          "matchedPlaceName": "Healtdeva 赫蒂法莊園"
+        }
+      ],
+      "unmatchedItems": [],
+      "skippedItems": [
+        {
+          "name": "甲富哥活海產",
+          "type": "meal",
+          "reason": "manual_override_ignore"
+        },
+        {
+          "name": "下榻飯店",
+          "type": "hotel",
+          "reason": "item_type_skipped"
+        },
+        {
+          "name": "飯店晚餐",
+          "type": "meal",
+          "reason": "manual_override_ignore"
+        },
+        {
+          "name": "中式桌餐",
+          "type": "meal",
+          "reason": "manual_override_ignore"
+        },
+        {
+          "name": "平安賦歸",
+          "type": "arrival",
+          "reason": "item_type_skipped"
+        }
+      ]
+    },
+    {
+      "id": "agency-www-welovetravel-com-tw-pkg2d20001",
+      "title": "【包車限定】火炎山步道˙日新島˙好望角˙享沐時光二日",
+      "url": "https://www.welovetravel.com.tw/go67616/fun01/sche.php?c=PKG2D20001",
+      "matchedItems": [
+        {
+          "sourceName": "功維敘隧道",
+          "matchedPlaceId": "ChIJd-I66vuraTQRbRqPZY-q3zo",
+          "matchedPlaceName": "功維敘隧道"
+        },
+        {
+          "sourceName": "明德水庫日新島",
+          "matchedPlaceId": "ChIJAQAAACxTaDQR-CCEsACmkUA",
+          "matchedPlaceName": "日新島"
+        },
+        {
+          "sourceName": "後龍~半天寮好望角",
+          "matchedPlaceId": "ChIJVVVVVWWuaTQRsf_BtcIo5Yo",
+          "matchedPlaceName": "後龍好望角風景區",
+          "override": true
+        },
+        {
+          "sourceName": "火炎山自然步道 +南鞍古道",
+          "matchedPlaceId": "ChIJa1xezXAFaTQR_R7TquOw1Tc",
+          "matchedPlaceName": "火炎山自然保留區(山谷區)",
+          "override": true
+        },
+        {
+          "sourceName": "九鼎軒",
+          "matchedPlaceId": "ChIJCSkzeCsEaTQRIXuVudBERF0",
+          "matchedPlaceName": "九鼎軒",
+          "override": true
+        },
+        {
+          "sourceName": "銅鑼茶廠",
+          "matchedPlaceId": "ChIJDUovkRMHaTQRcuHZlBY7bEE",
+          "matchedPlaceName": "台灣農林 銅鑼茶廠",
+          "override": true
+        }
+      ],
+      "unmatchedItems": [],
+      "skippedItems": [
+        {
+          "name": "地瓜伯焦糖地瓜",
+          "type": "place",
+          "reason": "manual_override_ignore"
+        },
+        {
+          "name": "苑裡美食",
+          "type": "place",
+          "reason": "manual_override_ignore"
+        },
+        {
+          "name": "下榻飯店",
+          "type": "hotel",
+          "reason": "item_type_skipped"
+        },
+        {
+          "name": "飯店晚餐",
+          "type": "meal",
+          "reason": "manual_override_ignore"
+        },
+        {
+          "name": "午餐",
+          "type": "meal",
+          "reason": "manual_override_ignore"
+        }
+      ]
+    },
+    {
+      "id": "agency-www-welovetravel-com-tw-tw2d10013",
+      "title": "大坑步道˙東山棧米其林必比登推薦˙創意紙箱王一日",
+      "url": "https://www.welovetravel.com.tw/go67616/fun01/sche.php?c=TW2D10013",
+      "matchedItems": [
+        {
+          "sourceName": "大坑步道",
+          "matchedPlaceId": "ChIJX2NTYDgYaTQRfuq9woKQEOQ",
+          "matchedPlaceName": "大坑九-1號步道",
+          "override": true
+        },
+        {
+          "sourceName": "紙箱王創意園區",
+          "matchedPlaceId": "ChIJZUb4xkYYaTQRRgyudAlvOcY",
+          "matchedPlaceName": "紙箱王創意園區"
+        }
+      ],
+      "unmatchedItems": [],
+      "skippedItems": [
+        {
+          "name": "東山棧",
+          "type": "meal",
+          "reason": "manual_override_ignore"
+        },
+        {
+          "name": "結束活動",
+          "type": "arrival",
+          "reason": "item_type_skipped"
+        }
+      ]
+    },
     {
       "id": "agency-taichung-3d2n-001",
       "title": "台中三天兩夜旅行社行程",
       "url": "https://example.com/taichung-3d2n",
       "matchedItems": [
+        {
+          "sourceName": "東海大學",
+          "matchedPlaceId": "ChIJB2dAOhw-aTQRaoCyT7wBPdQ",
+          "matchedPlaceName": "東海大學",
+          "override": true
+        },
+        {
+          "sourceName": "東海商圈",
+          "matchedPlaceId": "ChIJbxz8CYwVaTQR7YDgBZXAVRE",
+          "matchedPlaceName": "東海藝術街商圈",
+          "override": true
+        },
+        {
+          "sourceName": "鰲峰山觀景平台",
+          "matchedPlaceId": "ChIJeUadC3gUaTQR45PH8hRHYFo",
+          "matchedPlaceName": "鰲峰山觀景平台",
+          "override": true
+        },
+        {
+          "sourceName": "三井 OUTLET PARK",
+          "matchedPlaceId": "ChIJY-bwtRY9aTQRxoY6m3u_ea4",
+          "matchedPlaceName": "MITSUI OUTLET PARK 臺中港",
+          "override": true
+        },
         {
           "sourceName": "高美濕地",
           "matchedPlaceId": "ChIJvYFhg4wTaTQR2evNLEQ1ZN8",
@@ -23,9 +480,33 @@
           "matchedPlaceName": "逢甲夜市"
         },
         {
+          "sourceName": "秋紅谷生態景觀",
+          "matchedPlaceId": "ChIJLfH_-vM9aTQRpL9e_PxZTxU",
+          "matchedPlaceName": "秋紅谷景觀生態公園",
+          "override": true
+        },
+        {
+          "sourceName": "台中國家歌劇院",
+          "matchedPlaceId": "ChIJcaKjTOw9aTQR4mAeJzejtdg",
+          "matchedPlaceName": "臺中國家歌劇院",
+          "override": true
+        },
+        {
           "sourceName": "動漫彩繪巷",
           "matchedPlaceId": "ChIJN_NZXQk9aTQRTJVxW1kkEz8",
           "matchedPlaceName": "動漫彩繪巷"
+        },
+        {
+          "sourceName": "第五市場",
+          "matchedPlaceId": "ChIJVzFkVAk9aTQRFFPlC0krNNY",
+          "matchedPlaceName": "臺中第五市場",
+          "override": true
+        },
+        {
+          "sourceName": "宮原眼科",
+          "matchedPlaceId": "ChIJ-bIJXaeQbjQRBlsPVLME9EY",
+          "matchedPlaceName": "宮原眼科",
+          "override": true
         },
         {
           "sourceName": "新天地西洋博物館",
@@ -33,177 +514,48 @@
           "matchedPlaceName": "新天地西洋博物館"
         },
         {
+          "sourceName": "筏子溪迎賓廊道",
+          "matchedPlaceId": "ChIJY7MHzBY9aTQR4kySYOTbk5U",
+          "matchedPlaceName": "筏子溪門戶迎賓水岸廊道",
+          "override": true
+        },
+        {
+          "sourceName": "第六市場",
+          "matchedPlaceId": "ChIJVYV3KJ09aTQRCzR2Dn2FE3k",
+          "matchedPlaceName": "第六市場",
+          "override": true
+        },
+        {
           "sourceName": "審計新村",
           "matchedPlaceId": "ChIJZc4QyaE9aTQRRVwjmQmYS7g",
           "matchedPlaceName": "審計新村"
+        },
+        {
+          "sourceName": "台中植物園",
+          "matchedPlaceId": "ChIJyzSRBng9aTQRNs6euDKmQNQ",
+          "matchedPlaceName": "國立自然科學博物館植物園",
+          "override": true
+        },
+        {
+          "sourceName": "勤美誠品綠園道",
+          "matchedPlaceId": "ChIJEQD-2Z09aTQRZnVyOL2OnW8",
+          "matchedPlaceName": "勤美誠品綠園道",
+          "override": true
+        },
+        {
+          "sourceName": "后里鐵馬道",
+          "matchedPlaceId": "ChIJAQAAQBM9aTQRXASVVs5t3aI",
+          "matchedPlaceName": "后豐鐵馬道",
+          "override": true
+        },
+        {
+          "sourceName": "麗寶 OUTLET MALL",
+          "matchedPlaceId": "ChIJtQNcXBsQaTQRSvC-i_YiNJk",
+          "matchedPlaceName": "臺中麗寶OUTLETMALL",
+          "override": true
         }
       ],
-      "unmatchedItems": [
-        {
-          "name": "東海大學",
-          "type": "place",
-          "arrivalTime": "10:00",
-          "departureTime": "12:00",
-          "candidates": []
-        },
-        {
-          "name": "東海商圈",
-          "type": "meal",
-          "arrivalTime": "12:00",
-          "departureTime": "13:00",
-          "candidates": []
-        },
-        {
-          "name": "鰲峰山觀景平台",
-          "type": "place",
-          "arrivalTime": "13:30",
-          "departureTime": "14:30",
-          "candidates": [
-            {
-              "placeId": "ChIJf-ualBHbaDQRp8HJbCGNrrI",
-              "name": "虎頭山觀景平台",
-              "score": 0.7143
-            },
-            {
-              "placeId": "ChIJb6KFy2tlQTQRCSi4kE-_IC8",
-              "name": "壁山觀景臺",
-              "score": 0.6667
-            },
-            {
-              "placeId": "ChIJC3Q_e_msQjQRgEw324e0CRM",
-              "name": "碧山巖觀景台",
-              "score": 0.6154
-            }
-          ]
-        },
-        {
-          "name": "三井 OUTLET PARK",
-          "type": "place",
-          "arrivalTime": "15:00",
-          "departureTime": "16:00",
-          "candidates": []
-        },
-        {
-          "name": "秋紅谷生態景觀",
-          "type": "place",
-          "arrivalTime": "09:40",
-          "departureTime": "10:00",
-          "candidates": [
-            {
-              "placeId": "ChIJLfH_-vM9aTQRpL9e_PxZTxU",
-              "name": "秋紅谷景觀生態公園",
-              "score": 0.625
-            },
-            {
-              "placeId": "ChIJk-xswJ3TbjQR5sakG3cG7TU",
-              "name": "鹿芝谷生態景觀園區",
-              "score": 0.625
-            }
-          ]
-        },
-        {
-          "name": "台中國家歌劇院",
-          "type": "place",
-          "arrivalTime": "10:00",
-          "departureTime": "10:30",
-          "candidates": []
-        },
-        {
-          "name": "分子藥局",
-          "type": "place",
-          "arrivalTime": "10:30",
-          "departureTime": "11:20",
-          "candidates": []
-        },
-        {
-          "name": "第五市場",
-          "type": "place",
-          "arrivalTime": "12:00",
-          "departureTime": "13:00",
-          "candidates": []
-        },
-        {
-          "name": "宮原眼科",
-          "type": "place",
-          "arrivalTime": "13:00",
-          "departureTime": "13:40",
-          "candidates": []
-        },
-        {
-          "name": "筏子溪迎賓廊道",
-          "type": "place",
-          "arrivalTime": "16:00",
-          "departureTime": "16:40",
-          "candidates": []
-        },
-        {
-          "name": "第六市場",
-          "type": "place",
-          "arrivalTime": "18:00",
-          "departureTime": "19:10",
-          "candidates": []
-        },
-        {
-          "name": "台中植物園",
-          "type": "place",
-          "arrivalTime": "10:20",
-          "departureTime": "11:20",
-          "candidates": [
-            {
-              "placeId": "ChIJe1ASN0-pQjQRIeghXqXkkAg",
-              "name": "臺北植物園",
-              "score": 0.8
-            },
-            {
-              "placeId": "ChIJC4IJrms9aTQRqGR5vbJivl8",
-              "name": "臺中公園(雙十路)",
-              "score": 0.6667
-            },
-            {
-              "placeId": "ChIJ5SQWm2s9aTQRO9CRyPBXThA",
-              "name": "臺中公園",
-              "score": 0.6667
-            },
-            {
-              "placeId": "C1_371020000A_001466",
-              "name": "金門植物園",
-              "score": 0.6
-            },
-            {
-              "placeId": "ChIJsQX5VAY2aDQRIm2J8uaw7r4",
-              "name": "高峰植物園",
-              "score": 0.6
-            }
-          ]
-        },
-        {
-          "name": "勤美誠品綠園道",
-          "type": "place",
-          "arrivalTime": "11:30",
-          "departureTime": "13:00",
-          "candidates": []
-        },
-        {
-          "name": "后里鐵馬道",
-          "type": "place",
-          "arrivalTime": "13:30",
-          "departureTime": "15:30",
-          "candidates": [
-            {
-              "placeId": "ChIJAQAAQBM9aTQRXASVVs5t3aI",
-              "name": "后豐鐵馬道",
-              "score": 0.8
-            }
-          ]
-        },
-        {
-          "name": "麗寶 OUTLET MALL",
-          "type": "place",
-          "arrivalTime": "16:30",
-          "departureTime": "17:40",
-          "candidates": []
-        }
-      ],
+      "unmatchedItems": [],
       "skippedItems": [
         {
           "name": "出發",
@@ -219,6 +571,11 @@
           "name": "飯店出發",
           "type": "departure",
           "reason": "item_type_skipped"
+        },
+        {
+          "name": "分子藥局",
+          "type": "place",
+          "reason": "manual_override_ignore"
         },
         {
           "name": "台中鳥日子",
@@ -243,48 +600,30 @@
       "url": "https://www.welovetravel.com.tw/go67616/fun01/sche.php?c=TW1D20207",
       "matchedItems": [
         {
+          "sourceName": "黃金小鎮",
+          "matchedPlaceId": "ChIJdUcOhnWqaTQRN0LjIShsRlQ",
+          "matchedPlaceName": "黃金小鎮休閒農業區",
+          "override": true
+        },
+        {
+          "sourceName": "清安豆腐街",
+          "matchedPlaceId": "ChIJqVXxtuz_aDQRABBAsqEUtQk",
+          "matchedPlaceName": "洗水坑豆腐街",
+          "override": true
+        },
+        {
           "sourceName": "巧克力雲莊",
           "matchedPlaceId": "ChIJ0Rxr6hQAaTQRwjvjR8zEfqo",
           "matchedPlaceName": "巧克力雲莊"
+        },
+        {
+          "sourceName": "納姆內彈珠汽水觀光工廠",
+          "matchedPlaceId": "ChIJicT8ev2paTQR4YcpvZWhv9k",
+          "matchedPlaceName": "大補內彈珠汽水觀光工廠",
+          "override": true
         }
       ],
-      "unmatchedItems": [
-        {
-          "name": "黃金小鎮",
-          "type": "place",
-          "arrivalTime": "09:30",
-          "departureTime": "14:00",
-          "candidates": []
-        },
-        {
-          "name": "清安豆腐街",
-          "type": "place",
-          "arrivalTime": "14:10",
-          "departureTime": "16:00",
-          "candidates": []
-        },
-        {
-          "name": "飯店晚餐",
-          "type": "meal",
-          "arrivalTime": "18:30",
-          "departureTime": "19:30",
-          "candidates": []
-        },
-        {
-          "name": "納姆內彈珠汽水觀光工廠",
-          "type": "place",
-          "arrivalTime": "14:30",
-          "departureTime": "16:30",
-          "candidates": []
-        },
-        {
-          "name": "客家米食風味點心",
-          "type": "meal",
-          "arrivalTime": "16:40",
-          "departureTime": "17:10",
-          "candidates": []
-        }
-      ],
+      "unmatchedItems": [],
       "skippedItems": [
         {
           "name": "集合出發",
@@ -297,9 +636,19 @@
           "reason": "item_type_skipped"
         },
         {
+          "name": "飯店晚餐",
+          "type": "meal",
+          "reason": "manual_override_ignore"
+        },
+        {
           "name": "飯店退房出發",
           "type": "departure",
           "reason": "item_type_skipped"
+        },
+        {
+          "name": "客家米食風味點心",
+          "type": "meal",
+          "reason": "manual_override_ignore"
         },
         {
           "name": "平安賦歸",

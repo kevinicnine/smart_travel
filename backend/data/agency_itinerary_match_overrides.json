@@ -1,0 +1,306 @@
+{
+  "overrides": {
+    "agency-taichung-3d2n-001||秋紅谷生態景觀||place||09:40||10:00": {
+      "action": "map",
+      "updatedAt": "2026-06-05T16:18:46.310302Z",
+      "placeId": "ChIJLfH_-vM9aTQRpL9e_PxZTxU",
+      "placeName": "秋紅谷景觀生態公園"
+    },
+    "agency-taichung-3d2n-001||后里鐵馬道||place||13:30||15:30": {
+      "action": "map",
+      "updatedAt": "2026-06-05T16:19:12.193172Z",
+      "placeId": "ChIJAQAAQBM9aTQRXASVVs5t3aI",
+      "placeName": "后豐鐵馬道"
+    },
+    "agency-taichung-3d2n-001||東海大學||place||10:00||12:00": {
+      "action": "map",
+      "updatedAt": "2026-06-05T16:27:05.827972Z",
+      "placeId": "ChIJB2dAOhw-aTQRaoCyT7wBPdQ",
+      "placeName": "東海大學"
+    },
+    "agency-taichung-3d2n-001||東海商圈||meal||12:00||13:00": {
+      "action": "map",
+      "updatedAt": "2026-06-05T16:52:07.207777Z",
+      "placeId": "ChIJbxz8CYwVaTQR7YDgBZXAVRE",
+      "placeName": "東海藝術街商圈"
+    },
+    "agency-taichung-3d2n-001||鰲峰山觀景平台||place||13:30||14:30": {
+      "action": "map",
+      "updatedAt": "2026-06-05T16:54:25.010286Z",
+      "placeId": "ChIJeUadC3gUaTQR45PH8hRHYFo",
+      "placeName": "鰲峰山觀景平台"
+    },
+    "agency-taichung-3d2n-001||三井 OUTLET PARK||place||15:00||16:00": {
+      "action": "map",
+      "updatedAt": "2026-06-05T16:55:01.224994Z",
+      "placeId": "ChIJY-bwtRY9aTQRxoY6m3u_ea4",
+      "placeName": "MITSUI OUTLET PARK 臺中港"
+    },
+    "agency-taichung-3d2n-001||台中國家歌劇院||place||10:00||10:30": {
+      "action": "map",
+      "updatedAt": "2026-06-05T16:55:36.946464Z",
+      "placeId": "ChIJcaKjTOw9aTQR4mAeJzejtdg",
+      "placeName": "臺中國家歌劇院"
+    },
+    "agency-taichung-3d2n-001||分子藥局||place||10:30||11:20": {
+      "action": "ignore",
+      "updatedAt": "2026-06-05T16:56:03.340122Z"
+    },
+    "agency-taichung-3d2n-001||第五市場||place||12:00||13:00": {
+      "action": "map",
+      "updatedAt": "2026-06-05T16:56:31.925125Z",
+      "placeId": "ChIJVzFkVAk9aTQRFFPlC0krNNY",
+      "placeName": "臺中第五市場"
+    },
+    "agency-taichung-3d2n-001||宮原眼科||place||13:00||13:40": {
+      "action": "map",
+      "updatedAt": "2026-06-05T16:57:06.668108Z",
+      "placeId": "ChIJ-bIJXaeQbjQRBlsPVLME9EY",
+      "placeName": "宮原眼科"
+    },
+    "agency-taichung-3d2n-001||筏子溪迎賓廊道||place||16:00||16:40": {
+      "action": "map",
+      "updatedAt": "2026-06-05T16:57:31.778442Z",
+      "placeId": "ChIJY7MHzBY9aTQR4kySYOTbk5U",
+      "placeName": "筏子溪門戶迎賓水岸廊道"
+    },
+    "agency-taichung-3d2n-001||第六市場||place||18:00||19:10": {
+      "action": "map",
+      "updatedAt": "2026-06-05T16:59:35.792896Z",
+      "placeId": "ChIJVYV3KJ09aTQRCzR2Dn2FE3k",
+      "placeName": "第六市場"
+    },
+    "agency-taichung-3d2n-001||台中植物園||place||10:20||11:20": {
+      "action": "map",
+      "updatedAt": "2026-06-05T17:00:22.029468Z",
+      "placeId": "ChIJyzSRBng9aTQRNs6euDKmQNQ",
+      "placeName": "國立自然科學博物館植物園"
+    },
+    "agency-taichung-3d2n-001||勤美誠品綠園道||place||11:30||13:00": {
+      "action": "map",
+      "updatedAt": "2026-06-05T17:00:52.591495Z",
+      "placeId": "ChIJEQD-2Z09aTQRZnVyOL2OnW8",
+      "placeName": "勤美誠品綠園道"
+    },
+    "agency-taichung-3d2n-001||麗寶 OUTLET MALL||place||16:30||17:40": {
+      "action": "map",
+      "updatedAt": "2026-06-05T17:01:27.202029Z",
+      "placeId": "ChIJtQNcXBsQaTQRSvC-i_YiNJk",
+      "placeName": "臺中麗寶OUTLETMALL"
+    },
+    "agency-miaoli-2d1n-001a||黃金小鎮||place||09:30||14:00": {
+      "action": "map",
+      "updatedAt": "2026-06-05T17:02:15.311806Z",
+      "placeId": "ChIJdUcOhnWqaTQRN0LjIShsRlQ",
+      "placeName": "黃金小鎮休閒農業區"
+    },
+    "agency-miaoli-2d1n-001a||清安豆腐街||place||14:10||16:00": {
+      "action": "map",
+      "updatedAt": "2026-06-05T17:03:45.447332Z",
+      "placeId": "ChIJqVXxtuz_aDQRABBAsqEUtQk",
+      "placeName": "洗水坑豆腐街"
+    },
+    "agency-miaoli-2d1n-001a||飯店晚餐||meal||18:30||19:30": {
+      "action": "ignore",
+      "updatedAt": "2026-06-05T17:03:49.874292Z"
+    },
+    "agency-miaoli-2d1n-001a||客家米食風味點心||meal||16:40||17:10": {
+      "action": "ignore",
+      "updatedAt": "2026-06-05T17:03:54.220976Z"
+    },
+    "agency-miaoli-2d1n-001a||納姆內彈珠汽水觀光工廠||place||14:30||16:30": {
+      "action": "map",
+      "updatedAt": "2026-06-05T17:04:25.476099Z",
+      "placeId": "ChIJicT8ev2paTQR4YcpvZWhv9k",
+      "placeName": "大補內彈珠汽水觀光工廠"
+    },
+    "agency-www-welovetravel-com-tw-pkg2d20001||後龍~半天寮好望角||place||15:30||16:30": {
+      "action": "map",
+      "updatedAt": "2026-06-06T16:59:09.490626Z",
+      "placeId": "ChIJVVVVVWWuaTQRsf_BtcIo5Yo",
+      "placeName": "後龍好望角風景區"
+    },
+    "agency-www-welovetravel-com-tw-pkg2d20001||苑裡美食||place||17:00||18:00": {
+      "action": "ignore",
+      "updatedAt": "2026-06-06T16:59:17.598949Z"
+    },
+    "agency-www-welovetravel-com-tw-pkg2d20001||飯店晚餐||meal||18:30||19:30": {
+      "action": "ignore",
+      "updatedAt": "2026-06-06T16:59:20.589325Z"
+    },
+    "agency-www-welovetravel-com-tw-pkg2d20001||午餐||meal||13:00||14:00": {
+      "action": "ignore",
+      "updatedAt": "2026-06-06T16:59:27.175200Z"
+    },
+    "agency-www-welovetravel-com-tw-tw2d10013||大坑步道||place||09:30||12:00": {
+      "action": "map",
+      "updatedAt": "2026-06-06T17:00:37.007962Z",
+      "placeId": "ChIJX2NTYDgYaTQRfuq9woKQEOQ",
+      "placeName": "大坑九-1號步道"
+    },
+    "agency-www-welovetravel-com-tw-tw2d10013||東山棧||meal||12:15||14:00": {
+      "action": "ignore",
+      "updatedAt": "2026-06-06T17:00:41.431268Z"
+    },
+    "agency-www-welovetravel-com-tw-pkg2d20001||地瓜伯焦糖地瓜||place||11:20||11:30": {
+      "action": "ignore",
+      "updatedAt": "2026-06-06T17:01:03.009681Z"
+    },
+    "agency-www-welovetravel-com-tw-pkg2d20001||火炎山自然步道 +南鞍古道||place||08:00||13:00": {
+      "action": "map",
+      "updatedAt": "2026-06-06T17:01:47.147046Z",
+      "placeId": "ChIJa1xezXAFaTQR_R7TquOw1Tc",
+      "placeName": "火炎山自然保留區(山谷區)"
+    },
+    "agency-www-welovetravel-com-tw-pkg2d20001||九鼎軒||place||14:10||14:40": {
+      "action": "map",
+      "updatedAt": "2026-06-06T17:02:20.610719Z",
+      "placeId": "ChIJCSkzeCsEaTQRIXuVudBERF0",
+      "placeName": "九鼎軒"
+    },
+    "agency-www-welovetravel-com-tw-pkg2d20001||銅鑼茶廠||place||15:00||16:00": {
+      "action": "map",
+      "updatedAt": "2026-06-06T17:14:30.994272Z",
+      "placeId": "ChIJDUovkRMHaTQRcuHZlBY7bEE",
+      "placeName": "台灣農林 銅鑼茶廠"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20008-branch-bb||甲富哥活海產||meal||12:00||13:00": {
+      "action": "ignore",
+      "updatedAt": "2026-06-07T05:27:30.837751Z"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20008-branch-bb||三星落羽松||place||16:20||17:00": {
+      "action": "map",
+      "updatedAt": "2026-06-07T05:27:58.776529Z",
+      "placeId": "ChIJJe85GwbhZzQRbFfvUuLovSM",
+      "placeName": "三星落羽松"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20008-branch-bb||飯店晚餐||meal||18:30||19:30": {
+      "action": "ignore",
+      "updatedAt": "2026-06-07T05:28:04.683355Z"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20008-branch-bb||斑比山丘||place||09:30||10:30": {
+      "action": "map",
+      "updatedAt": "2026-06-07T05:28:27.909153Z",
+      "placeId": "ChIJwT71ucHnZzQRes_f4T3OmrE",
+      "placeName": "宜蘭-斑比山丘"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20008-branch-bb||梅花湖單車遊||place||10:40||11:40": {
+      "action": "map",
+      "updatedAt": "2026-06-07T05:29:19.470422Z",
+      "placeId": "ChIJ7RubbibnZzQRA8A3eSqKblM",
+      "placeName": "梅花湖"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20008-branch-bb||中式桌餐||meal||12:00||13:00": {
+      "action": "ignore",
+      "updatedAt": "2026-06-07T05:29:31.045760Z"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20008-branch-ba||甲富哥活海產||meal||12:00||13:00": {
+      "action": "ignore",
+      "updatedAt": "2026-06-07T05:29:33.916023Z"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20008-branch-ba||三星落羽松||place||16:20||17:00": {
+      "action": "map",
+      "updatedAt": "2026-06-07T05:29:43.048648Z",
+      "placeId": "ChIJJe85GwbhZzQRbFfvUuLovSM",
+      "placeName": "三星落羽松"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20008-branch-ba||飯店晚餐||meal||18:30||19:30": {
+      "action": "ignore",
+      "updatedAt": "2026-06-07T05:29:48.096617Z"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20008-branch-ba||斑比山丘||place||09:30||10:30": {
+      "action": "map",
+      "updatedAt": "2026-06-07T05:29:58.797450Z",
+      "placeId": "ChIJwT71ucHnZzQRes_f4T3OmrE",
+      "placeName": "宜蘭-斑比山丘"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20008-branch-ba||梅花湖飄移卡丁車||place||10:40||11:40": {
+      "action": "map",
+      "updatedAt": "2026-06-07T05:30:38.059072Z",
+      "placeId": "ChIJk8Vt_rXnZzQRayQXKEtst9o",
+      "placeName": "梅花湖卡丁車"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20008-branch-ab||三星落羽松||place||16:20||17:00": {
+      "action": "map",
+      "updatedAt": "2026-06-07T05:34:37.562946Z",
+      "placeId": "ChIJJe85GwbhZzQRbFfvUuLovSM",
+      "placeName": "三星落羽松"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20008-branch-ab||心花鹿Fun||place||09:30||10:30": {
+      "action": "map",
+      "updatedAt": "2026-06-07T05:35:05.749644Z",
+      "placeId": "ChIJpXCVcA3nZzQR1zyfvFCudf4",
+      "placeName": "心花鹿Fun農場"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20008-branch-aa||三星落羽松||place||16:20||17:00": {
+      "action": "map",
+      "updatedAt": "2026-06-07T05:35:53.148366Z",
+      "placeId": "ChIJJe85GwbhZzQRbFfvUuLovSM",
+      "placeName": "三星落羽松"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20008-branch-aa||心花鹿Fun||place||09:30||10:30": {
+      "action": "map",
+      "updatedAt": "2026-06-07T05:35:59.514541Z",
+      "placeId": "ChIJpXCVcA3nZzQR1zyfvFCudf4",
+      "placeName": "心花鹿Fun農場"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20008-branch-aa||梅花湖飄移卡丁車||place||10:40||11:40": {
+      "action": "map",
+      "updatedAt": "2026-06-07T05:38:56.096279Z",
+      "placeId": "ChIJk8Vt_rXnZzQRayQXKEtst9o",
+      "placeName": "梅花湖卡丁車"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20008-branch-ba||中式桌餐||meal||12:00||13:00": {
+      "action": "ignore",
+      "updatedAt": "2026-06-07T05:39:38.797120Z"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20008-branch-ab||甲富哥活海產||meal||12:00||13:00": {
+      "action": "ignore",
+      "updatedAt": "2026-06-07T05:39:42.089274Z"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20008-branch-ab||飯店晚餐||meal||18:30||19:30": {
+      "action": "ignore",
+      "updatedAt": "2026-06-07T05:39:46.037312Z"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20008-branch-aa||中式桌餐||meal||12:00||13:00": {
+      "action": "ignore",
+      "updatedAt": "2026-06-07T05:41:24.530965Z"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20008-branch-aa||飯店晚餐||meal||18:30||19:30": {
+      "action": "ignore",
+      "updatedAt": "2026-06-07T05:41:28.922784Z"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20008-branch-aa||甲富哥活海產||meal||12:00||13:00": {
+      "action": "ignore",
+      "updatedAt": "2026-06-07T05:41:33.451822Z"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20008-branch-ab||中式桌餐||meal||12:00||13:00": {
+      "action": "ignore",
+      "updatedAt": "2026-06-07T05:41:45.277Z"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20008-branch-ab||梅花湖單車遊||place||10:40||11:40": {
+      "action": "map",
+      "updatedAt": "2026-06-07T05:46:13.163328Z",
+      "placeId": "ChIJ7RubbibnZzQRA8A3eSqKblM",
+      "placeName": "梅花湖"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20101||泥磚屋客家菜餐廳||meal||12:40||13:40": {
+      "action": "ignore",
+      "updatedAt": "2026-06-07T17:19:04.189826Z"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20101||金勇番茄園||place||14:20||15:20": {
+      "action": "map",
+      "updatedAt": "2026-06-07T17:19:49.744021Z",
+      "placeId": "ChIJTYYcPbk-aDQRxw1Af1m6ZsU",
+      "placeName": "金勇番茄農場"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20101||飯店晚餐||meal||18:30||19:30": {
+      "action": "ignore",
+      "updatedAt": "2026-06-07T17:20:02.748165Z"
+    },
+    "agency-www-welovetravel-com-tw-tw1d20101||返回||place||16:00||17:00": {
+      "action": "ignore",
+      "updatedAt": "2026-06-07T17:20:17.685337Z"
+    }
+  }
+}

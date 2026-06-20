@@ -126,48 +126,125 @@ FINE_KEYWORDS: list[tuple[str, str]] = [
     ("大學", "campus"),
     ("校園", "campus"),
     ("教堂", "church_landmark"),
+    ("路思義", "church_landmark"),
     ("觀景台", "viewpoint"),
     ("展望台", "viewpoint"),
     ("觀景平台", "viewpoint"),
+    ("夕陽", "sunset_spot"),
+    ("日落", "sunset_spot"),
     ("濕地", "wetland"),
     ("老街", "old_street"),
+    ("古厝", "traditional_settlement"),
+    ("聚落", "traditional_settlement"),
+    ("眷村", "traditional_settlement"),
+    ("古宅", "historic_building"),
+    ("古蹟", "historic_building"),
+    ("歷史建築", "historic_building"),
+    ("故居", "memorial_site"),
+    ("紀念館", "memorial_site"),
+    ("紀念園區", "memorial_site"),
+    ("砲台", "fort_site"),
+    ("古堡", "fort_site"),
+    ("城門", "fort_site"),
+    ("城牆", "fort_site"),
+    ("文創", "cultural_district"),
+    ("藝術村", "cultural_district"),
+    ("文化園區", "cultural_district"),
+    ("創意園區", "cultural_district"),
+    ("糖廠", "industrial_heritage"),
+    ("酒廠", "industrial_heritage"),
+    ("鐵道", "industrial_heritage"),
+    ("車站", "industrial_heritage"),
+    ("鐘樓", "landmark_architecture"),
+    ("建築", "landmark_architecture"),
     ("商圈", "business_district"),
+    ("百貨", "shopping_mall"),
+    ("購物中心", "shopping_mall"),
+    ("購物廣場", "shopping_mall"),
     ("outlet", "outlet"),
+    ("mall", "shopping_mall"),
     ("植物園", "botanical_garden"),
     ("市場", "market"),
     ("夜市", "market"),
+    ("漁市", "market"),
     ("彩繪", "street_art"),
     ("河濱", "riverside"),
     ("廊道", "riverside"),
     ("溪", "riverside"),
+    ("森林", "forest"),
+    ("林場", "forest"),
+    ("山", "mountain"),
     ("步道", "trail"),
     ("鐵馬道", "bike_trail"),
     ("自行車道", "bike_trail"),
     ("藥局", "lifestyle_store"),
     ("歌劇院", "theater"),
     ("劇院", "theater"),
-    ("美術館", "art_space"),
+    ("美術館", "art_museum"),
+    ("科學博物館", "science_museum"),
+    ("科博館", "science_museum"),
+    ("歷史博物館", "history_museum"),
+    ("文物館", "history_museum"),
+    ("鐵道館", "railway_museum"),
+    ("探索館", "interactive_museum"),
+    ("體驗館", "interactive_museum"),
     ("博物館", "exhibition_space"),
+    ("甜點", "dessert_shop"),
+    ("冰淇淋", "dessert_shop"),
+    ("蛋糕", "dessert_shop"),
+    ("早午餐", "brunch"),
+    ("茶坊", "tea_house"),
+    ("茶屋", "tea_house"),
+    ("茶館", "tea_house"),
+    ("火鍋", "hotpot"),
+    ("燒肉", "bbq_restaurant"),
+    ("夜食", "night_food"),
+    ("宵夜", "night_food"),
+    ("小吃", "local_food"),
+    ("麵", "local_food"),
+    ("肉圓", "local_food"),
 ]
 
 FINE_TO_BROAD: dict[str, set[str]] = {
     "campus": {"heritage", "national_park"},
     "church_landmark": {"heritage"},
     "viewpoint": {"national_park"},
+    "sunset_spot": {"national_park", "beach", "lake_river"},
     "wetland": {"national_park", "lake_river"},
     "old_street": {"heritage", "street_food"},
+    "traditional_settlement": {"heritage"},
+    "historic_building": {"heritage"},
+    "memorial_site": {"heritage"},
+    "fort_site": {"heritage"},
+    "cultural_district": {"heritage", "creative_park"},
+    "industrial_heritage": {"heritage", "creative_park"},
+    "landmark_architecture": {"heritage"},
     "business_district": {"department_store", "street_food"},
+    "shopping_mall": {"department_store"},
     "outlet": {"department_store"},
     "botanical_garden": {"national_park"},
     "market": {"street_food"},
     "street_art": {"creative_park", "heritage"},
     "riverside": {"lake_river", "national_park"},
+    "forest": {"national_park"},
+    "mountain": {"national_park"},
     "trail": {"national_park"},
     "bike_trail": {"bike", "national_park"},
     "lifestyle_store": set(),
     "theater": {"concert_hall"},
-    "art_space": {"museum"},
+    "art_museum": {"museum"},
+    "science_museum": {"museum"},
+    "history_museum": {"museum", "heritage"},
+    "railway_museum": {"museum", "heritage"},
+    "interactive_museum": {"museum"},
     "exhibition_space": {"museum"},
+    "dessert_shop": {"cafe", "restaurant"},
+    "brunch": {"cafe", "restaurant"},
+    "tea_house": {"cafe"},
+    "hotpot": {"restaurant"},
+    "bbq_restaurant": {"restaurant"},
+    "night_food": {"restaurant", "street_food", "night_market"},
+    "local_food": {"restaurant", "street_food"},
 }
 
 
@@ -221,10 +298,13 @@ def _derive_attributes(tags: set[str], subtags: set[str], text: str) -> list[str
         attrs.add("outdoor")
     if tags & {"zoo", "aquarium", "farm", "amusement"}:
         attrs.add("family_friendly")
+        attrs.add("kid_friendly")
     if tags & {"cafe", "restaurant", "beach", "waterfall"} or subtags & {
         "viewpoint",
         "campus",
         "church_landmark",
+        "dessert_shop",
+        "sunset_spot",
     }:
         attrs.add("couple_friendly")
     if tags & {"heritage", "museum", "creative_park"} or subtags & {
@@ -232,12 +312,31 @@ def _derive_attributes(tags: set[str], subtags: set[str], text: str) -> list[str
         "old_street",
         "street_art",
         "campus",
+        "historic_building",
+        "landmark_architecture",
+        "cultural_district",
     }:
         attrs.add("photo_spot")
     if tags & {"night_market", "cinema", "restaurant", "cafe"}:
         attrs.add("night_activity")
-    if subtags & {"old_street", "business_district", "market", "campus"}:
+    if subtags & {"old_street", "business_district", "market", "campus", "cultural_district", "shopping_mall"}:
         attrs.add("walkable")
+    if subtags & {"historic_building", "church_landmark", "landmark_architecture", "fort_site"}:
+        attrs.add("architecture_viewing")
+        attrs.add("short_stay_ok")
+    if subtags & {"old_street", "market", "night_food", "local_food"}:
+        attrs.add("street_food_nearby")
+    if subtags & {"business_district", "shopping_mall", "outlet"}:
+        attrs.add("shopping_nearby")
+    if subtags & {"sunset_spot", "viewpoint", "wetland", "beach"}:
+        attrs.add("sunset_best")
+        attrs.add("rain_sensitive")
+    if subtags & {"trail", "bike_trail", "mountain", "forest", "wetland"}:
+        attrs.add("high_walking_load")
+    if subtags & {"botanical_garden", "shopping_mall", "market", "cultural_district", "interactive_museum"}:
+        attrs.add("half_day_candidate")
+    if subtags & {"campus", "old_street", "botanical_garden", "market"}:
+        attrs.add("elder_friendly")
     if "預約" in text or "reservation" in text:
         attrs.add("requires_reservation")
     return sorted(attrs)

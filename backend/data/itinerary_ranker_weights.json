@@ -1,0 +1,208 @@
+{
+  "generatedAt": "2026-06-07T17:14:47.997065+00:00",
+  "metadata": {
+    "source": "/app/data/historical_itineraries.json",
+    "samplesSeen": 8,
+    "samplesUsed": 8,
+    "stopsUsed": 35,
+    "skippedPlaceRefs": 0
+  },
+  "globalTagWeights": {
+    "night_market": -0.1717,
+    "heritage": 0.3337,
+    "national_park": 0.2404,
+    "zoo": -0.5183,
+    "lake_river": 0.0419,
+    "cafe": -0.345,
+    "creative_park": -0.345,
+    "restaurant": 0.0574,
+    "campus": -0.345,
+    "department_store": 0.0016,
+    "museum": -0.1717,
+    "bike": -0.345
+  },
+  "interestTagWeights": {
+    "handcraft_shop": {
+      "night_market": 0.5557,
+      "heritage": -0.0768,
+      "national_park": -0.128,
+      "zoo": 0.9003,
+      "lake_river": -0.128,
+      "cafe": 0.3111,
+      "creative_park": 0.3111,
+      "restaurant": -0.6227,
+      "campus": 0.3111,
+      "department_store": -0.4677,
+      "bike": 0.3111
+    },
+    "hot_spring": {
+      "night_market": 0.4406,
+      "national_park": -0.2431,
+      "zoo": 0.7853,
+      "lake_river": 0.1501,
+      "cafe": 0.1961,
+      "creative_park": 0.1961,
+      "restaurant": -0.1485,
+      "campus": 0.1961,
+      "department_store": -0.5827,
+      "museum": -0.1485,
+      "bike": 0.1961
+    },
+    "night_market": {
+      "night_market": 0.2309,
+      "heritage": -0.0929,
+      "national_park": -0.0702,
+      "zoo": 0.2309,
+      "lake_river": -0.0702,
+      "cafe": -0.3583,
+      "creative_park": -0.3583,
+      "restaurant": -0.1138,
+      "campus": 0.2309,
+      "department_store": 0.2309,
+      "museum": 0.2309,
+      "bike": 0.2309
+    },
+    "restaurant": {
+      "night_market": 0.3081,
+      "zoo": 0.6527,
+      "lake_river": -0.3756,
+      "cafe": 0.6527,
+      "creative_park": 0.6527,
+      "restaurant": -0.2811,
+      "department_store": -0.7153,
+      "museum": -0.2811
+    },
+    "street_food": {
+      "night_market": 0.3081,
+      "zoo": 0.6527,
+      "lake_river": -0.3756,
+      "cafe": 0.6527,
+      "creative_park": 0.6527,
+      "restaurant": -0.2811,
+      "department_store": -0.7153,
+      "museum": -0.2811
+    },
+    "heritage": {
+      "night_market": -0.0853,
+      "heritage": -0.1454,
+      "national_park": -0.1552,
+      "zoo": -0.0853,
+      "lake_river": 0.148,
+      "cafe": -0.3298,
+      "creative_park": -0.3298,
+      "restaurant": 0.1044,
+      "campus": 0.2594,
+      "department_store": 0.2594,
+      "museum": 0.2594,
+      "bike": 0.2594
+    },
+    "museum": {
+      "heritage": -0.175,
+      "national_park": -0.0952,
+      "cafe": -0.2698,
+      "creative_park": -0.2698,
+      "campus": 0.3194,
+      "department_store": 0.3194,
+      "museum": 0.3194,
+      "bike": 0.3194
+    },
+    "department_store": {
+      "heritage": -0.175,
+      "national_park": -0.0952,
+      "cafe": -0.2698,
+      "creative_park": -0.2698,
+      "campus": 0.3194,
+      "department_store": 0.3194,
+      "museum": 0.3194,
+      "bike": 0.3194
+    },
+    "market": {
+      "night_market": 0.2403,
+      "heritage": -0.5987,
+      "national_park": -0.8945,
+      "zoo": 0.8294,
+      "lake_river": 0.2839,
+      "cafe": 0.5849,
+      "creative_park": 0.5849,
+      "restaurant": 0.2403,
+      "campus": 0.5849,
+      "department_store": -0.1939,
+      "museum": 0.2403,
+      "bike": 0.5849
+    },
+    "diy": {
+      "night_market": 0.2403,
+      "heritage": -0.5987,
+      "national_park": -0.8945,
+      "zoo": 0.8294,
+      "lake_river": 0.2839,
+      "cafe": 0.5849,
+      "creative_park": 0.5849,
+      "restaurant": 0.2403,
+      "campus": 0.5849,
+      "department_store": -0.1939,
+      "museum": 0.2403,
+      "bike": 0.5849
+    }
+  },
+  "tripPurposeTagWeights": {
+    "relax": {
+      "night_market": 0.4925,
+      "national_park": -0.2717,
+      "zoo": 0.8777,
+      "lake_river": 0.1678,
+      "cafe": 0.2192,
+      "creative_park": 0.2192,
+      "restaurant": -0.166,
+      "campus": 0.2192,
+      "department_store": -0.6513,
+      "museum": -0.166,
+      "bike": 0.2192
+    },
+    "explore": {
+      "night_market": -0.178,
+      "heritage": -0.1547,
+      "zoo": -0.178,
+      "lake_river": -0.1292,
+      "cafe": 0.2072,
+      "creative_park": 0.2072,
+      "campus": 0.2072,
+      "department_store": 0.2072,
+      "museum": 0.2072,
+      "bike": 0.2072
+    }
+  },
+  "travelBehaviorTagWeights": {
+    "family": {
+      "night_market": 0.1947,
+      "national_park": -0.0616,
+      "zoo": 0.4988,
+      "lake_river": -0.0616,
+      "cafe": 0.4988,
+      "creative_park": 0.4988,
+      "department_store": -0.7083,
+      "museum": -0.3252
+    },
+    "general": {
+      "heritage": -0.1544,
+      "national_park": -0.084,
+      "cafe": -0.238,
+      "creative_park": -0.238,
+      "campus": 0.2818,
+      "department_store": 0.2818,
+      "museum": 0.2818,
+      "bike": 0.2818
+    }
+  },
+  "priceAffinity": {
+    "mid": {
+      "high": 0.0763,
+      "low": 0.0763
+    },
+    "low": {
+      "free": -0.1324,
+      "high": 0.3065,
+      "low": 0.1863
+    }
+  }
+}

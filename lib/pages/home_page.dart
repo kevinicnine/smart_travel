@@ -8,8 +8,10 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/backend_api.dart';
 import '../state/user_state.dart';
+import '../data/interest_data.dart';
 import 'account_page.dart';
 import 'itinerary_page.dart';
+import 'planner_chat_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({
@@ -37,8 +39,6 @@ class _HomePageState extends State<HomePage> {
   DateTime? _endDate;
   String? _selectedOriginCity;
   final List<String> _selectedDestinationCities = [];
-  String _selectedTripPurpose = 'explore';
-  int? _selectedBudgetTier;
   int _currentNavIndex = 0;
   bool _generatingPlan = false;
   final BackendApi _api = BackendApi.instance;
@@ -55,12 +55,9 @@ class _HomePageState extends State<HomePage> {
   final List<_SavedTrip> _savedTrips = [];
   static const _favoritesStorageKey = 'favorites_places';
   static const _tripsStorageKey = 'saved_itineraries_v1';
-  static const List<MapEntry<String, String>> _tripPurposeOptions = [
-    MapEntry('relax', '休閒放鬆'),
-    MapEntry('explore', '景點探索'),
-    MapEntry('couple', '情侶約會'),
-    MapEntry('family', '家庭旅遊'),
-  ];
+
+  List<String> get _selectedInterestMatchTags =>
+      expandInterestIdsToMatchTags(widget.selectedInterestIds);
 
   @override
   void initState() {
@@ -95,12 +92,13 @@ class _HomePageState extends State<HomePage> {
       _isLoadingPlaces = true;
     });
     try {
+      final matchTags = _selectedInterestMatchTags;
       var raw = await _api.fetchPlaces(
-        tags: widget.selectedInterestIds,
+        tags: matchTags,
         sort: 'rating',
         limit: 200,
       );
-      if (raw.isEmpty && widget.selectedInterestIds.isNotEmpty) {
+      if (raw.isEmpty && matchTags.isNotEmpty) {
         raw = await _api.fetchPlaces(sort: 'rating', limit: 200);
       }
       final places = raw.map(_Place.fromBackend).toList();
@@ -131,23 +129,17 @@ class _HomePageState extends State<HomePage> {
     final markerPlaces = _showOnlySelectedMarker && _selectedPlace != null
         ? <_Place>[_selectedPlace!]
         : _places;
-    _mapMarkers = markerPlaces
-        .map(
-          (p) {
-            final isSelected = _isSamePlace(_selectedPlace, p);
-            return Marker(
-            markerId: MarkerId(_markerIdForPlace(p)),
-            position: p.position,
-            infoWindow: InfoWindow(title: p.name, snippet: p.description),
-            onTap: () => _selectPlace(p),
-            icon: BitmapDescriptor.defaultMarkerWithHue(
-              BitmapDescriptor.hueRed,
-            ),
-            zIndexInt: isSelected ? 10 : 0,
-          );
-          },
-        )
-        .toSet();
+    _mapMarkers = markerPlaces.map((p) {
+      final isSelected = _isSamePlace(_selectedPlace, p);
+      return Marker(
+        markerId: MarkerId(_markerIdForPlace(p)),
+        position: p.position,
+        infoWindow: InfoWindow(title: p.name, snippet: p.description),
+        onTap: () => _selectPlace(p),
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+        zIndexInt: isSelected ? 10 : 0,
+      );
+    }).toSet();
   }
 
   String _markerIdForPlace(_Place place) {
@@ -351,29 +343,25 @@ class _HomePageState extends State<HomePage> {
     });
     unawaited(
       _reportEvent(
-        'itinerary_generate_attempt',
-        payload: {
-          'destinationCount': _selectedDestinationCities.length,
-          'tripPurpose': _selectedTripPurpose,
-          'budgetTier': _selectedBudgetTier,
-        },
+        'planner_chat_opened',
+        payload: {'destinationCount': _selectedDestinationCities.length},
       ),
     );
 
     try {
-      final destinationLabel = _selectedDestinationCities.join('、');
-      final plan = await _api.generateItinerary(
-        interestIds: widget.selectedInterestIds,
-        userId: UserState.userId,
-        startDate: _startDate,
-        endDate: _endDate,
-        originCity: _selectedOriginCity,
-        destinationCities: _selectedDestinationCities,
-        tripPurpose: _selectedTripPurpose,
-        travelBehavior: _tripPurposeBehavior(_selectedTripPurpose),
-        location: destinationLabel,
-        budget: _budgetToValue(_selectedBudgetTier),
+      final plan = await Navigator.of(context).push<Map<String, dynamic>>(
+        MaterialPageRoute(
+          fullscreenDialog: true,
+          builder: (_) => PlannerChatPage(
+            startDate: _startDate!,
+            endDate: _endDate!,
+            originCity: _selectedOriginCity!,
+            destinationCities: List<String>.from(_selectedDestinationCities),
+            interestIds: List<String>.from(_selectedInterestMatchTags),
+          ),
+        ),
       );
+      if (plan == null) return;
       await _saveGeneratedTrip(plan);
       final rawDays = plan['days'];
       final dayCount = rawDays is List ? rawDays.length : 0;
@@ -382,8 +370,8 @@ class _HomePageState extends State<HomePage> {
           'itinerary_generate_success',
           payload: {
             'destinationCount': _selectedDestinationCities.length,
-            'tripPurpose': _selectedTripPurpose,
             'days': dayCount,
+            'source': 'planner_chat',
           },
         ),
       );
@@ -391,20 +379,10 @@ class _HomePageState extends State<HomePage> {
       _showMessage('行程已儲存到「旅程」');
       Navigator.push(
         context,
-        MaterialPageRoute(builder: (_) => ItineraryPage(plan: plan)),
-      );
-    } on ApiClientException catch (error) {
-      unawaited(
-        _reportEvent(
-          'itinerary_generate_failed',
-          payload: {'message': error.message, 'statusCode': error.statusCode},
+        MaterialPageRoute(
+          builder: (_) => ItineraryPage(plan: plan, confirmOnOpen: true),
         ),
       );
-      if (_shouldShowPlannerSuggestionDialog(error)) {
-        await _showPlannerSuggestionDialog(error);
-      } else {
-        _showMessage(error.message);
-      }
     } finally {
       if (mounted) {
         setState(() {
@@ -914,10 +892,6 @@ class _HomePageState extends State<HomePage> {
           ),
           const SizedBox(height: 10),
           _buildMultiSelectCityField(options: cityOptions),
-          const SizedBox(height: 10),
-          _buildTripPurposeSelector(),
-          const SizedBox(height: 10),
-          _buildBudgetSelector(),
           const SizedBox(height: 14),
           SizedBox(
             width: double.infinity,
@@ -1183,122 +1157,6 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  Widget _buildBudgetSelector() {
-    return Row(
-      children: [
-        Expanded(child: _buildBudgetButton(label: '\$', tier: 1)),
-        const SizedBox(width: 8),
-        Expanded(child: _buildBudgetButton(label: '\$\$', tier: 2)),
-        const SizedBox(width: 8),
-        Expanded(child: _buildBudgetButton(label: '\$\$\$', tier: 3)),
-      ],
-    );
-  }
-
-  Widget _buildBudgetButton({required String label, required int tier}) {
-    final selected = _selectedBudgetTier == tier;
-    return SizedBox(
-      height: 44,
-      child: ElevatedButton(
-        onPressed: () {
-          setState(() {
-            _selectedBudgetTier = tier;
-          });
-        },
-        style: ElevatedButton.styleFrom(
-          elevation: 0,
-          backgroundColor: selected
-              ? const Color(0xFF5D73B9)
-              : Colors.white.withOpacity(0.92),
-          foregroundColor: selected
-              ? Colors.white
-              : Colors.black.withOpacity(0.75),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-          ),
-        ),
-        child: Text(
-          label,
-          style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTripPurposeSelector() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          '旅遊目的',
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w700,
-            color: Colors.white.withOpacity(0.92),
-          ),
-        ),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: _tripPurposeOptions
-              .map(
-                (option) => _buildTripPurposeChip(
-                  value: option.key,
-                  label: option.value,
-                ),
-              )
-              .toList(),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildTripPurposeChip({
-    required String value,
-    required String label,
-  }) {
-    final selected = _selectedTripPurpose == value;
-    return GestureDetector(
-      onTap: () {
-        setState(() {
-          _selectedTripPurpose = value;
-        });
-      },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: selected
-              ? const Color(0xFF5D73B9)
-              : Colors.white.withOpacity(0.92),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: selected
-                ? Colors.white.withOpacity(0.4)
-                : Colors.transparent,
-          ),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w700,
-            color: selected ? Colors.white : Colors.black.withOpacity(0.72),
-          ),
-        ),
-      ),
-    );
-  }
-
-  String? _tripPurposeBehavior(String purpose) {
-    return switch (purpose) {
-      'couple' => 'couple',
-      'family' => 'family',
-      _ => null,
-    };
-  }
-
   List<String> _cityOptions() {
     final values =
         _places
@@ -1306,6 +1164,7 @@ class _HomePageState extends State<HomePage> {
             .where((city) => city.isNotEmpty)
             .toSet()
             .map(_normalizeTaiwanAdminText)
+            .where((city) => !_offshoreIslandCities.contains(city))
             .toList()
           ..sort(_compareTaiwanCityOrder);
     return values;
@@ -1313,26 +1172,15 @@ class _HomePageState extends State<HomePage> {
 
   void _syncPlannerSelections(List<_Place> places) {
     final cities = places
-        .map((p) => p.city.trim())
-        .where((city) => city.isNotEmpty)
+        .map((p) => _normalizeTaiwanAdminText(p.city.trim()))
+        .where(
+          (city) => city.isNotEmpty && !_offshoreIslandCities.contains(city),
+        )
         .toSet();
     if (_selectedOriginCity != null && !cities.contains(_selectedOriginCity)) {
       _selectedOriginCity = null;
     }
     _selectedDestinationCities.removeWhere((city) => !cities.contains(city));
-  }
-
-  int? _budgetToValue(int? tier) {
-    switch (tier) {
-      case 1:
-        return 1000;
-      case 2:
-        return 2500;
-      case 3:
-        return 5000;
-      default:
-        return null;
-    }
   }
 
   Widget _buildRecommendationStrip(double width) {
@@ -1342,7 +1190,7 @@ class _HomePageState extends State<HomePage> {
         child: Text('載入推薦景點中...'),
       );
     }
-    final preferredTags = widget.selectedInterestIds.toSet();
+    final preferredTags = _selectedInterestMatchTags.toSet();
     final base = preferredTags.isEmpty
         ? _places
         : _places.where((p) => p.tags.any(preferredTags.contains)).toList();
@@ -1392,9 +1240,9 @@ class _HomePageState extends State<HomePage> {
                 children: [
                   ClipRRect(
                     borderRadius: BorderRadius.circular(14),
-                    child: place.imageUrl.isNotEmpty
+                    child: _api.resolveImageUrl(place.imageUrl).isNotEmpty
                         ? Image.network(
-                            place.imageUrl,
+                            _api.resolveImageUrl(place.imageUrl),
                             height: 68,
                             width: double.infinity,
                             fit: BoxFit.cover,
@@ -1519,12 +1367,14 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _showPlannerSuggestionDialog(ApiClientException error) async {
     final details = error.details ?? const <String, dynamic>{};
-    final reasons = (details['reasons'] as List?)
+    final reasons =
+        (details['reasons'] as List?)
             ?.map((e) => e.toString().trim())
             .where((e) => e.isNotEmpty)
             .toList() ??
         const <String>[];
-    final suggestions = (details['suggestions'] as List?)
+    final suggestions =
+        (details['suggestions'] as List?)
             ?.map((e) => e.toString().trim())
             .where((e) => e.isNotEmpty)
             .toList() ??
@@ -1557,10 +1407,7 @@ class _HomePageState extends State<HomePage> {
               Text(message),
               if (reasons.isNotEmpty) ...[
                 const SizedBox(height: 12),
-                const Text(
-                  '原因',
-                  style: TextStyle(fontWeight: FontWeight.w700),
-                ),
+                const Text('原因', style: TextStyle(fontWeight: FontWeight.w700)),
                 const SizedBox(height: 6),
                 for (final reason in reasons)
                   Padding(
@@ -1570,10 +1417,7 @@ class _HomePageState extends State<HomePage> {
               ],
               if (suggestions.isNotEmpty) ...[
                 const SizedBox(height: 12),
-                const Text(
-                  '建議',
-                  style: TextStyle(fontWeight: FontWeight.w700),
-                ),
+                const Text('建議', style: TextStyle(fontWeight: FontWeight.w700)),
                 const SizedBox(height: 6),
                 for (final suggestion in suggestions)
                   Padding(
@@ -1599,10 +1443,9 @@ class _HomePageState extends State<HomePage> {
     if (uniqueCities.length <= 1) {
       return null;
     }
-    final totalDays =
-        _startDate == null || _endDate == null
-            ? 1
-            : _endDate!.difference(_startDate!).inDays + 1;
+    final totalDays = _startDate == null || _endDate == null
+        ? 1
+        : _endDate!.difference(_startDate!).inDays + 1;
     final cityAnchors = <String, LatLng>{};
     for (final city in uniqueCities) {
       final matches = _places.where((place) => place.city == city).toList();
@@ -1672,18 +1515,14 @@ class _HomePageState extends State<HomePage> {
     } else if (maxPairKm >= 120 && totalDays <= 2) {
       severity += 2;
     }
-    if ((_selectedTripPurpose == 'relax' || _selectedTripPurpose == 'family') &&
-        uniqueCities.length >= 2 &&
-        maxPairKm >= 80) {
-      severity += 1;
-    }
-
     if (severity < 3) {
       return null;
     }
 
-    final recommendedCount =
-        math.max(1, math.min(uniqueCities.length, totalDays));
+    final recommendedCount = math.max(
+      1,
+      math.min(uniqueCities.length, totalDays),
+    );
     final recommendedCities = uniqueCities.take(recommendedCount).toList();
     final reasons = <String>[
       if (uniqueCities.length >= 3 && totalDays <= 2)
@@ -1697,8 +1536,6 @@ class _HomePageState extends State<HomePage> {
       if (recommendedCities.isNotEmpty)
         '這次先集中在 ${recommendedCities.join('、')}，其餘城市拆到下次。',
       '$totalDays 天建議最多先安排 ${math.max(1, totalDays)} 到 ${totalDays + 1} 個相鄰城市。',
-      if (_selectedTripPurpose == 'relax' || _selectedTripPurpose == 'family')
-        '以目前旅遊目的來看，減少跨城會比硬塞更多景點合理。',
     ];
     return _LocalRouteFeasibility(
       message: '目前選擇的城市組合距離過遠或天數不足，不建議直接排出行程。',
@@ -2022,7 +1859,9 @@ class _Place {
       ),
       description: json['description'] as String? ?? '',
       address: json['address'] as String? ?? '',
-      imageUrl: json['imageUrl'] as String? ?? '',
+      imageUrl: BackendApi.instance.resolveImageUrl(
+        json['imageUrl'] as String? ?? '',
+      ),
       city: _normalizeTaiwanAdminText(json['city'] as String? ?? ''),
       tags: (json['tags'] as List?)?.whereType<String>().toList() ?? const [],
       rating: (json['rating'] as num?)?.toDouble(),
@@ -2040,7 +1879,9 @@ class _Place {
       ),
       description: json['description'] as String? ?? '',
       address: json['address'] as String? ?? '',
-      imageUrl: json['imageUrl'] as String? ?? '',
+      imageUrl: BackendApi.instance.resolveImageUrl(
+        json['imageUrl'] as String? ?? '',
+      ),
       city: _normalizeTaiwanAdminText(json['city'] as String? ?? ''),
       tags: (json['tags'] as List?)?.whereType<String>().toList() ?? const [],
       rating: (json['rating'] as num?)?.toDouble(),
@@ -2105,10 +1946,9 @@ const List<String> _taiwanCityNorthToSouth = <String>[
   '宜蘭縣',
   '花蓮縣',
   '臺東縣',
-  '澎湖縣',
-  '金門縣',
-  '連江縣',
 ];
+
+const Set<String> _offshoreIslandCities = {'澎湖縣', '金門縣', '連江縣'};
 
 int _compareTaiwanCityOrder(String a, String b) {
   final normalizedA = _normalizeTaiwanAdminText(a);

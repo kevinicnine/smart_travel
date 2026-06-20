@@ -142,24 +142,24 @@ class NotificationService {
       'Authorization': 'Bearer ${_lineChannelToken!}',
       'Content-Type': 'application/json',
     };
-    var response = await _client.post(
-      uri,
+    var response = await _postLineWithRetry(
+      uri: uri,
       headers: headers,
-      body: jsonEncode({'to': to, 'messages': messages}),
+      payload: {'to': to, 'messages': messages},
     );
     if (response.statusCode >= 400 && messages.length > 1) {
       _log.warning(
         'LINE image push failed (${response.statusCode}); retrying text only.',
       );
-      response = await _client.post(
-        uri,
+      response = await _postLineWithRetry(
+        uri: uri,
         headers: headers,
-        body: jsonEncode({
+        payload: {
           'to': to,
           'messages': [
             {'type': 'text', 'text': text},
           ],
-        }),
+        },
       );
     }
     if (response.statusCode >= 400) {
@@ -168,6 +168,39 @@ class NotificationService {
       );
       throw ApiException(500, 'LINE 推播失敗，請稍後再試。');
     }
+  }
+
+  Future<http.Response> _postLineWithRetry({
+    required Uri uri,
+    required Map<String, String> headers,
+    required Map<String, dynamic> payload,
+  }) async {
+    Object? lastError;
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        final response = await _client
+            .post(uri, headers: headers, body: jsonEncode(payload))
+            .timeout(const Duration(seconds: 15));
+        final retryable =
+            response.statusCode == 429 || response.statusCode >= 500;
+        if (!retryable || attempt == 2) {
+          return response;
+        }
+        _log.warning(
+          'LINE push temporarily failed (${response.statusCode}); '
+          'retrying attempt ${attempt + 2}/3.',
+        );
+      } catch (error) {
+        lastError = error;
+        if (attempt == 2) rethrow;
+        _log.warning(
+          'LINE push transport error; retrying attempt ${attempt + 2}/3: '
+          '$error',
+        );
+      }
+      await Future<void>.delayed(Duration(milliseconds: 500 * (attempt + 1)));
+    }
+    throw ApiException(500, 'LINE 推播失敗：$lastError');
   }
 
   Future<void> replyLineText({

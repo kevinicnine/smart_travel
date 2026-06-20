@@ -16,7 +16,7 @@ set -euo pipefail
 #   OPENAI_API_KEY=sk-...
 #   OPENAI_MODEL=gpt-4o-mini
 #   USE_RENDER=true
-#   RENDER_API_BASE=https://smart-travel-6zsf.onrender.com
+#   RENDER_API_BASE=https://smart-travel-backend-6ant.onrender.com
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 if [[ -f "$ROOT/.env.local" ]]; then
@@ -48,9 +48,27 @@ export FLUTTER_DEVICE
 BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
 FLUTTER_DEVICE="${FLUTTER_DEVICE:-iPhone 16e}"
 USE_RENDER="${USE_RENDER:-true}"
-RENDER_API_BASE="${RENDER_API_BASE:-https://smart-travel-6zsf.onrender.com}"
+RENDER_API_BASE="${RENDER_API_BASE:-https://smart-travel-backend-6ant.onrender.com}"
 
 if [[ "${USE_RENDER}" != "true" ]]; then
+  EXISTING_BACKEND_PID="$(lsof -tiTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null | head -n 1 || true)"
+  if [[ -n "${EXISTING_BACKEND_PID}" ]]; then
+    EXISTING_BACKEND_COMMAND="$(ps -p "${EXISTING_BACKEND_PID}" -o command= 2>/dev/null || true)"
+    if [[ "${EXISTING_BACKEND_COMMAND}" == *dart* && "${EXISTING_BACKEND_COMMAND}" == *server.dart* ]]; then
+      echo "Stopping stale backend on port ${PORT} (PID=${EXISTING_BACKEND_PID})..."
+      kill "${EXISTING_BACKEND_PID}" 2>/dev/null || true
+      for _ in {1..20}; do
+        if ! lsof -tiTCP:"${PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
+          break
+        fi
+        sleep 0.25
+      done
+    else
+      echo "Port ${PORT} is already used by another process: ${EXISTING_BACKEND_COMMAND}" >&2
+      exit 1
+    fi
+  fi
+
   echo "Starting backend on port ${PORT}..."
   cd "$ROOT/backend"
   dart run bin/server.dart > "$ROOT/backend.log" 2>&1 &

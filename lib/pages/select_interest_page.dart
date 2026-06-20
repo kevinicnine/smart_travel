@@ -23,7 +23,7 @@ class _SelectInterestPageState extends State<SelectInterestPage> {
   @override
   void initState() {
     super.initState();
-    _selected.addAll(UserState.selectedInterestIds);
+    _selected.addAll(normalizeInterestSelectionIds(UserState.selectedInterestIds));
   }
 
   // 點選景點用

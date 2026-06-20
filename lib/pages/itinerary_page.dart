@@ -27,7 +27,6 @@ class _ItineraryPageState extends State<ItineraryPage> {
   static const _googleMapsApiKey = String.fromEnvironment(
     'GOOGLE_MAPS_API_KEY',
   );
-  static const _contextPollingInterval = Duration(minutes: 3);
 
   final BackendApi _api = BackendApi.instance;
   late _ItineraryPlan _plan;
@@ -42,13 +41,7 @@ class _ItineraryPageState extends State<ItineraryPage> {
   final List<String> _wishlistPlaces = [];
   final Map<String, String> _transitModeOverrides = {};
   final Set<String> _manuallyEditedDayKeys = <String>{};
-  _ItineraryContextAwareness? _contextAwareness;
-  bool _loadingContextAwareness = false;
-  int _contextAwarenessRequestSerial = 0;
-  String? _lastContextReplanPromptKey;
-  bool _showingContextReplanDialog = false;
   bool _formalPlanConfirmationStarted = false;
-  Timer? _contextAwarenessPollingTimer;
 
   @override
   void initState() {
@@ -64,8 +57,6 @@ class _ItineraryPageState extends State<ItineraryPage> {
     } else {
       unawaited(_syncActivePlanToCloud());
     }
-    unawaited(_loadContextAwarenessForSelectedDay());
-    _refreshContextAwarenessPolling();
     unawaited(
       _reportEvent(
         'page_view',
@@ -81,7 +72,6 @@ class _ItineraryPageState extends State<ItineraryPage> {
 
   @override
   void dispose() {
-    _contextAwarenessPollingTimer?.cancel();
     _dayPageController.dispose();
     _timelineScrollController.dispose();
     super.dispose();
@@ -135,12 +125,6 @@ class _ItineraryPageState extends State<ItineraryPage> {
                       if (_hasArrangementPreferences) ...[
                         const SizedBox(height: 8),
                         _buildArrangementPreferenceCard(),
-                      ],
-                      const SizedBox(height: 8),
-                      _buildContextAwarenessSection(),
-                      if (_plan.insight != null) ...[
-                        const SizedBox(height: 8),
-                        _buildInsightCard(_plan.insight!),
                       ],
                       const SizedBox(height: 10),
                       ..._buildTimelineChildren(days[_selectedDayIndex]),
@@ -577,9 +561,7 @@ class _ItineraryPageState extends State<ItineraryPage> {
         _transitModeOverrides.clear();
         _manuallyEditedDayKeys.clear();
         _selectedDayIndex = 0;
-        _contextAwareness = null;
       });
-      _refreshContextAwarenessPolling();
       if (_dayPageController.hasClients) {
         _dayPageController.jumpToPage(0);
       }
@@ -592,7 +574,6 @@ class _ItineraryPageState extends State<ItineraryPage> {
         });
       }
       unawaited(_syncActivePlanToCloud());
-      await _loadContextAwarenessForSelectedDay();
       _showTopMessage('已套用並切換到新編排行程（第 1 天）');
     } on ApiClientException catch (error) {
       if (!mounted) return;
@@ -601,68 +582,6 @@ class _ItineraryPageState extends State<ItineraryPage> {
       if (mounted) {
         setState(() {
           _replanning = false;
-        });
-      }
-    }
-  }
-
-  Future<void> _loadContextAwarenessForSelectedDay() async {
-    if (_loadingContextAwareness) {
-      return;
-    }
-    final rawDays = _planJson['days'];
-    if (rawDays is! List ||
-        rawDays.isEmpty ||
-        _selectedDayIndex < 0 ||
-        _selectedDayIndex >= rawDays.length) {
-      if (!mounted) return;
-      setState(() {
-        _contextAwareness = null;
-        _loadingContextAwareness = false;
-      });
-      return;
-    }
-
-    final rawDay = rawDays[_selectedDayIndex];
-    if (rawDay is! Map) {
-      if (!mounted) return;
-      setState(() {
-        _contextAwareness = null;
-        _loadingContextAwareness = false;
-      });
-      return;
-    }
-
-    final requestSerial = ++_contextAwarenessRequestSerial;
-    if (mounted) {
-      setState(() {
-        _loadingContextAwareness = true;
-        _contextAwareness = null;
-      });
-    }
-
-    try {
-      final result = await _api.fetchContextAwareness(
-        day: Map<String, dynamic>.from(rawDay),
-        userId: UserState.userId,
-        triggerLinePush: false,
-        currentTime: DateTime.now(),
-      );
-      if (!mounted || requestSerial != _contextAwarenessRequestSerial) return;
-      final parsed = _ItineraryContextAwareness.fromJson(result);
-      setState(() {
-        _contextAwareness = parsed;
-      });
-      unawaited(_maybePromptContextReplan(parsed));
-    } on ApiClientException {
-      if (!mounted || requestSerial != _contextAwarenessRequestSerial) return;
-      setState(() {
-        _contextAwareness = null;
-      });
-    } finally {
-      if (mounted && requestSerial == _contextAwarenessRequestSerial) {
-        setState(() {
-          _loadingContextAwareness = false;
         });
       }
     }
@@ -717,35 +636,6 @@ class _ItineraryPageState extends State<ItineraryPage> {
     }
   }
 
-  bool _isSelectedDayToday() {
-    if (_selectedDayIndex < 0 || _selectedDayIndex >= _plan.days.length) {
-      return false;
-    }
-    final date = _plan.days[_selectedDayIndex].date;
-    if (date == null) {
-      return false;
-    }
-    final now = DateTime.now();
-    return date.year == now.year &&
-        date.month == now.month &&
-        date.day == now.day;
-  }
-
-  void _refreshContextAwarenessPolling() {
-    _contextAwarenessPollingTimer?.cancel();
-    if (!_isSelectedDayToday() || (UserState.userId?.trim().isEmpty ?? true)) {
-      return;
-    }
-    _contextAwarenessPollingTimer = Timer.periodic(_contextPollingInterval, (
-      _,
-    ) {
-      if (!mounted || _loadingContextAwareness) {
-        return;
-      }
-      unawaited(_loadContextAwarenessForSelectedDay());
-    });
-  }
-
   String _dayEditKey(_ItineraryDay day) {
     return day.date?.toIso8601String() ?? 'day-${day.day}';
   }
@@ -784,11 +674,9 @@ class _ItineraryPageState extends State<ItineraryPage> {
       _plan = _ItineraryPlan.fromJson(updatedPlan);
       _transitModeOverrides.clear();
       _manuallyEditedDayKeys.add(_dayEditKey(day));
-      _contextAwareness = null;
     });
     _recomputeManualDayTimes(_plan.days[_selectedDayIndex]);
     unawaited(_syncActivePlanToCloud());
-    await _loadContextAwarenessForSelectedDay();
   }
 
   void _recomputeManualDayTimes(_ItineraryDay day) {
@@ -2048,92 +1936,6 @@ class _ItineraryPageState extends State<ItineraryPage> {
     );
   }
 
-  Future<void> _maybePromptContextReplan(
-    _ItineraryContextAwareness contextData,
-  ) async {
-    final action = contextData.nextAction;
-    if (!mounted || action == null) return;
-    if (action.phase == 'completed') return;
-    if (_contextSeverityRank(action.severity) < 2) return;
-    final key = [
-      _selectedDayIndex,
-      action.type,
-      action.targetPlaceName,
-      action.scheduledTime,
-    ].join('|');
-    if (_lastContextReplanPromptKey == key || _showingContextReplanDialog) {
-      return;
-    }
-    _showingContextReplanDialog = true;
-    try {
-      await Future<void>.delayed(Duration.zero);
-      if (!mounted) return;
-      final shouldReplan = await _showContextReplanConfirmDialog(action);
-      _lastContextReplanPromptKey = key;
-      if (shouldReplan == true && mounted) {
-        await _replanWithCurrentPreferences();
-      }
-    } finally {
-      _showingContextReplanDialog = false;
-    }
-  }
-
-  Future<bool?> _showContextReplanConfirmDialog(
-    _ItineraryContextNextAction action,
-  ) {
-    return showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('要重新安排後續行程嗎？'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(action.title),
-            const SizedBox(height: 8),
-            Text(
-              action.message,
-              style: const TextStyle(
-                fontSize: 13,
-                color: Color(0xFF5A5670),
-                height: 1.35,
-              ),
-            ),
-            if (action.recommendedAction.trim().isNotEmpty) ...[
-              const SizedBox(height: 10),
-              Text(
-                '建議：${action.recommendedAction}',
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('先維持原行程'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('重新安排'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  int _contextSeverityRank(String severity) {
-    return switch (severity) {
-      'high' => 3,
-      'medium' => 2,
-      'low' => 1,
-      _ => 0,
-    };
-  }
-
   Widget _settingChipButton({
     required String label,
     required IconData icon,
@@ -2214,8 +2016,6 @@ class _ItineraryPageState extends State<ItineraryPage> {
                 setState(() {
                   _selectedDayIndex = index;
                 });
-                _refreshContextAwarenessPolling();
-                unawaited(_loadContextAwarenessForSelectedDay());
                 if (_timelineScrollController.hasClients) {
                   _timelineScrollController.animateTo(
                     0,
@@ -2344,595 +2144,6 @@ class _ItineraryPageState extends State<ItineraryPage> {
         ],
       ),
     );
-  }
-
-  Widget _buildInsightCard(_ItineraryInsight insight) {
-    final tips = insight.tips.take(3).toList();
-    final warnings = insight.warnings.take(3).toList();
-    final improvements = insight.improvements.take(3).toList();
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.92),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE0D8CE)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              const Icon(
-                Icons.auto_awesome_rounded,
-                size: 16,
-                color: Color(0xFF625A8A),
-              ),
-              const SizedBox(width: 6),
-              Text(
-                insight.source == 'gpt' ? 'GPT 行程解釋' : '行程解釋',
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w800,
-                  color: Color(0xFF2F2B3F),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          if (insight.summary.isNotEmpty)
-            Text(
-              insight.summary,
-              style: const TextStyle(
-                fontSize: 13,
-                height: 1.35,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF292533),
-              ),
-            ),
-          if (insight.planningFocus.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Text(
-              'AI 規劃焦點：${insight.planningFocus}',
-              style: const TextStyle(
-                fontSize: 12,
-                height: 1.35,
-                color: Color(0xFF4C4760),
-              ),
-            ),
-          ],
-          if (insight.alternativePlan.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text(
-              '替代方案：${insight.alternativePlan}',
-              style: const TextStyle(
-                fontSize: 12,
-                height: 1.35,
-                color: Color(0xFF4C4760),
-              ),
-            ),
-          ],
-          if (insight.routeReason.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text(
-              '順路原因：${insight.routeReason}',
-              style: const TextStyle(
-                fontSize: 12,
-                height: 1.35,
-                color: Color(0xFF4C4760),
-              ),
-            ),
-          ],
-          if (insight.userLikeReason.isNotEmpty) ...[
-            const SizedBox(height: 2),
-            Text(
-              '喜好匹配：${insight.userLikeReason}',
-              style: const TextStyle(
-                fontSize: 12,
-                height: 1.35,
-                color: Color(0xFF4C4760),
-              ),
-            ),
-          ],
-          if (insight.pacing.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Text(
-              '節奏判斷：${insight.pacing}',
-              style: const TextStyle(
-                fontSize: 12,
-                height: 1.35,
-                color: Color(0xFF4C4760),
-              ),
-            ),
-          ],
-          if (insight.mealPlan.isNotEmpty) ...[
-            const SizedBox(height: 2),
-            Text(
-              '餐食安排：${insight.mealPlan}',
-              style: const TextStyle(
-                fontSize: 12,
-                height: 1.35,
-                color: Color(0xFF4C4760),
-              ),
-            ),
-          ],
-          if (warnings.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            const Text(
-              'AI 提醒',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-                color: Color(0xFF9A5A30),
-              ),
-            ),
-            const SizedBox(height: 4),
-            for (final warning in warnings)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 2),
-                child: Text(
-                  '• $warning',
-                  style: const TextStyle(
-                    fontSize: 11.5,
-                    height: 1.3,
-                    color: Color(0xFF7A533B),
-                  ),
-                ),
-              ),
-          ],
-          if (improvements.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            const Text(
-              'AI 改善建議',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-                color: Color(0xFF49636D),
-              ),
-            ),
-            const SizedBox(height: 4),
-            for (final item in improvements)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 2),
-                child: Text(
-                  '• $item',
-                  style: const TextStyle(
-                    fontSize: 11.5,
-                    height: 1.3,
-                    color: Color(0xFF4F6670),
-                  ),
-                ),
-              ),
-          ],
-          if (tips.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            for (final tip in tips)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 2),
-                child: Text(
-                  '• $tip',
-                  style: const TextStyle(
-                    fontSize: 11.5,
-                    height: 1.3,
-                    color: Color(0xFF5A5670),
-                  ),
-                ),
-              ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildContextAwarenessSection() {
-    if (_loadingContextAwareness) {
-      return Container(
-        width: double.infinity,
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.82),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: const Color(0xFFE0D8CE)),
-        ),
-        child: const Row(
-          children: [
-            SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-            SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                '正在檢查今日天氣、營業時間與交通狀況...',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF4B465B),
-                ),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-    final contextData = _contextAwareness;
-    if (contextData == null) {
-      return const SizedBox.shrink();
-    }
-
-    final theme = _contextSeverityTheme(contextData.severity);
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-      decoration: BoxDecoration(
-        color: theme.$2,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: theme.$3),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(theme.$1, size: 16, color: theme.$4),
-              const SizedBox(width: 6),
-              Text(
-                '情境感知提醒',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w800,
-                  color: theme.$4,
-                ),
-              ),
-              if (contextData.linePushed) ...[
-                const Spacer(),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 3,
-                  ),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFEAF6EF),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: const Text(
-                    '已推播到 LINE',
-                    style: TextStyle(
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF2E6D52),
-                    ),
-                  ),
-                ),
-              ],
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            contextData.summary,
-            style: const TextStyle(
-              fontSize: 12.5,
-              height: 1.35,
-              fontWeight: FontWeight.w700,
-              color: Color(0xFF2F2B3F),
-            ),
-          ),
-          if (contextData.upcomingReminder != null) ...[
-            const SizedBox(height: 8),
-            _buildUpcomingReminderCard(contextData.upcomingReminder!),
-          ],
-          if (contextData.nextAction != null) ...[
-            const SizedBox(height: 8),
-            _buildContextNextActionCard(contextData.nextAction!),
-          ],
-          if (contextData.alerts.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            for (final alert in contextData.alerts.take(3))
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Text(
-                  '• ${alert.title}：${alert.message}',
-                  style: const TextStyle(
-                    fontSize: 11.5,
-                    height: 1.35,
-                    color: Color(0xFF4C4760),
-                  ),
-                ),
-              ),
-          ],
-          if (contextData.suggestions.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            const Text(
-              '即時建議',
-              style: TextStyle(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w800,
-                color: Color(0xFF49636D),
-              ),
-            ),
-            const SizedBox(height: 4),
-            for (final suggestion in contextData.suggestions.take(2))
-              Padding(
-                padding: const EdgeInsets.only(bottom: 2),
-                child: Text(
-                  '• $suggestion',
-                  style: const TextStyle(
-                    fontSize: 11.5,
-                    height: 1.3,
-                    color: Color(0xFF4F6670),
-                  ),
-                ),
-              ),
-          ],
-          if (contextData.backupPlans.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            const Text(
-              '雨天／室內備案',
-              style: TextStyle(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w800,
-                color: Color(0xFF49636D),
-              ),
-            ),
-            const SizedBox(height: 4),
-            for (final plan in contextData.backupPlans.take(2))
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.55),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFFE5DDD2)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '${plan.targetPlaceName}：${plan.reason}',
-                        style: const TextStyle(
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF4C4760),
-                          height: 1.35,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      for (final replacement in plan.replacements.take(2))
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 2),
-                          child: Text(
-                            '• ${replacement.name}'
-                            '${replacement.rating != null ? ' ${replacement.rating!.toStringAsFixed(1)}★' : ''}'
-                            '${replacement.city.isNotEmpty ? ' · ${replacement.city}' : ''}',
-                            style: const TextStyle(
-                              fontSize: 11.5,
-                              color: Color(0xFF4F6670),
-                              height: 1.3,
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildContextNextActionCard(_ItineraryContextNextAction action) {
-    final isCurrent = action.phase == 'current';
-    final accent = switch (action.severity) {
-      'high' => const Color(0xFFB85B4B),
-      'medium' => const Color(0xFF5A6FB3),
-      _ => const Color(0xFF567F68),
-    };
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.62),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: accent.withValues(alpha: 0.35)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                isCurrent ? Icons.bolt_rounded : Icons.update_rounded,
-                size: 16,
-                color: accent,
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  isCurrent ? '即時調整建議' : '下一站調整建議',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w800,
-                    color: accent,
-                  ),
-                ),
-              ),
-              if (action.scheduledTime.trim().isNotEmpty)
-                Text(
-                  action.scheduledTime,
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: accent,
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            action.title,
-            style: const TextStyle(
-              fontSize: 12.5,
-              fontWeight: FontWeight.w800,
-              color: Color(0xFF2F2B3F),
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            action.message,
-            style: const TextStyle(
-              fontSize: 11.5,
-              height: 1.35,
-              color: Color(0xFF4C4760),
-            ),
-          ),
-          if (action.recommendedAction.trim().isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Text(
-              '建議操作：${action.recommendedAction}',
-              style: TextStyle(
-                fontSize: 11.5,
-                height: 1.35,
-                fontWeight: FontWeight.w700,
-                color: accent,
-              ),
-            ),
-          ],
-          if (action.alternatives.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            for (final alt in action.alternatives.take(2))
-              Padding(
-                padding: const EdgeInsets.only(bottom: 2),
-                child: Text(
-                  '• ${alt.name}'
-                  '${alt.rating != null ? ' ${alt.rating!.toStringAsFixed(1)}★' : ''}'
-                  '${alt.city.isNotEmpty ? ' · ${alt.city}' : ''}',
-                  style: const TextStyle(
-                    fontSize: 11.5,
-                    color: Color(0xFF4F6670),
-                    height: 1.3,
-                  ),
-                ),
-              ),
-          ],
-          const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerRight,
-            child: OutlinedButton.icon(
-              onPressed: _replanning
-                  ? null
-                  : () async {
-                      final shouldReplan =
-                          await _showContextReplanConfirmDialog(action);
-                      if (shouldReplan == true && mounted) {
-                        await _replanWithCurrentPreferences();
-                      }
-                    },
-              icon: const Icon(Icons.refresh_rounded, size: 16),
-              label: const Text('詢問是否重排'),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildUpcomingReminderCard(_ItineraryUpcomingReminder reminder) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.58),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE5DDD2)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '即將前往 ${reminder.targetPlaceName}'
-            '${reminder.scheduledTime.isNotEmpty ? ' · ${reminder.scheduledTime}' : ''}',
-            style: const TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w800,
-              color: Color(0xFF2F2B3F),
-            ),
-          ),
-          if (reminder.transitLabel.isNotEmpty ||
-              reminder.transitMinutes != null) ...[
-            const SizedBox(height: 4),
-            Text(
-              '建議交通：'
-              '${reminder.transitLabel.isNotEmpty ? reminder.transitLabel : '依目前路況前往'}'
-              '${reminder.transitMinutes != null ? '，約 ${reminder.transitMinutes} 分鐘' : ''}',
-              style: const TextStyle(
-                fontSize: 11.5,
-                height: 1.3,
-                color: Color(0xFF4C4760),
-              ),
-            ),
-          ],
-          if (reminder.minutesUntil != null && reminder.minutesUntil! >= 0) ...[
-            const SizedBox(height: 2),
-            Text(
-              '距離出發約 ${reminder.minutesUntil} 分鐘，系統會持續重檢天氣與交通。',
-              style: const TextStyle(
-                fontSize: 11.5,
-                height: 1.3,
-                color: Color(0xFF4F6670),
-              ),
-            ),
-          ],
-          if (reminder.notes.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            for (final note in reminder.notes.take(2))
-              Padding(
-                padding: const EdgeInsets.only(bottom: 2),
-                child: Text(
-                  '• $note',
-                  style: const TextStyle(
-                    fontSize: 11.5,
-                    height: 1.3,
-                    color: Color(0xFF4F6670),
-                  ),
-                ),
-              ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  (IconData, Color, Color, Color) _contextSeverityTheme(String severity) {
-    return switch (severity) {
-      'high' => (
-        Icons.warning_amber_rounded,
-        const Color(0xFFFFF3E9),
-        const Color(0xFFF2D1B2),
-        const Color(0xFF9A5A30),
-      ),
-      'medium' => (
-        Icons.cloud_queue_rounded,
-        const Color(0xFFF7F3E9),
-        const Color(0xFFE5DAC1),
-        const Color(0xFF7A6243),
-      ),
-      'low' => (
-        Icons.info_outline_rounded,
-        const Color(0xFFF3F4FA),
-        const Color(0xFFD7DCEE),
-        const Color(0xFF5C5774),
-      ),
-      _ => (
-        Icons.verified_outlined,
-        const Color(0xFFEEF7F1),
-        const Color(0xFFD2E6D7),
-        const Color(0xFF2E6D52),
-      ),
-    };
   }
 
   void _animateToDay(int index) {
@@ -3360,9 +2571,9 @@ class _ItineraryPageState extends State<ItineraryPage> {
             const SizedBox(width: 8),
             ClipRRect(
               borderRadius: BorderRadius.circular(10),
-              child: item.place.imageUrl.isNotEmpty
+              child: _api.resolveImageUrl(item.place.imageUrl).isNotEmpty
                   ? Image.network(
-                      item.place.imageUrl,
+                      _api.resolveImageUrl(item.place.imageUrl),
                       width: 68,
                       height: 68,
                       fit: BoxFit.cover,
@@ -3384,6 +2595,7 @@ class _ItineraryPageState extends State<ItineraryPage> {
   }) {
     if (item.place.isMealBreak) return;
     final place = item.place;
+    final resolvedImageUrl = _api.resolveImageUrl(place.imageUrl);
     final previousItem = itemIndex > 0 ? day.items[itemIndex - 1] : null;
     final nextItem = itemIndex < day.items.length - 1
         ? day.items[itemIndex + 1]
@@ -3415,9 +2627,9 @@ class _ItineraryPageState extends State<ItineraryPage> {
               children: [
                 ClipRRect(
                   borderRadius: BorderRadius.circular(16),
-                  child: place.imageUrl.isNotEmpty
+                  child: resolvedImageUrl.isNotEmpty
                       ? Image.network(
-                          place.imageUrl,
+                          resolvedImageUrl,
                           width: double.infinity,
                           height: 180,
                           fit: BoxFit.cover,
@@ -4952,236 +4164,6 @@ class _ItineraryInsight {
   }
 }
 
-class _ItineraryContextAwareness {
-  const _ItineraryContextAwareness({
-    required this.summary,
-    required this.severity,
-    required this.alerts,
-    required this.suggestions,
-    required this.backupPlans,
-    required this.nextAction,
-    required this.upcomingReminder,
-    required this.linePushed,
-  });
-
-  final String summary;
-  final String severity;
-  final List<_ItineraryContextAlert> alerts;
-  final List<String> suggestions;
-  final List<_ItineraryContextBackupPlan> backupPlans;
-  final _ItineraryContextNextAction? nextAction;
-  final _ItineraryUpcomingReminder? upcomingReminder;
-  final bool linePushed;
-
-  factory _ItineraryContextAwareness.fromJson(Map<String, dynamic> json) {
-    return _ItineraryContextAwareness(
-      summary: json['summary']?.toString() ?? '',
-      severity: json['severity']?.toString() ?? 'ok',
-      alerts:
-          (json['alerts'] as List?)
-              ?.whereType<Map>()
-              .map(
-                (item) => _ItineraryContextAlert.fromJson(
-                  Map<String, dynamic>.from(item),
-                ),
-              )
-              .toList() ??
-          const [],
-      suggestions:
-          (json['suggestions'] as List?)?.map((e) => e.toString()).toList() ??
-          const [],
-      backupPlans:
-          (json['backupPlans'] as List?)
-              ?.whereType<Map>()
-              .map(
-                (item) => _ItineraryContextBackupPlan.fromJson(
-                  Map<String, dynamic>.from(item),
-                ),
-              )
-              .toList() ??
-          const [],
-      nextAction: json['nextAction'] is Map
-          ? _ItineraryContextNextAction.fromJson(
-              Map<String, dynamic>.from(json['nextAction'] as Map),
-            )
-          : null,
-      upcomingReminder: json['upcomingReminder'] is Map
-          ? _ItineraryUpcomingReminder.fromJson(
-              Map<String, dynamic>.from(json['upcomingReminder'] as Map),
-            )
-          : null,
-      linePushed: json['linePushed'] == true,
-    );
-  }
-}
-
-class _ItineraryUpcomingReminder {
-  const _ItineraryUpcomingReminder({
-    required this.targetPlaceName,
-    required this.scheduledTime,
-    required this.transitLabel,
-    required this.transitMinutes,
-    required this.minutesUntil,
-    required this.notes,
-  });
-
-  final String targetPlaceName;
-  final String scheduledTime;
-  final String transitLabel;
-  final int? transitMinutes;
-  final int? minutesUntil;
-  final List<String> notes;
-
-  factory _ItineraryUpcomingReminder.fromJson(Map<String, dynamic> json) {
-    return _ItineraryUpcomingReminder(
-      targetPlaceName: json['targetPlaceName']?.toString() ?? '',
-      scheduledTime: json['scheduledTime']?.toString() ?? '',
-      transitLabel: json['transitLabel']?.toString() ?? '',
-      transitMinutes: (json['transitMinutes'] as num?)?.toInt(),
-      minutesUntil: (json['minutesUntil'] as num?)?.toInt(),
-      notes:
-          (json['notes'] as List?)?.map((e) => e.toString()).toList() ??
-          const [],
-    );
-  }
-}
-
-class _ItineraryContextNextAction {
-  const _ItineraryContextNextAction({
-    required this.type,
-    required this.severity,
-    required this.phase,
-    required this.targetPlaceName,
-    required this.scheduledTime,
-    required this.title,
-    required this.message,
-    required this.recommendedAction,
-    required this.alternatives,
-  });
-
-  final String type;
-  final String severity;
-  final String phase;
-  final String targetPlaceName;
-  final String scheduledTime;
-  final String title;
-  final String message;
-  final String recommendedAction;
-  final List<_ItineraryContextReplacement> alternatives;
-
-  factory _ItineraryContextNextAction.fromJson(Map<String, dynamic> json) {
-    return _ItineraryContextNextAction(
-      type: json['type']?.toString() ?? '',
-      severity: json['severity']?.toString() ?? 'medium',
-      phase: json['phase']?.toString() ?? 'upcoming',
-      targetPlaceName: json['targetPlaceName']?.toString() ?? '',
-      scheduledTime: json['scheduledTime']?.toString() ?? '',
-      title: json['title']?.toString() ?? '',
-      message: json['message']?.toString() ?? '',
-      recommendedAction: json['recommendedAction']?.toString() ?? '',
-      alternatives:
-          (json['alternatives'] as List?)
-              ?.whereType<Map>()
-              .map(
-                (item) => _ItineraryContextReplacement.fromJson(
-                  Map<String, dynamic>.from(item),
-                ),
-              )
-              .toList() ??
-          const [],
-    );
-  }
-}
-
-class _ItineraryContextAlert {
-  const _ItineraryContextAlert({
-    required this.type,
-    required this.severity,
-    required this.title,
-    required this.message,
-  });
-
-  final String type;
-  final String severity;
-  final String title;
-  final String message;
-
-  factory _ItineraryContextAlert.fromJson(Map<String, dynamic> json) {
-    return _ItineraryContextAlert(
-      type: json['type']?.toString() ?? '',
-      severity: json['severity']?.toString() ?? 'low',
-      title: json['title']?.toString() ?? '',
-      message: json['message']?.toString() ?? '',
-    );
-  }
-}
-
-class _ItineraryContextBackupPlan {
-  const _ItineraryContextBackupPlan({
-    required this.trigger,
-    required this.targetPlaceId,
-    required this.targetPlaceName,
-    required this.reason,
-    required this.replacements,
-  });
-
-  final String trigger;
-  final String targetPlaceId;
-  final String targetPlaceName;
-  final String reason;
-  final List<_ItineraryContextReplacement> replacements;
-
-  factory _ItineraryContextBackupPlan.fromJson(Map<String, dynamic> json) {
-    return _ItineraryContextBackupPlan(
-      trigger: json['trigger']?.toString() ?? '',
-      targetPlaceId: json['targetPlaceId']?.toString() ?? '',
-      targetPlaceName: json['targetPlaceName']?.toString() ?? '',
-      reason: json['reason']?.toString() ?? '',
-      replacements:
-          (json['replacements'] as List?)
-              ?.whereType<Map>()
-              .map(
-                (item) => _ItineraryContextReplacement.fromJson(
-                  Map<String, dynamic>.from(item),
-                ),
-              )
-              .toList() ??
-          const [],
-    );
-  }
-}
-
-class _ItineraryContextReplacement {
-  const _ItineraryContextReplacement({
-    required this.id,
-    required this.name,
-    required this.city,
-    required this.address,
-    required this.rating,
-    required this.tags,
-  });
-
-  final String id;
-  final String name;
-  final String city;
-  final String address;
-  final double? rating;
-  final List<String> tags;
-
-  factory _ItineraryContextReplacement.fromJson(Map<String, dynamic> json) {
-    return _ItineraryContextReplacement(
-      id: json['id']?.toString() ?? '',
-      name: json['name']?.toString() ?? '',
-      city: json['city']?.toString() ?? '',
-      address: json['address']?.toString() ?? '',
-      rating: (json['rating'] as num?)?.toDouble(),
-      tags:
-          (json['tags'] as List?)?.map((e) => e.toString()).toList() ??
-          const [],
-    );
-  }
-}
-
 class _ItineraryDay {
   const _ItineraryDay({
     required this.day,
@@ -5412,7 +4394,9 @@ class _ItineraryPlace {
       city: json['city']?.toString() ?? '',
       address: json['address']?.toString() ?? '',
       description: json['description']?.toString() ?? '',
-      imageUrl: json['imageUrl']?.toString() ?? '',
+      imageUrl: BackendApi.instance.resolveImageUrl(
+        json['imageUrl']?.toString() ?? '',
+      ),
       tags: (json['tags'] as List?)?.whereType<String>().toList() ?? const [],
       rating: (json['rating'] as num?)?.toDouble(),
       lat: (json['lat'] as num?)?.toDouble(),
