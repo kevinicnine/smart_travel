@@ -2571,9 +2571,17 @@ class _ItineraryPageState extends State<ItineraryPage> {
             const SizedBox(width: 8),
             ClipRRect(
               borderRadius: BorderRadius.circular(10),
-              child: _api.resolveImageUrl(item.place.imageUrl).isNotEmpty
+              child: _api
+                      .resolveImageUrl(
+                        item.place.imageUrl,
+                        placeId: item.place.id,
+                      )
+                      .isNotEmpty
                   ? Image.network(
-                      _api.resolveImageUrl(item.place.imageUrl),
+                      _api.resolveImageUrl(
+                        item.place.imageUrl,
+                        placeId: item.place.id,
+                      ),
                       width: 68,
                       height: 68,
                       fit: BoxFit.cover,
@@ -2595,7 +2603,10 @@ class _ItineraryPageState extends State<ItineraryPage> {
   }) {
     if (item.place.isMealBreak) return;
     final place = item.place;
-    final resolvedImageUrl = _api.resolveImageUrl(place.imageUrl);
+    final resolvedImageUrl = _api.resolveImageUrl(
+      place.imageUrl,
+      placeId: place.id,
+    );
     final previousItem = itemIndex > 0 ? day.items[itemIndex - 1] : null;
     final nextItem = itemIndex < day.items.length - 1
         ? day.items[itemIndex + 1]
@@ -4396,6 +4407,7 @@ class _ItineraryPlace {
       description: json['description']?.toString() ?? '',
       imageUrl: BackendApi.instance.resolveImageUrl(
         json['imageUrl']?.toString() ?? '',
+        placeId: json['id']?.toString(),
       ),
       tags: (json['tags'] as List?)?.whereType<String>().toList() ?? const [],
       rating: (json['rating'] as num?)?.toDouble(),

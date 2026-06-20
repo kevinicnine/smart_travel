@@ -72,6 +72,15 @@ String? _normalizedSecret(String? value) {
   return normalized == null || normalized.isEmpty ? null : normalized;
 }
 
+String _googleMapsServerKey() {
+  final preferred =
+      Platform.environment['GOOGLE_PLACES_SERVER_API_KEY']?.trim() ?? '';
+  if (preferred.isNotEmpty) {
+    return preferred;
+  }
+  return Platform.environment['GOOGLE_MAPS_API_KEY']?.trim() ?? '';
+}
+
 class _AiUsageRecord {
   const _AiUsageRecord({
     required this.feature,
@@ -94,6 +103,13 @@ class _AiUsageRecord {
   final int? completionTokens;
   final int? totalTokens;
   final String? error;
+}
+
+class _PlacePhotoPayload {
+  const _PlacePhotoPayload({required this.bytes, required this.contentType});
+
+  final Uint8List bytes;
+  final String contentType;
 }
 
 class _LlmJsonResult {
@@ -1410,9 +1426,9 @@ Future<void> main(List<String> args) async {
         }
         final script = _crawlScriptForMode(mode);
         if (_crawlModeNeedsGoogleKey(mode)) {
-          final googleKey = Platform.environment['GOOGLE_MAPS_API_KEY'] ?? '';
+          final googleKey = _googleMapsServerKey();
           if (googleKey.isEmpty) {
-            throw ApiException(400, '需要設定 GOOGLE_MAPS_API_KEY');
+            throw ApiException(400, '需要設定 GOOGLE_PLACES_SERVER_API_KEY 或 GOOGLE_MAPS_API_KEY');
           }
         }
         if (mode != 'google_places' && batchCities.length > 1) {
@@ -5440,7 +5456,7 @@ Future<Map<String, dynamic>> _buildAdminMetricsSnapshot() async {
           ((Platform.environment['LINE_CHANNEL_ACCESS_TOKEN'] ?? '')
               .isNotEmpty),
       'googleMapsConfigured':
-          (Platform.environment['GOOGLE_MAPS_API_KEY'] ?? '').isNotEmpty,
+          _googleMapsServerKey().isNotEmpty,
       'itineraryLearningConfigured': _itineraryLearningProfile.enabled,
       'cronConfigured':
           _reminderCronToken != null && _reminderCronToken!.isNotEmpty,
@@ -5690,27 +5706,88 @@ Future<Response> _adminPageHandler(Request request) async {
 }
 
 Future<Response> _placePhotoProxyHandler(Request request) async {
-  final googleKey = Platform.environment['GOOGLE_MAPS_API_KEY']?.trim() ?? '';
+  final googleKey = _googleMapsServerKey();
   if (googleKey.isEmpty) {
-    return jsonResponse(503, errorBody('尚未設定 GOOGLE_MAPS_API_KEY'));
+    return jsonResponse(
+      503,
+      errorBody('尚未設定 GOOGLE_PLACES_SERVER_API_KEY 或 GOOGLE_MAPS_API_KEY'),
+    );
   }
 
+  final placeId = request.url.queryParameters['place_id']?.trim() ?? '';
   final photoReference =
       request.url.queryParameters['photo_reference']?.trim() ?? '';
-  if (photoReference.isEmpty) {
-    return jsonResponse(400, errorBody('缺少 photo_reference'));
+  if (placeId.isEmpty && photoReference.isEmpty) {
+    return jsonResponse(400, errorBody('缺少 place_id 或 photo_reference'));
   }
 
   final requestedMaxWidth = int.tryParse(
     request.url.queryParameters['maxwidth'] ?? '',
   );
   final maxWidth = (requestedMaxWidth ?? 800).clamp(64, 1600);
+  try {
+    if (placeId.isNotEmpty) {
+      final byPlaceId = await _fetchPlacePhotoByPlaceIdNew(
+        key: googleKey,
+        placeId: placeId,
+        maxWidth: maxWidth,
+      );
+      if (byPlaceId != null) {
+        return Response(
+          200,
+          body: byPlaceId.bytes,
+          headers: {
+            'content-type': byPlaceId.contentType,
+            'cache-control': 'public, max-age=86400',
+          },
+        );
+      }
+    }
+
+    if (photoReference.isNotEmpty) {
+      final byLegacyReference = await _fetchPlacePhotoByLegacyReference(
+        key: googleKey,
+        photoReference: photoReference,
+        maxWidth: maxWidth,
+      );
+      if (byLegacyReference != null) {
+        return Response(
+          200,
+          body: byLegacyReference.bytes,
+          headers: {
+            'content-type': byLegacyReference.contentType,
+            'cache-control': 'public, max-age=86400',
+          },
+        );
+      }
+    }
+
+    if (placeId.isNotEmpty) {
+      _log.warning(
+        'Place photo proxy failed for place_id=$placeId '
+        'photoRefPrefix=${photoReference.substring(0, min(12, photoReference.length))}',
+      );
+    }
+    return jsonResponse(404, errorBody('找不到景點圖片'));
+  } on TimeoutException catch (error) {
+    _log.warning('Place photo proxy timeout: $error');
+    return jsonResponse(504, errorBody('景點圖片讀取逾時'));
+  } catch (error, stack) {
+    _log.warning('Place photo proxy error: $error', error, stack);
+    return jsonResponse(502, errorBody('景點圖片代理失敗'));
+  }
+}
+
+Future<_PlacePhotoPayload?> _fetchPlacePhotoByLegacyReference({
+  required String key,
+  required String photoReference,
+  required int maxWidth,
+}) async {
   final uri = Uri.https('maps.googleapis.com', '/maps/api/place/photo', {
     'maxwidth': '$maxWidth',
     'photo_reference': photoReference,
-    'key': googleKey,
+    'key': key,
   });
-
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 12);
   try {
     final upstreamRequest = await client.getUrl(uri);
@@ -5721,15 +5798,11 @@ Future<Response> _placePhotoProxyHandler(Request request) async {
         (_) => '',
       );
       _log.warning(
-        'Place photo proxy failed: status=${upstreamResponse.statusCode} '
+        'Legacy place photo failed: status=${upstreamResponse.statusCode} '
         'photoReference=${photoReference.substring(0, min(12, photoReference.length))} '
         'body=${body.toString().trim()}',
       );
-      return Response(
-        upstreamResponse.statusCode,
-        body: body.isEmpty ? 'Failed to fetch place photo' : body,
-        headers: const {'content-type': 'text/plain; charset=utf-8'},
-      );
+      return null;
     }
 
     final bytesBuilder = await upstreamResponse.fold<BytesBuilder>(
@@ -5741,20 +5814,124 @@ Future<Response> _placePhotoProxyHandler(Request request) async {
     );
     final contentType =
         upstreamResponse.headers.contentType?.mimeType ?? 'image/jpeg';
-    return Response(
-      200,
-      body: bytesBuilder.takeBytes(),
-      headers: {
-        'content-type': contentType,
-        'cache-control': 'public, max-age=86400',
+    return _PlacePhotoPayload(
+      bytes: bytesBuilder.takeBytes(),
+      contentType: contentType,
+    );
+  } finally {
+    client.close(force: true);
+  }
+}
+
+Future<_PlacePhotoPayload?> _fetchPlacePhotoByPlaceIdNew({
+  required String key,
+  required String placeId,
+  required int maxWidth,
+}) async {
+  final client = HttpClient()..connectionTimeout = const Duration(seconds: 12);
+  try {
+    final detailsUri = Uri.https(
+      'places.googleapis.com',
+      '/v1/places/$placeId',
+      {'languageCode': 'zh-TW'},
+    );
+    final detailsRequest = await client.getUrl(detailsUri);
+    detailsRequest.headers.set('X-Goog-Api-Key', key);
+    detailsRequest.headers.set('X-Goog-FieldMask', 'photos');
+    final detailsResponse =
+        await detailsRequest.close().timeout(const Duration(seconds: 20));
+    if (detailsResponse.statusCode != 200) {
+      final body = await utf8.decodeStream(detailsResponse).catchError(
+        (_) => '',
+      );
+      _log.warning(
+        'Place photo details (new) failed: status=${detailsResponse.statusCode} '
+        'placeId=$placeId body=${body.toString().trim()}',
+      );
+      return null;
+    }
+
+    final detailsText = await utf8.decodeStream(detailsResponse);
+    final decoded = jsonDecode(detailsText);
+    if (decoded is! Map) {
+      return null;
+    }
+    final photos =
+        (decoded['photos'] as List?)
+            ?.whereType<Map>()
+            .map((item) => Map<String, dynamic>.from(item))
+            .toList() ??
+        const <Map<String, dynamic>>[];
+    if (photos.isEmpty) {
+      _log.info('Place photo details (new) has no photos: placeId=$placeId');
+      return null;
+    }
+    final photoName = photos.first['name']?.toString().trim() ?? '';
+    if (photoName.isEmpty) {
+      return null;
+    }
+
+    final mediaUri = Uri.https(
+      'places.googleapis.com',
+      '/v1/$photoName/media',
+      {'maxWidthPx': '$maxWidth', 'skipHttpRedirect': 'true'},
+    );
+    final mediaRequest = await client.getUrl(mediaUri);
+    mediaRequest.headers.set('X-Goog-Api-Key', key);
+    final mediaResponse =
+        await mediaRequest.close().timeout(const Duration(seconds: 20));
+    if (mediaResponse.statusCode != 200) {
+      final body = await utf8.decodeStream(mediaResponse).catchError(
+        (_) => '',
+      );
+      _log.warning(
+        'Place photo media (new) failed: status=${mediaResponse.statusCode} '
+        'placeId=$placeId photoName=$photoName body=${body.toString().trim()}',
+      );
+      return null;
+    }
+
+    final mediaText = await utf8.decodeStream(mediaResponse);
+    final mediaJson = jsonDecode(mediaText);
+    if (mediaJson is! Map) {
+      return null;
+    }
+    final photoUriText = mediaJson['photoUri']?.toString().trim() ?? '';
+    if (photoUriText.isEmpty) {
+      return null;
+    }
+
+    final photoUri = Uri.tryParse(photoUriText);
+    if (photoUri == null) {
+      return null;
+    }
+    final photoRequest = await client.getUrl(photoUri);
+    final photoResponse =
+        await photoRequest.close().timeout(const Duration(seconds: 20));
+    if (photoResponse.statusCode != 200) {
+      final body = await utf8.decodeStream(photoResponse).catchError(
+        (_) => '',
+      );
+      _log.warning(
+        'Resolved photoUri fetch failed: status=${photoResponse.statusCode} '
+        'placeId=$placeId body=${body.toString().trim()}',
+      );
+      return null;
+    }
+
+    final bytesBuilder = await photoResponse.fold<BytesBuilder>(
+      BytesBuilder(copy: false),
+      (builder, chunk) {
+        builder.add(chunk);
+        return builder;
       },
     );
-  } on TimeoutException catch (error) {
-    _log.warning('Place photo proxy timeout: $error');
-    return jsonResponse(504, errorBody('景點圖片讀取逾時'));
-  } catch (error, stack) {
-    _log.warning('Place photo proxy error: $error', error, stack);
-    return jsonResponse(502, errorBody('景點圖片代理失敗'));
+    final contentType =
+        photoResponse.headers.contentType?.mimeType ?? 'image/jpeg';
+    return _PlacePhotoPayload(
+      bytes: bytesBuilder.takeBytes(),
+      contentType: contentType,
+    );
   } finally {
     client.close(force: true);
   }
@@ -7498,7 +7675,7 @@ Future<bool> _sendLineContextAwarenessNotification({
 Future<void> _enrichUpcomingReminderLiveData(
   Map<String, dynamic> reminder,
 ) async {
-  final key = Platform.environment['GOOGLE_MAPS_API_KEY']?.trim() ?? '';
+  final key = _googleMapsServerKey();
   final placeId = reminder['placeId']?.toString().trim() ?? '';
   if (key.isEmpty || placeId.isEmpty) return;
   final details = await _googlePlaceDetails(key: key, placeId: placeId);
@@ -8692,9 +8869,7 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
       'plannerAssist': plannerAssist,
       'discoveredPlaces': discoveredPlaces.map(_placeToApiJson).toList(),
       'placeDiscovery': {
-        'enabled': (Platform.environment['GOOGLE_MAPS_API_KEY'] ?? '')
-            .trim()
-            .isNotEmpty,
+        'enabled': _googleMapsServerKey().isNotEmpty,
         'newPlacesImported': discoveredPlaces.length,
         'selectedOnlinePlaces': globallyPicked
             .where((place) => place.source == 'google_place_discovery')
@@ -8724,7 +8899,7 @@ Future<List<Place>> _discoverItineraryPlacesFromGoogle({
   required String? requirementsText,
   required List<String> wishlistPlaces,
 }) async {
-  final key = Platform.environment['GOOGLE_MAPS_API_KEY'] ?? '';
+  final key = _googleMapsServerKey();
   if (key.trim().isEmpty) {
     return const <Place>[];
   }
@@ -10153,7 +10328,7 @@ Future<Map<String, dynamic>?> _fetchTransitSegmentFromGoogle({
   required int departureMinute,
   required _PlannerWeights weights,
 }) async {
-  final key = Platform.environment['GOOGLE_MAPS_API_KEY'] ?? '';
+  final key = _googleMapsServerKey();
   if (key.isEmpty) {
     return null;
   }
@@ -13924,9 +14099,12 @@ Future<List<Map<String, dynamic>>> _fetchLiveMealSuggestions({
   required String city,
   required int limit,
 }) async {
-  final key = Platform.environment['GOOGLE_MAPS_API_KEY'] ?? '';
+  final key = _googleMapsServerKey();
   if (key.isEmpty) {
-    throw ApiException(400, '需要設定 GOOGLE_MAPS_API_KEY 才能即時搜尋餐廳');
+    throw ApiException(
+      400,
+      '需要設定 GOOGLE_PLACES_SERVER_API_KEY 或 GOOGLE_MAPS_API_KEY 才能即時搜尋餐廳',
+    );
   }
 
   final previousLat = _asDoubleValue(previous['lat']);
@@ -14455,9 +14633,12 @@ Future<Place> _importPlaceFromGoogleMapsUrl({
   required String nameHint,
   required String cityHint,
 }) async {
-  final key = Platform.environment['GOOGLE_MAPS_API_KEY'] ?? '';
+  final key = _googleMapsServerKey();
   if (key.isEmpty) {
-    throw ApiException(400, '需要設定 GOOGLE_MAPS_API_KEY 才能從 Google Maps 補景點');
+    throw ApiException(
+      400,
+      '需要設定 GOOGLE_PLACES_SERVER_API_KEY 或 GOOGLE_MAPS_API_KEY 才能從 Google Maps 補景點',
+    );
   }
   final uri = Uri.tryParse(url);
   if (uri == null) {

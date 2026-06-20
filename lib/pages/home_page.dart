@@ -1240,9 +1240,17 @@ class _HomePageState extends State<HomePage> {
                 children: [
                   ClipRRect(
                     borderRadius: BorderRadius.circular(14),
-                    child: _api.resolveImageUrl(place.imageUrl).isNotEmpty
+                    child: _api
+                            .resolveImageUrl(
+                              place.imageUrl,
+                              placeId: place.id,
+                            )
+                            .isNotEmpty
                         ? Image.network(
-                            _api.resolveImageUrl(place.imageUrl),
+                            _api.resolveImageUrl(
+                              place.imageUrl,
+                              placeId: place.id,
+                            ),
                             height: 68,
                             width: double.infinity,
                             fit: BoxFit.cover,
@@ -1861,6 +1869,7 @@ class _Place {
       address: json['address'] as String? ?? '',
       imageUrl: BackendApi.instance.resolveImageUrl(
         json['imageUrl'] as String? ?? '',
+        placeId: json['id'] as String?,
       ),
       city: _normalizeTaiwanAdminText(json['city'] as String? ?? ''),
       tags: (json['tags'] as List?)?.whereType<String>().toList() ?? const [],
@@ -1881,6 +1890,7 @@ class _Place {
       address: json['address'] as String? ?? '',
       imageUrl: BackendApi.instance.resolveImageUrl(
         json['imageUrl'] as String? ?? '',
+        placeId: json['id'] as String?,
       ),
       city: _normalizeTaiwanAdminText(json['city'] as String? ?? ''),
       tags: (json['tags'] as List?)?.whereType<String>().toList() ?? const [],

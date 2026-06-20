@@ -10,6 +10,7 @@ set -euo pipefail
 #   BACKEND_HOST=127.0.0.1
 #   SMART_TRAVEL_EXPOSE_CODES=false
 #   GOOGLE_MAPS_API_KEY=your-key
+#   GOOGLE_PLACES_SERVER_API_KEY=your-server-key
 #   ADMIN_TOKEN=your-admin-token
 #   ADMIN_USERNAME=admin
 #   ADMIN_PASSWORD=admin123

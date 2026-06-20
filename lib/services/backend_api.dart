@@ -14,11 +14,37 @@ class BackendApi {
 
   final String baseUrl;
 
-  String resolveImageUrl(String imageUrl) {
+  String resolveImageUrl(String imageUrl, {String? placeId}) {
+    final normalizedPlaceId = placeId?.trim() ?? '';
+    String buildPhotoProxyUrl({
+      String? photoReference,
+      String maxWidth = '800',
+    }) {
+      return Uri.parse(baseUrl)
+          .replace(
+            path: '/api/place-photo',
+            queryParameters: {
+              if (normalizedPlaceId.isNotEmpty) 'place_id': normalizedPlaceId,
+              if (photoReference != null && photoReference.isNotEmpty)
+                'photo_reference': photoReference,
+              'maxwidth': maxWidth,
+            },
+          )
+          .toString();
+    }
+
     final trimmed = imageUrl.trim();
-    if (trimmed.isEmpty) return '';
+    if (trimmed.isEmpty) {
+      return normalizedPlaceId.isEmpty ? '' : buildPhotoProxyUrl();
+    }
+
     final uri = Uri.tryParse(trimmed);
     if (uri == null) return trimmed;
+    if (!uri.hasScheme && uri.path == '/api/place-photo') {
+      return Uri.parse(baseUrl)
+          .replace(path: uri.path, queryParameters: uri.queryParameters)
+          .toString();
+    }
 
     final isGooglePhoto = uri.host == 'maps.googleapis.com' &&
         uri.path == '/maps/api/place/photo';
@@ -28,15 +54,10 @@ class BackendApi {
     }
 
     final maxWidth = uri.queryParameters['maxwidth'] ?? '800';
-    return Uri.parse(baseUrl)
-        .replace(
-          path: '/api/place-photo',
-          queryParameters: {
-            'photo_reference': photoReference,
-            'maxwidth': maxWidth,
-          },
-        )
-        .toString();
+    return buildPhotoProxyUrl(
+      photoReference: photoReference,
+      maxWidth: maxWidth,
+    );
   }
 
   Future<Map<String, dynamic>> sendEmailCode(String email) async {
