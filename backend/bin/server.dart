@@ -8307,6 +8307,14 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
   final locationParts = normalizedScopedArea != null && normalizedScopedArea.isNotEmpty
       ? scopedLocationParts
       : _parseLocationParts(location);
+  final effectiveDestinationCities = normalizedScopedArea != null &&
+          normalizedScopedArea.isNotEmpty
+      ? <String>[scopedArea!]
+      : destinationCities;
+  final effectiveLocation = normalizedScopedArea != null &&
+          normalizedScopedArea.isNotEmpty
+      ? scopedArea
+      : location;
   final effectiveWishlistPlaces = <String>{
     ...wishlistPlaces
         .map((place) => place.trim())
@@ -8388,6 +8396,20 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
     return place.tags.any((tag) => preferredTags.contains(tag.toLowerCase()));
   }
 
+  if (normalizedScopedArea != null && normalizedScopedArea.isNotEmpty) {
+    final exportPlaces = await _loadTrainingPlacesExportPlaces();
+    if (exportPlaces.isNotEmpty) {
+      final mergedById = <String, Place>{for (final place in places) place.id: place};
+      for (final place in exportPlaces) {
+        if (!matchesCityScope(place) || !matchesTownshipScope(place)) {
+          continue;
+        }
+        mergedById.putIfAbsent(place.id, () => place);
+      }
+      places = mergedById.values.toList();
+    }
+  }
+
   var candidates = places.where((place) {
     return matchesCityScope(place) &&
         matchesTownshipScope(place) &&
@@ -8432,8 +8454,8 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
     preferredTags: preferredTags,
     requirementSignals: requirementSignals,
     totalDays: totalDays,
-    destinationCities: destinationCities,
-    location: location,
+    destinationCities: effectiveDestinationCities,
+    location: effectiveLocation,
     requirementsText: requirementsText,
     wishlistPlaces: effectiveWishlistPlaces,
   );
@@ -8485,6 +8507,11 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
       candidates = strictlyScoped;
     }
   }
+  if (normalizedScopedArea != null &&
+      normalizedScopedArea.isNotEmpty &&
+      candidates.isEmpty) {
+    throw ApiException(422, '目前找不到符合「$scopedArea」的景點資料，請換更大的範圍或先在後台補景點。');
+  }
   final requiredPlaceCandidates = <Place>[];
   for (final requestedName in effectiveWishlistPlaces) {
     final match = _findRequestedPlaceMatch(
@@ -8512,12 +8539,12 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
     endDate: endDate,
     totalDays: totalDays,
     originCity: originCity,
-    destinationCities: destinationCities,
+    destinationCities: effectiveDestinationCities,
     requirementsText: requirementsText,
     requirementSignals: requirementSignals,
     tripPurpose: normalizedTripPurpose,
     travelBehavior: normalizedTravelBehavior,
-    location: location,
+    location: effectiveLocation,
     budget: budget,
     people: people,
     dayStartTime: dayStartTime,
@@ -8533,7 +8560,7 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
     allPlaces: places,
     totalDays: totalDays,
     originCity: originCity,
-    destinationCities: destinationCities,
+    destinationCities: effectiveDestinationCities,
     tripPurpose: normalizedTripPurpose,
     travelBehavior: normalizedTravelBehavior,
     plannerAssist: plannerAssist,
@@ -14233,6 +14260,11 @@ Future<Map<String, List<Place>>> _trainingPlacesExportIndex() async {
     _trainingPlacesExportIndexCache = const <String, List<Place>>{};
     return _trainingPlacesExportIndexCache!;
   }
+}
+
+Future<List<Place>> _loadTrainingPlacesExportPlaces() async {
+  await _trainingPlacesExportIndex();
+  return _trainingPlacesExportCache ?? const <Place>[];
 }
 
 Place? _bestTrainingExportMatch(Place target, Iterable<Place> candidates) {
