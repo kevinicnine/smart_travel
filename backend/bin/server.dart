@@ -8298,13 +8298,15 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
   final normalizedLocation = location == null
       ? null
       : _normalizeLocationText(location);
-  final locationParts = _parseLocationParts(location);
   final requirementSignals = _extractRequirementSignals(requirementsText);
   final scopedArea = requirementSignals.scopedArea?.trim();
   final normalizedScopedArea = scopedArea == null || scopedArea.isEmpty
       ? null
       : _normalizeLocationText(scopedArea);
   final scopedLocationParts = _parseLocationParts(scopedArea);
+  final locationParts = normalizedScopedArea != null && normalizedScopedArea.isNotEmpty
+      ? scopedLocationParts
+      : _parseLocationParts(location);
   final effectiveWishlistPlaces = <String>{
     ...wishlistPlaces
         .map((place) => place.trim())
@@ -8369,13 +8371,14 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
   }
 
   bool matchesLocation(Place place) {
-    if (normalizedLocation == null || normalizedLocation.isEmpty) {
+    final effectiveLocation = normalizedScopedArea ?? normalizedLocation;
+    if (effectiveLocation == null || effectiveLocation.isEmpty) {
       return true;
     }
     final haystack = _normalizeText(
       '${place.name} ${place.city} ${place.address}',
     );
-    return haystack.contains(normalizedLocation);
+    return haystack.contains(effectiveLocation);
   }
 
   bool matchesTags(Place place) {
@@ -8406,6 +8409,16 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
   }
   if (candidates.isEmpty) {
     candidates = places.where(matchesLocation).toList();
+  }
+  if (normalizedScopedArea != null && normalizedScopedArea.isNotEmpty) {
+    final strictlyScoped = candidates.where((place) {
+      return matchesCityScope(place) &&
+          matchesTownshipScope(place) &&
+          matchesLocation(place);
+    }).toList();
+    if (strictlyScoped.isNotEmpty) {
+      candidates = strictlyScoped;
+    }
   }
   candidates = _filterCandidatesByTripPurpose(
     candidates,
@@ -8441,6 +8454,16 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
         normalizedTripPurpose,
         requirementSignals: requirementSignals,
       );
+      if (normalizedScopedArea != null && normalizedScopedArea.isNotEmpty) {
+        final strictlyScoped = candidates.where((place) {
+          return matchesCityScope(place) &&
+              matchesTownshipScope(place) &&
+              matchesLocation(place);
+        }).toList();
+        if (strictlyScoped.isNotEmpty) {
+          candidates = strictlyScoped;
+        }
+      }
     }
   }
   if (requirementSignals.preferNightMarket) {
@@ -8451,6 +8474,16 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
           _isNightMarketPlace(place);
     });
     candidates = [...candidates, ...nightMarkets];
+  }
+  if (normalizedScopedArea != null && normalizedScopedArea.isNotEmpty) {
+    final strictlyScoped = candidates.where((place) {
+      return matchesCityScope(place) &&
+          matchesTownshipScope(place) &&
+          matchesLocation(place);
+    }).toList();
+    if (strictlyScoped.isNotEmpty) {
+      candidates = strictlyScoped;
+    }
   }
   final requiredPlaceCandidates = <Place>[];
   for (final requestedName in effectiveWishlistPlaces) {
