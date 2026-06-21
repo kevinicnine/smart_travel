@@ -4698,6 +4698,7 @@ Future<void> _sendTrackedLinePush({
   String? userId,
   String? username,
   String? imageUrl,
+  List<Map<String, dynamic>>? messages,
 }) async {
   final entry = <String, dynamic>{
     'timestamp': DateTime.now().toUtc().toIso8601String(),
@@ -4712,6 +4713,7 @@ Future<void> _sendTrackedLinePush({
       to: to,
       text: text,
       imageUrl: imageUrl,
+      messages: messages,
     );
     entry['status'] = 'success';
     _appendBounded(_linePushHistory, entry, limit: 80);
@@ -7694,12 +7696,25 @@ Future<bool> _sendLineContextAwarenessNotification({
             .map((e) => Map<String, dynamic>.from(e))
             .toList() ??
         const <Map<String, dynamic>>[];
+    final nextAction = result['nextAction'] is Map
+        ? Map<String, dynamic>.from(result['nextAction'] as Map)
+        : null;
     final message = _buildLineContextAwarenessSummary(
       dayDate: dayDate,
       alerts: alerts,
       suggestions: suggestions,
       backupPlans: backupPlans,
       upcomingReminder: shouldPushReminder ? upcomingReminder : null,
+    );
+    final flexMessages = _buildLineContextAwarenessMessages(
+      dayDate: dayDate,
+      overallSeverity: overallSeverity,
+      alerts: alerts,
+      suggestions: suggestions,
+      backupPlans: backupPlans,
+      nextAction: nextAction,
+      upcomingReminder: shouldPushReminder ? upcomingReminder : null,
+      fallbackText: message,
     );
     await _sendTrackedLinePush(
       to: lineUserId,
@@ -7712,6 +7727,7 @@ Future<bool> _sendLineContextAwarenessNotification({
                 ? null
                 : upcomingReminder['imageUrl']?.toString()
           : null,
+      messages: flexMessages,
     );
     _lineContextPushCooldown[cooldownKey] = now;
     if (shouldPushReminder) {
@@ -7877,6 +7893,385 @@ String _buildLineContextAwarenessSummary({
   return _limitLineMessage(lines.join('\n'));
 }
 
+List<Map<String, dynamic>>? _buildLineContextAwarenessMessages({
+  required DateTime dayDate,
+  required String overallSeverity,
+  required List<Map<String, dynamic>> alerts,
+  required List<String> suggestions,
+  required List<Map<String, dynamic>> backupPlans,
+  required String fallbackText,
+  Map<String, dynamic>? nextAction,
+  Map<String, dynamic>? upcomingReminder,
+}) {
+  final bubbles = <Map<String, dynamic>>[];
+  final primaryBackup = _resolvePrimaryBackupPlan(
+    nextAction: nextAction,
+    backupPlans: backupPlans,
+  );
+  final appUrl = _smartTravelAppUrl();
+
+  if (alerts.isNotEmpty || nextAction != null || primaryBackup != null) {
+    final severity = nextAction?['severity']?.toString() ?? overallSeverity;
+    final severityColor = _lineSeverityColor(severity);
+    final primaryAlert = nextAction ?? alerts.first;
+    final title = nextAction?['title']?.toString().trim().isNotEmpty == true
+        ? nextAction!['title'].toString().trim()
+        : primaryAlert['title']?.toString().trim().isNotEmpty == true
+        ? primaryAlert['title'].toString().trim()
+        : '即時情境感知提醒';
+    final message = nextAction?['message']?.toString().trim().isNotEmpty == true
+        ? nextAction!['message'].toString().trim()
+        : primaryAlert['message']?.toString().trim() ?? '';
+    final recommendedAction =
+        nextAction?['recommendedAction']?.toString().trim() ?? '';
+    final footerButtons = <Map<String, dynamic>>[];
+    if (primaryBackup != null) {
+      final replacement = Map<String, dynamic>.from(
+        primaryBackup['replacement'] as Map,
+      );
+      footerButtons.add(
+        _lineFlexButton(
+          label: '一鍵套用備案',
+          style: 'primary',
+          color: severityColor,
+          action: {
+            'type': 'postback',
+            'label': '一鍵套用備案',
+            'data': _lineContextPostbackData(
+              action: 'apply_backup',
+              date: dayDate.toIso8601String().substring(0, 10),
+              targetPlaceId:
+                  primaryBackup['targetPlaceId']?.toString().trim() ?? '',
+              replacementPlaceId:
+                  replacement['id']?.toString().trim() ?? '',
+            ),
+            'displayText':
+                '套用備案：${primaryBackup['targetPlaceName']} 改為 ${replacement['name']}',
+          },
+        ),
+      );
+      footerButtons.add(
+        _lineFlexButton(
+          label: '保持原行程',
+          action: {
+            'type': 'postback',
+            'label': '保持原行程',
+            'data': _lineContextPostbackData(
+              action: 'keep_original',
+              date: dayDate.toIso8601String().substring(0, 10),
+              targetPlaceId:
+                  primaryBackup['targetPlaceId']?.toString().trim() ?? '',
+            ),
+            'displayText': '保持原行程',
+          },
+        ),
+      );
+    }
+    if (appUrl.isNotEmpty) {
+      footerButtons.add(
+        _lineFlexButton(
+          label: '打開 App',
+          action: {
+            'type': 'uri',
+            'label': '打開 App',
+            'uri': appUrl,
+          },
+        ),
+      );
+    }
+    final contents = <Map<String, dynamic>>[
+      _lineFlexHeaderChip(
+        label: _lineSeverityLabel(severity),
+        backgroundColor: severityColor,
+      ),
+      _lineFlexTitle(title),
+      if (message.isNotEmpty)
+        _lineFlexText(message, color: '#5B556C', wrap: true),
+      if (primaryBackup != null) ...[
+        _lineFlexSeparator(),
+        _lineFlexLabelValue(
+          '原訂',
+          '${primaryBackup['scheduledTime'] ?? ''} ${primaryBackup['targetPlaceName'] ?? ''}'
+              .trim(),
+        ),
+        _lineFlexLabelValue(
+          '建議',
+          '${(primaryBackup['replacement'] as Map)['name'] ?? ''}',
+        ),
+        if (((primaryBackup['replacement'] as Map)['address']?.toString().trim() ??
+                '')
+            .isNotEmpty)
+          _lineFlexText(
+            ((primaryBackup['replacement'] as Map)['address']?.toString() ?? ''),
+            size: 'xs',
+            color: '#7B758B',
+            wrap: true,
+          ),
+      ],
+      if (recommendedAction.isNotEmpty) ...[
+        _lineFlexSeparator(),
+        _lineFlexLabelValue('系統建議', recommendedAction),
+      ],
+      if (suggestions.isNotEmpty) ...[
+        _lineFlexSeparator(),
+        _lineFlexLabelValue('補充建議', suggestions.take(2).join(' / ')),
+      ],
+    ];
+    bubbles.add(
+      _lineFlexBubble(
+        altText: fallbackText,
+        bodyContents: contents,
+        footerButtons: footerButtons,
+      ),
+    );
+  }
+
+  if (upcomingReminder != null) {
+    final target = upcomingReminder['targetPlaceName']?.toString().trim() ?? '下一站';
+    final departureTime = upcomingReminder['departureTime']?.toString().trim() ?? '';
+    final scheduledTime = upcomingReminder['scheduledTime']?.toString().trim() ?? '';
+    final routeText = upcomingReminder['transitLabel']?.toString().trim() ?? '';
+    final weatherSummary = upcomingReminder['weatherSummary']?.toString().trim() ?? '';
+    final rainProbability = _asIntValue(upcomingReminder['rainProbability']);
+    final navigationUrl = upcomingReminder['navigationUrl']?.toString().trim() ?? '';
+    final temporaryStatus =
+        upcomingReminder['temporaryStatus']?.toString().trim() ?? '';
+    final reminderButtons = <Map<String, dynamic>>[];
+    if (navigationUrl.isNotEmpty) {
+      reminderButtons.add(
+        _lineFlexButton(
+          label: '立即導航',
+          style: 'primary',
+          color: '#4E8DFF',
+          action: {
+            'type': 'uri',
+            'label': '立即導航',
+            'uri': navigationUrl,
+          },
+        ),
+      );
+    }
+    if (appUrl.isNotEmpty) {
+      reminderButtons.add(
+        _lineFlexButton(
+          label: '查看 App',
+          action: {
+            'type': 'uri',
+            'label': '查看 App',
+            'uri': appUrl,
+          },
+        ),
+      );
+    }
+    bubbles.add(
+      _lineFlexBubble(
+        altText: fallbackText,
+        bodyContents: [
+          _lineFlexHeaderChip(
+            label: '下一站提醒',
+            backgroundColor: '#4E8DFF',
+          ),
+          _lineFlexTitle(target),
+          if (departureTime.isNotEmpty)
+            _lineFlexLabelValue('建議出發', departureTime),
+          if (scheduledTime.isNotEmpty)
+            _lineFlexLabelValue('到站時間', scheduledTime),
+          if (routeText.isNotEmpty) _lineFlexLabelValue('移動方式', routeText),
+          if (weatherSummary.isNotEmpty || rainProbability != null)
+            _lineFlexLabelValue(
+              '天氣',
+              '${weatherSummary.isEmpty ? '尚無摘要' : weatherSummary}'
+                  '${rainProbability != null ? '，降雨 $rainProbability%' : ''}',
+            ),
+          if (temporaryStatus.isNotEmpty)
+            _lineFlexLabelValue('開放狀態', temporaryStatus),
+        ],
+        footerButtons: reminderButtons,
+      ),
+    );
+  }
+
+  if (bubbles.isEmpty) {
+    return null;
+  }
+  final contents = bubbles.length == 1
+      ? bubbles.first['contents']
+      : {
+          'type': 'carousel',
+          'contents': [
+            for (final bubble in bubbles) bubble['contents'],
+          ],
+        };
+  return [
+    {
+      'type': 'flex',
+      'altText': _shortLine(fallbackText, 180),
+      'contents': contents,
+    },
+  ];
+}
+
+Map<String, dynamic>? _resolvePrimaryBackupPlan({
+  required Map<String, dynamic>? nextAction,
+  required List<Map<String, dynamic>> backupPlans,
+}) {
+  final alternatives = nextAction?['alternatives'];
+  if (nextAction != null && alternatives is List && alternatives.isNotEmpty) {
+    final first = alternatives.first;
+    if (first is Map) {
+      return {
+        'targetPlaceId': nextAction['targetPlaceId'],
+        'targetPlaceName': nextAction['targetPlaceName'],
+        'scheduledTime': nextAction['scheduledTime'],
+        'replacement': Map<String, dynamic>.from(first),
+      };
+    }
+  }
+  if (backupPlans.isEmpty) return null;
+  final firstPlan = backupPlans.first;
+  final replacements = firstPlan['replacements'];
+  if (replacements is! List || replacements.isEmpty) return null;
+  final firstReplacement = replacements.first;
+  if (firstReplacement is! Map) return null;
+  return {
+    'targetPlaceId': firstPlan['targetPlaceId'],
+    'targetPlaceName': firstPlan['targetPlaceName'],
+    'scheduledTime': firstPlan['scheduledTime'],
+    'replacement': Map<String, dynamic>.from(firstReplacement),
+  };
+}
+
+String _smartTravelAppUrl() =>
+    Platform.environment['SMART_TRAVEL_APP_URL']?.trim() ?? '';
+
+String _lineSeverityColor(String? severity) {
+  return switch (severity) {
+    'high' => '#E25555',
+    'medium' => '#F08B3E',
+    'low' => '#6A7AA7',
+    _ => '#5B6C8F',
+  };
+}
+
+String _lineSeverityLabel(String? severity) {
+  return switch (severity) {
+    'high' => '高優先處理',
+    'medium' => '建議盡快調整',
+    'low' => '提醒留意',
+    _ => '情境感知提醒',
+  };
+}
+
+Map<String, dynamic> _lineFlexBubble({
+  required String altText,
+  required List<Map<String, dynamic>> bodyContents,
+  List<Map<String, dynamic>> footerButtons = const <Map<String, dynamic>>[],
+}) {
+  return {
+    'type': 'flex',
+    'altText': altText,
+    'contents': {
+      'type': 'bubble',
+      'size': 'mega',
+      'body': {
+        'type': 'box',
+        'layout': 'vertical',
+        'spacing': 'md',
+        'contents': bodyContents,
+      },
+      if (footerButtons.isNotEmpty)
+        'footer': {
+          'type': 'box',
+          'layout': 'vertical',
+          'spacing': 'sm',
+          'contents': footerButtons,
+        },
+    },
+  };
+}
+
+Map<String, dynamic> _lineFlexHeaderChip({
+  required String label,
+  required String backgroundColor,
+}) {
+  return {
+    'type': 'box',
+    'layout': 'horizontal',
+    'contents': [
+      {
+        'type': 'text',
+        'text': label,
+        'size': 'xs',
+        'weight': 'bold',
+        'color': '#FFFFFF',
+      },
+    ],
+    'backgroundColor': backgroundColor,
+    'cornerRadius': '12px',
+    'paddingAll': '8px',
+  };
+}
+
+Map<String, dynamic> _lineFlexTitle(String text) {
+  return {
+    'type': 'text',
+    'text': text,
+    'weight': 'bold',
+    'size': 'lg',
+    'wrap': true,
+    'color': '#1F1F23',
+  };
+}
+
+Map<String, dynamic> _lineFlexText(
+  String text, {
+  String size = 'sm',
+  String color = '#1F1F23',
+  bool wrap = false,
+}) {
+  return {
+    'type': 'text',
+    'text': text,
+    'size': size,
+    'color': color,
+    'wrap': wrap,
+  };
+}
+
+Map<String, dynamic> _lineFlexSeparator() {
+  return {
+    'type': 'separator',
+    'margin': 'sm',
+  };
+}
+
+Map<String, dynamic> _lineFlexLabelValue(String label, String value) {
+  return {
+    'type': 'box',
+    'layout': 'vertical',
+    'spacing': 'xs',
+    'contents': [
+      _lineFlexText(label, size: 'xs', color: '#8A839D'),
+      _lineFlexText(value, size: 'sm', color: '#1F1F23', wrap: true),
+    ],
+  };
+}
+
+Map<String, dynamic> _lineFlexButton({
+  required String label,
+  required Map<String, dynamic> action,
+  String style = 'secondary',
+  String? color,
+}) {
+  return {
+    'type': 'button',
+    'style': style,
+    if (color != null) 'color': color,
+    'height': 'sm',
+    'action': action,
+  };
+}
+
 String _shortLine(String value, int maxLength) {
   final normalized = value.replaceAll(RegExp(r'\s+'), ' ').trim();
   return normalized.length <= maxLength
@@ -7886,6 +8281,206 @@ String _shortLine(String value, int maxLength) {
 
 String _limitLineMessage(String value) =>
     value.length <= 4900 ? value : '${value.substring(0, 4899)}…';
+
+String _lineContextPostbackData({
+  required String action,
+  required String date,
+  String? targetPlaceId,
+  String? replacementPlaceId,
+}) {
+  return Uri(
+    queryParameters: {
+      'st': 'context',
+      'a': action,
+      'd': date,
+      if (targetPlaceId != null && targetPlaceId.trim().isNotEmpty)
+        't': targetPlaceId.trim(),
+      if (replacementPlaceId != null && replacementPlaceId.trim().isNotEmpty)
+        'r': replacementPlaceId.trim(),
+    },
+  ).query;
+}
+
+Map<String, String> _parseLinePostbackData(String raw) {
+  if (raw.trim().isEmpty) return const <String, String>{};
+  try {
+    return Uri.splitQueryString(raw);
+  } catch (_) {
+    return const <String, String>{};
+  }
+}
+
+Future<String> _handleLineContextPostback({
+  required String lineUserId,
+  required Map<String, String> data,
+}) async {
+  final action = data['a']?.trim() ?? '';
+  if (data['st'] != 'context' || action.isEmpty) {
+    return '目前無法辨識這個操作，請回到 App 查看最新行程。';
+  }
+
+  switch (action) {
+    case 'keep_original':
+      return '已保留原行程。Smart Travel 會持續幫你監測後續風險。';
+    case 'apply_backup':
+      final result = await _applyLineBackupReplacement(
+        lineUserId: lineUserId,
+        targetDate: data['d']?.trim() ?? '',
+        targetPlaceId: data['t']?.trim() ?? '',
+        replacementPlaceId: data['r']?.trim() ?? '',
+      );
+      return '已套用備案：${result['originalName']} 改為 ${result['replacementName']}，並同步到雲端正式行程。';
+    default:
+      return '目前無法辨識這個操作，請回到 App 查看最新行程。';
+  }
+}
+
+Future<Map<String, String>> _applyLineBackupReplacement({
+  required String lineUserId,
+  required String targetDate,
+  required String targetPlaceId,
+  required String replacementPlaceId,
+}) async {
+  if (targetDate.isEmpty || targetPlaceId.isEmpty || replacementPlaceId.isEmpty) {
+    throw ApiException(400, '缺少套用備案所需參數');
+  }
+  final user = await _store.findByLineUserId(lineUserId);
+  if (user == null) {
+    throw ApiException(404, '找不到已綁定的使用者');
+  }
+  final activePlan = user.activePlan;
+  if (activePlan == null) {
+    throw ApiException(404, '目前沒有可更新的正式行程');
+  }
+  final replacement = await _findContextReplacementPlace(replacementPlaceId);
+  if (replacement == null) {
+    throw ApiException(404, '找不到備案景點資料');
+  }
+
+  final plan = Map<String, dynamic>.from(
+    jsonDecode(jsonEncode(activePlan)) as Map,
+  );
+  final rawDays = plan['days'];
+  if (rawDays is! List) {
+    throw ApiException(400, '正式行程格式不正確');
+  }
+
+  var dayIndex = -1;
+  for (var i = 0; i < rawDays.length; i++) {
+    final raw = rawDays[i];
+    if (raw is! Map) continue;
+    final day = Map<String, dynamic>.from(raw);
+    if (_reminderDayDateKey(day) == targetDate) {
+      dayIndex = i;
+      break;
+    }
+  }
+  if (dayIndex < 0) {
+    throw ApiException(404, '找不到要更新的行程日期');
+  }
+
+  final targetDay = Map<String, dynamic>.from(rawDays[dayIndex] as Map);
+  final rawItems = targetDay['items'];
+  if (rawItems is! List) {
+    throw ApiException(400, '行程項目格式不正確');
+  }
+  final items = rawItems.whereType<Map>().map(Map<String, dynamic>.from).toList();
+  final itemIndex = items.indexWhere((item) {
+    final place = item['place'];
+    if (place is! Map) return false;
+    return (place['id']?.toString().trim() ?? '') == targetPlaceId;
+  });
+  if (itemIndex < 0) {
+    throw ApiException(404, '原始景點已變更，請回到 App 重新確認最新行程');
+  }
+
+  final originalPlace = items[itemIndex]['place'] is Map
+      ? Map<String, dynamic>.from(items[itemIndex]['place'] as Map)
+      : const <String, dynamic>{};
+  items[itemIndex]['place'] = _placeToPlanJson(replacement);
+  items[itemIndex]['durationMinutes'] = _estimateStayMinutes(replacement);
+  _applyContextReplacementPresentation(items[itemIndex], replacement);
+
+  final meta = plan['meta'] is Map
+      ? Map<String, dynamic>.from(plan['meta'] as Map)
+      : <String, dynamic>{};
+  final dayDate = _parseDate(targetDate);
+  if (dayDate != null) {
+    await _refreshDayItemSchedule(
+      items: items,
+      dayDate: dayDate,
+      weights: _weightsFromPlanMeta(meta),
+    );
+  }
+  targetDay['items'] = items;
+  rawDays[dayIndex] = targetDay;
+  plan['days'] = rawDays;
+
+  final updatedMeta = Map<String, dynamic>.from(meta);
+  final contextUpdates =
+      (updatedMeta['contextUpdates'] as List?)
+          ?.whereType<Map>()
+          .map(Map<String, dynamic>.from)
+          .toList() ??
+      <Map<String, dynamic>>[];
+  contextUpdates.insert(0, {
+    'timestamp': DateTime.now().toUtc().toIso8601String(),
+    'source': 'line_postback',
+    'action': 'apply_backup',
+    'date': targetDate,
+    'targetPlaceId': targetPlaceId,
+    'targetPlaceName': originalPlace['name']?.toString(),
+    'replacementPlaceId': replacement.id,
+    'replacementPlaceName': replacement.name,
+  });
+  updatedMeta['contextUpdates'] = contextUpdates.take(20).toList();
+  plan['meta'] = updatedMeta;
+
+  await _syncUserActivePlan(userId: user.id, plan: plan);
+  return {
+    'originalName': originalPlace['name']?.toString() ?? '原景點',
+    'replacementName': replacement.name,
+  };
+}
+
+Future<Place?> _findContextReplacementPlace(String placeId) async {
+  final places = await _store.listPlaces();
+  for (final place in places) {
+    if (place.id == placeId) return place;
+  }
+  final exportPlaces = await _loadTrainingPlacesExportPlaces();
+  for (final place in exportPlaces) {
+    if (place.id == placeId) return place;
+  }
+  return null;
+}
+
+void _applyContextReplacementPresentation(
+  Map<String, dynamic> item,
+  Place place,
+) {
+  final tags = place.tags.map((tag) => tag.toLowerCase()).toSet();
+  final (icon, fallbackText) = _stopHighlightStyle(tags, place.name);
+  final description = place.description.trim();
+  item['icon'] = icon;
+  item['travelHighlight'] = description.isNotEmpty
+      ? (description.length > 38
+            ? '${description.substring(0, 38)}…'
+            : description)
+      : fallbackText;
+}
+
+_PlannerWeights _weightsFromPlanMeta(Map<String, dynamic> meta) {
+  return _PlannerWeights.fromInputs(
+    targetPrice: null,
+    people: _asIntValue(meta['people']),
+    tripPurpose: meta['tripPurpose']?.toString(),
+    travelBehavior: meta['travelBehavior']?.toString(),
+    backpackerAnswers: meta['backpackerAnswers'] is Map
+        ? Map<String, dynamic>.from(meta['backpackerAnswers'] as Map)
+        : null,
+  );
+}
 
 Future<bool> _sendLineTomorrowSummaryNotification({
   required User user,
@@ -8055,6 +8650,28 @@ Future<void> _handleLineEvent(Map<String, dynamic> event) async {
         replyToken: replyToken,
         text: '歡迎加入 Smart Travel。請回到 App 帳戶頁，點選「LINE 通知綁定」取得綁定碼，再把綁定碼傳給我。',
       );
+    }
+    return;
+  }
+  if (eventType == 'postback') {
+    final postback = event['postback'];
+    final data = postback is Map ? _parseLinePostbackData(postback['data']?.toString() ?? '') : const <String, String>{};
+    if (replyToken != null && replyToken.isNotEmpty) {
+      try {
+        final reply = await _handleLineContextPostback(
+          lineUserId: lineUserId,
+          data: data,
+        );
+        await _notificationService.replyLineText(
+          replyToken: replyToken,
+          text: reply,
+        );
+      } catch (error) {
+        await _notificationService.replyLineText(
+          replyToken: replyToken,
+          text: '套用失敗：$error',
+        );
+      }
     }
     return;
   }
@@ -8944,6 +9561,13 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
     });
   }
 
+  await _autofillMealBreakRestaurants(
+    days: days,
+    requirementSignals: requirementSignals,
+    requirementsText: requirementsText,
+    scopedArea: scopedArea,
+    weights: weights,
+  );
   await _attachWeatherToDays(days, catalog: places);
   final insight = await _buildItineraryInsight(
     allPlaces: places,
@@ -14531,6 +15155,255 @@ Future<List<Map<String, dynamic>>> _fetchLiveMealSuggestions({
       return scoreB.compareTo(scoreA);
     });
   return sorted.take(limit).toList();
+}
+
+Future<void> _autofillMealBreakRestaurants({
+  required List<Map<String, dynamic>> days,
+  required _RequirementSignals requirementSignals,
+  required String? requirementsText,
+  required String? scopedArea,
+  required _PlannerWeights weights,
+}) async {
+  if (!requirementSignals.preferFood || days.isEmpty) {
+    return;
+  }
+
+  for (final day in days) {
+    final rawItems = day['items'];
+    if (rawItems is! List) continue;
+    final items = rawItems.whereType<Map>().map(Map<String, dynamic>.from).toList();
+    if (items.isEmpty) continue;
+
+    var replacedAny = false;
+    for (var index = 0; index < items.length; index++) {
+      final item = items[index];
+      final rawPlace = item['place'];
+      if (rawPlace is! Map) continue;
+      final place = Map<String, dynamic>.from(rawPlace);
+      final kind = place['kind']?.toString().trim() ?? '';
+      if (kind != 'meal_break') continue;
+      if (_asDoubleValue(place['lat']) != null && _asDoubleValue(place['lng']) != null) {
+        continue;
+      }
+
+      final previous = index > 0 ? _planItemPlaceMap(items[index - 1]) : null;
+      final next = index + 1 < items.length ? _planItemPlaceMap(items[index + 1]) : null;
+      if (previous == null && next == null) continue;
+
+      final mealType = (place['tags'] as List?)
+                  ?.map((e) => e.toString().trim().toLowerCase())
+                  .contains('dinner') ==
+              true
+          ? 'dinner'
+          : 'lunch';
+      final cityHint = _resolveMealSearchCityHint(
+        scopedArea: scopedArea,
+        place: place,
+        previous: previous,
+        next: next,
+      );
+      final query = _buildAutoMealSearchQuery(
+        requirementsText: requirementsText,
+        mealType: mealType,
+        scopedArea: scopedArea,
+      );
+
+      try {
+        final suggestions = await _fetchLiveMealSuggestions(
+          previous: previous ?? const <String, dynamic>{},
+          next: next ?? const <String, dynamic>{},
+          query: query,
+          mealType: mealType,
+          city: cityHint,
+          limit: 5,
+        );
+        if (suggestions.isEmpty) continue;
+
+        final selected = Map<String, dynamic>.from(suggestions.first);
+        selected['kind'] = 'meal_break';
+        selected['tags'] = <String>{
+          ...((selected['tags'] as List?)?.map((e) => e.toString()) ??
+              const <String>[]),
+          'meal_break',
+          mealType,
+        }.toList();
+        selected['description'] =
+            selected['description']?.toString().trim().isNotEmpty == true
+            ? selected['description']
+            : '已依目前行程位置安排${mealType == 'dinner' ? '晚餐' : '午餐'}餐廳，並重算前後交通時間。';
+        item['place'] = selected;
+        replacedAny = true;
+      } catch (error) {
+        _log.warning(
+          'Auto meal fill failed: day=${day['day']} index=$index mealType=$mealType error=$error',
+        );
+      }
+    }
+
+    if (!replacedAny) continue;
+    final dayDateText = day['date']?.toString().trim() ?? '';
+    final dayDate = DateTime.tryParse(dayDateText);
+    if (dayDate == null) continue;
+    await _refreshDayItemSchedule(
+      items: items,
+      dayDate: dayDate,
+      weights: weights,
+    );
+    day['items'] = items;
+  }
+}
+
+Map<String, dynamic>? _planItemPlaceMap(Map<String, dynamic> item) {
+  final raw = item['place'];
+  if (raw is! Map) return null;
+  return Map<String, dynamic>.from(raw);
+}
+
+String _resolveMealSearchCityHint({
+  required String? scopedArea,
+  required Map<String, dynamic> place,
+  required Map<String, dynamic>? previous,
+  required Map<String, dynamic>? next,
+}) {
+  final scoped = scopedArea?.trim() ?? '';
+  if (scoped.isNotEmpty) return scoped;
+
+  final ownCity = place['city']?.toString().trim() ?? '';
+  if (ownCity.isNotEmpty) return ownCity;
+
+  final previousCity = previous?['city']?.toString().trim() ?? '';
+  if (previousCity.isNotEmpty) return previousCity;
+
+  final nextCity = next?['city']?.toString().trim() ?? '';
+  if (nextCity.isNotEmpty) return nextCity;
+
+  final ownAddress = place['address']?.toString().trim() ?? '';
+  if (ownAddress.isNotEmpty) return ownAddress;
+
+  final previousAddress = previous?['address']?.toString().trim() ?? '';
+  if (previousAddress.isNotEmpty) return previousAddress;
+
+  return next?['address']?.toString().trim() ?? '';
+}
+
+String _buildAutoMealSearchQuery({
+  required String? requirementsText,
+  required String mealType,
+  required String? scopedArea,
+}) {
+  final text = _normalizeText(requirementsText ?? '');
+  final tokens = <String>[];
+  final area = scopedArea?.trim() ?? '';
+  if (area.isNotEmpty) {
+    tokens.add(area);
+  }
+
+  if (text.contains(_normalizeText('小吃'))) {
+    tokens.add('小吃');
+  } else if (text.contains(_normalizeText('咖啡'))) {
+    tokens.add('咖啡');
+  } else if (text.contains(_normalizeText('下午茶'))) {
+    tokens.add('下午茶');
+  } else if (text.contains(_normalizeText('早午餐'))) {
+    tokens.add('早午餐');
+  } else if (text.contains(_normalizeText('火鍋'))) {
+    tokens.add('火鍋');
+  } else if (text.contains(_normalizeText('餐廳'))) {
+    tokens.add('餐廳');
+  }
+
+  if (tokens.isEmpty) {
+    tokens.add(mealType == 'dinner' ? '晚餐 餐廳' : '午餐 餐廳');
+  }
+  return tokens.join(' ').trim();
+}
+
+Future<void> _refreshDayItemSchedule({
+  required List<Map<String, dynamic>> items,
+  required DateTime dayDate,
+  required _PlannerWeights weights,
+}) async {
+  if (items.isEmpty) return;
+
+  var currentMinute = _parseHmToMinute(items.first['time']?.toString()) ?? 9 * 60;
+  for (var index = 0; index < items.length; index++) {
+    final item = items[index];
+    final existingTransit = item['transitToNext'] is Map
+        ? Map<String, dynamic>.from(item['transitToNext'] as Map)
+        : null;
+    final durationMinutes =
+        _asIntValue(item['durationMinutes']) ??
+        _derivePlannedItemDurationMinutes(item) ??
+        60;
+    item['durationMinutes'] = durationMinutes;
+    item['time'] = _minutesToHm(currentMinute);
+    final endMinute = currentMinute + durationMinutes;
+    item['endTime'] = _minutesToHm(endMinute);
+    item.remove('transitToNext');
+
+    if (index >= items.length - 1) {
+      currentMinute = endMinute;
+      continue;
+    }
+
+    final fromPlace = _planJsonToPlace(item['place']);
+    final toPlace = _planJsonToPlace(items[index + 1]['place']);
+    Map<String, dynamic>? transit = existingTransit;
+    if (fromPlace != null &&
+        toPlace != null &&
+        _placeHasUsableCoordinates(fromPlace) &&
+        _placeHasUsableCoordinates(toPlace)) {
+      transit = await _buildTransitSegment(
+        from: fromPlace,
+        to: toPlace,
+        dayDate: dayDate,
+        departureMinute: endMinute,
+        weights: weights,
+      );
+    }
+    if (transit != null) {
+      item['transitToNext'] = transit;
+    }
+    currentMinute = endMinute + (_asIntValue(transit?['minutes']) ?? 0);
+  }
+}
+
+int? _derivePlannedItemDurationMinutes(Map<String, dynamic> item) {
+  final start = _parseHmToMinute(item['time']?.toString());
+  final end = _parseHmToMinute(item['endTime']?.toString());
+  if (start == null || end == null || end <= start) {
+    return null;
+  }
+  return end - start;
+}
+
+Place? _planJsonToPlace(dynamic raw) {
+  if (raw is! Map) return null;
+  final json = Map<String, dynamic>.from(raw);
+  return Place(
+    id: json['id']?.toString() ?? '',
+    name: json['name']?.toString() ?? '',
+    tags: (json['tags'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+    city: json['city']?.toString() ?? '',
+    address: json['address']?.toString() ?? '',
+    lat: _asDoubleValue(json['lat']) ?? 0,
+    lng: _asDoubleValue(json['lng']) ?? 0,
+    description: json['description']?.toString() ?? '',
+    imageUrl: json['imageUrl']?.toString() ?? '',
+    rating: _asDoubleValue(json['rating']),
+    userRatingsTotal: _asIntValue(json['userRatingsTotal']),
+    priceLevel: _asIntValue(json['priceLevel']),
+    priceCategory: json['priceCategory']?.toString(),
+    openingHours: json['openingHours'] is Map
+        ? Map<String, dynamic>.from(json['openingHours'] as Map)
+        : null,
+    source: json['source']?.toString() ?? '',
+    updatedAt: DateTime.now().toUtc(),
+  );
+}
+
+bool _placeHasUsableCoordinates(Place place) {
+  return place.lat != 0 || place.lng != 0;
 }
 
 Future<List<Map<String, dynamic>>> _googlePlaceSearch({

@@ -116,6 +116,7 @@ class NotificationService {
     required String to,
     required String text,
     String? imageUrl,
+    List<Map<String, dynamic>>? messages,
   }) async {
     if (!_lineEnabled) {
       _log.info(
@@ -124,18 +125,22 @@ class NotificationService {
       return;
     }
     final normalizedImageUrl = imageUrl?.trim() ?? '';
-    final messages = <Map<String, dynamic>>[];
-    final parsedImageUrl = Uri.tryParse(normalizedImageUrl);
-    if (parsedImageUrl != null &&
-        parsedImageUrl.scheme == 'https' &&
-        parsedImageUrl.host.isNotEmpty) {
-      messages.add({
-        'type': 'image',
-        'originalContentUrl': normalizedImageUrl,
-        'previewImageUrl': normalizedImageUrl,
-      });
+    final payloadMessages = <Map<String, dynamic>>[];
+    if (messages != null && messages.isNotEmpty) {
+      payloadMessages.addAll(messages);
+    } else {
+      final parsedImageUrl = Uri.tryParse(normalizedImageUrl);
+      if (parsedImageUrl != null &&
+          parsedImageUrl.scheme == 'https' &&
+          parsedImageUrl.host.isNotEmpty) {
+        payloadMessages.add({
+          'type': 'image',
+          'originalContentUrl': normalizedImageUrl,
+          'previewImageUrl': normalizedImageUrl,
+        });
+      }
+      payloadMessages.add({'type': 'text', 'text': text});
     }
-    messages.add({'type': 'text', 'text': text});
 
     final uri = Uri.https('api.line.me', '/v2/bot/message/push');
     final headers = {
@@ -145,9 +150,24 @@ class NotificationService {
     var response = await _postLineWithRetry(
       uri: uri,
       headers: headers,
-      payload: {'to': to, 'messages': messages},
+      payload: {'to': to, 'messages': payloadMessages},
     );
-    if (response.statusCode >= 400 && messages.length > 1) {
+    if (response.statusCode >= 400 &&
+        payloadMessages.any((message) => message['type']?.toString() == 'flex')) {
+      _log.warning(
+        'LINE flex push failed (${response.statusCode}); retrying text only.',
+      );
+      response = await _postLineWithRetry(
+        uri: uri,
+        headers: headers,
+        payload: {
+          'to': to,
+          'messages': [
+            {'type': 'text', 'text': text},
+          ],
+        },
+      );
+    } else if (response.statusCode >= 400 && payloadMessages.length > 1) {
       _log.warning(
         'LINE image push failed (${response.statusCode}); retrying text only.',
       );
