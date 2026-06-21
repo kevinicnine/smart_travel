@@ -15021,7 +15021,6 @@ Future<Place?> _findTrainingExportBackfill(Place place) async {
 
 bool _needsLocalExportBackfill(Place place) {
   return place.imageUrl.trim().isEmpty ||
-      place.tags.where((tag) => tag.trim().isNotEmpty).isEmpty ||
       place.rating == null ||
       place.userRatingsTotal == null;
 }
