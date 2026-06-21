@@ -2299,6 +2299,7 @@ const String _formalPlanReviewsStateKey = 'quality.formalPlanReviews';
 const String _lineReminderSignaturesStateKey =
     'notifications.lineReminderSignatures';
 const String _lineReminderPlansStateKey = 'notifications.lineReminderPlans';
+const String _lineContextStateKey = 'notifications.lineContextState';
 
 String _trainingDataPath(String filename) => p.join(_dataDir, filename);
 
@@ -6129,6 +6130,105 @@ Future<void> _markLineReminderSent(String signature) async {
   await _writeAppState(appState);
 }
 
+String _lineContextStateRecordKey({
+  required String userId,
+  required DateTime dayDate,
+}) => '$userId|${dayDate.toIso8601String().substring(0, 10)}';
+
+Future<Map<String, dynamic>> _readLineContextStateRecords() async {
+  final appState = await _readAppState();
+  final raw = appState[_lineContextStateKey];
+  final records = raw is Map
+      ? Map<String, dynamic>.from(raw)
+      : <String, dynamic>{};
+  final cutoff = DateTime.now().toUtc().subtract(const Duration(days: 14));
+  records.removeWhere((_, value) {
+    if (value is! Map) return true;
+    final updatedAt = DateTime.tryParse(value['updatedAt']?.toString() ?? '');
+    return updatedAt == null || updatedAt.isBefore(cutoff);
+  });
+  if (records.length != (raw is Map ? raw.length : 0)) {
+    appState[_lineContextStateKey] = records;
+    await _writeAppState(appState);
+  }
+  return records;
+}
+
+Future<String?> _lastLineContextPushSignature({
+  required String userId,
+  required DateTime dayDate,
+}) async {
+  final records = await _readLineContextStateRecords();
+  final record = records[_lineContextStateRecordKey(
+    userId: userId,
+    dayDate: dayDate,
+  )];
+  if (record is! Map) return null;
+  final signature = record['lastPushedSignature']?.toString().trim() ?? '';
+  return signature.isEmpty ? null : signature;
+}
+
+Future<void> _rememberLineContextPushSignature({
+  required String userId,
+  required DateTime dayDate,
+  required String signature,
+  required Map<String, dynamic>? nextAction,
+}) async {
+  final appState = await _readAppState();
+  final raw = appState[_lineContextStateKey];
+  final records = raw is Map
+      ? Map<String, dynamic>.from(raw)
+      : <String, dynamic>{};
+  final cutoff = DateTime.now().toUtc().subtract(const Duration(days: 14));
+  records.removeWhere((_, value) {
+    if (value is! Map) return true;
+    final updatedAt = DateTime.tryParse(value['updatedAt']?.toString() ?? '');
+    return updatedAt == null || updatedAt.isBefore(cutoff);
+  });
+  records[_lineContextStateRecordKey(userId: userId, dayDate: dayDate)] = {
+    'updatedAt': DateTime.now().toUtc().toIso8601String(),
+    'lastPushedSignature': signature,
+    if (nextAction != null)
+      'nextAction': {
+        'type': nextAction['type'],
+        'severity': nextAction['severity'],
+        'phase': nextAction['phase'],
+        'targetPlaceId': nextAction['targetPlaceId'],
+        'targetPlaceName': nextAction['targetPlaceName'],
+        'scheduledTime': nextAction['scheduledTime'],
+      },
+  };
+  appState[_lineContextStateKey] = records;
+  await _writeAppState(appState);
+}
+
+String _buildContextChangeSignature({
+  required Map<String, dynamic> nextAction,
+  required List<Map<String, dynamic>> alerts,
+}) {
+  final relevantAlerts = alerts
+      .where(
+        (alert) => _contextSeverityRank(alert['severity']?.toString()) >= 2,
+      )
+      .map(
+        (alert) =>
+            '${alert['type']}:${alert['severity']}:${alert['title']}',
+      )
+      .take(4)
+      .toList()
+    ..sort();
+  return [
+    nextAction['type']?.toString().trim() ?? '',
+    nextAction['severity']?.toString().trim() ?? '',
+    nextAction['phase']?.toString().trim() ?? '',
+    nextAction['targetPlaceId']?.toString().trim().isNotEmpty == true
+        ? nextAction['targetPlaceId'].toString().trim()
+        : (nextAction['targetPlaceName']?.toString().trim() ?? ''),
+    nextAction['scheduledTime']?.toString().trim() ?? '',
+    relevantAlerts.join('|'),
+  ].join('||');
+}
+
 Future<Map<String, dynamic>> _runTrackedUpcomingReminderScan({
   required String triggerSource,
 }) async {
@@ -7608,6 +7708,30 @@ int _contextSeverityRank(String? severity) {
   };
 }
 
+bool _shouldPushImmediateContextAlert({
+  required Map<String, dynamic>? nextAction,
+  required DateTime referenceTime,
+}) {
+  if (nextAction == null || nextAction.isEmpty) {
+    return false;
+  }
+  final phase = nextAction['phase']?.toString().trim() ?? '';
+  if (phase == 'current') {
+    return true;
+  }
+  if (phase != 'upcoming') {
+    return false;
+  }
+  final scheduledTime = nextAction['scheduledTime']?.toString().trim() ?? '';
+  final scheduledMinute = _parseHmToMinute(scheduledTime);
+  if (scheduledMinute == null) {
+    return true;
+  }
+  final nowMinute = referenceTime.hour * 60 + referenceTime.minute;
+  final minutesUntil = scheduledMinute - nowMinute;
+  return minutesUntil >= -30 && minutesUntil <= 120;
+}
+
 void _cleanupContextPushCooldown() {
   final cutoff = DateTime.now().toUtc().subtract(const Duration(hours: 6));
   final expired = _lineContextPushCooldown.entries
@@ -7635,10 +7759,31 @@ Future<bool> _sendLineContextAwarenessNotification({
         ? Map<String, dynamic>.from(result['upcomingReminder'] as Map)
         : null;
     final shouldPushReminder = upcomingReminder?['shouldPush'] == true;
+    final nextAction = result['nextAction'] is Map
+        ? Map<String, dynamic>.from(result['nextAction'] as Map)
+        : null;
+    var shouldPushContextAlert = _shouldPushImmediateContextAlert(
+      nextAction: nextAction,
+      referenceTime: _taipeiNow(),
+    );
     if (shouldPushReminder && upcomingReminder != null) {
       await _enrichUpcomingReminderLiveData(upcomingReminder);
     }
-    if (alerts.isEmpty && !shouldPushReminder) {
+    String? contextChangeSignature;
+    if (shouldPushContextAlert && nextAction != null) {
+      contextChangeSignature = _buildContextChangeSignature(
+        nextAction: nextAction,
+        alerts: alerts,
+      );
+      final lastSignature = await _lastLineContextPushSignature(
+        userId: userId,
+        dayDate: dayDate,
+      );
+      if (lastSignature == contextChangeSignature) {
+        shouldPushContextAlert = false;
+      }
+    }
+    if (!shouldPushReminder && !shouldPushContextAlert) {
       return false;
     }
 
@@ -7654,7 +7799,8 @@ Future<bool> _sendLineContextAwarenessNotification({
     }
 
     final overallSeverity = result['severity']?.toString() ?? 'ok';
-    if (!shouldPushReminder && _contextSeverityRank(overallSeverity) < 2) {
+    if (!shouldPushReminder &&
+        (_contextSeverityRank(overallSeverity) < 2 || nextAction == null)) {
       return false;
     }
 
@@ -7665,7 +7811,11 @@ Future<bool> _sendLineContextAwarenessNotification({
         'reminder:${upcomingReminder?['targetPlaceName']}:${upcomingReminder?['scheduledTime']}',
       );
     }
-    if (alerts.isNotEmpty) {
+    if (shouldPushContextAlert && nextAction != null) {
+      signatureParts.add(
+        'context:${nextAction['type']}:${nextAction['targetPlaceId'] ?? nextAction['targetPlaceName']}:${nextAction['scheduledTime'] ?? ''}',
+      );
+    } else if (alerts.isNotEmpty) {
       signatureParts.add(
         alerts.map((alert) => '${alert['type']}:${alert['title']}').join('|'),
       );
@@ -7682,6 +7832,8 @@ Future<bool> _sendLineContextAwarenessNotification({
     final now = DateTime.now().toUtc();
     final cooldownWindow = shouldPushReminder && alerts.isEmpty
         ? const Duration(minutes: 20)
+        : shouldPushContextAlert
+        ? const Duration(minutes: 120)
         : const Duration(minutes: 45);
     if (lastSentAt != null && now.difference(lastSentAt) < cooldownWindow) {
       return false;
@@ -7696,23 +7848,30 @@ Future<bool> _sendLineContextAwarenessNotification({
             .map((e) => Map<String, dynamic>.from(e))
             .toList() ??
         const <Map<String, dynamic>>[];
-    final nextAction = result['nextAction'] is Map
-        ? Map<String, dynamic>.from(result['nextAction'] as Map)
-        : null;
+    final effectiveAlerts = shouldPushContextAlert
+        ? alerts
+        : const <Map<String, dynamic>>[];
+    final effectiveSuggestions = shouldPushContextAlert
+        ? suggestions
+        : const <String>[];
+    final effectiveBackupPlans = shouldPushContextAlert
+        ? backupPlans
+        : const <Map<String, dynamic>>[];
+    final effectiveNextAction = shouldPushContextAlert ? nextAction : null;
     final message = _buildLineContextAwarenessSummary(
       dayDate: dayDate,
-      alerts: alerts,
-      suggestions: suggestions,
-      backupPlans: backupPlans,
+      alerts: effectiveAlerts,
+      suggestions: effectiveSuggestions,
+      backupPlans: effectiveBackupPlans,
       upcomingReminder: shouldPushReminder ? upcomingReminder : null,
     );
     final flexMessages = _buildLineContextAwarenessMessages(
       dayDate: dayDate,
       overallSeverity: overallSeverity,
-      alerts: alerts,
-      suggestions: suggestions,
-      backupPlans: backupPlans,
-      nextAction: nextAction,
+      alerts: effectiveAlerts,
+      suggestions: effectiveSuggestions,
+      backupPlans: effectiveBackupPlans,
+      nextAction: effectiveNextAction,
       upcomingReminder: shouldPushReminder ? upcomingReminder : null,
       fallbackText: message,
     );
@@ -7732,6 +7891,17 @@ Future<bool> _sendLineContextAwarenessNotification({
     _lineContextPushCooldown[cooldownKey] = now;
     if (shouldPushReminder) {
       await _markLineReminderSent(persistentReminderKey);
+    }
+    if (shouldPushContextAlert &&
+        nextAction != null &&
+        contextChangeSignature != null &&
+        contextChangeSignature.isNotEmpty) {
+      await _rememberLineContextPushSignature(
+        userId: userId,
+        dayDate: dayDate,
+        signature: contextChangeSignature,
+        nextAction: nextAction,
+      );
     }
     _log.info('LINE 情境感知提醒已送出：user=$userId lineUserId=$lineUserId');
     return true;
@@ -8126,6 +8296,9 @@ Map<String, dynamic>? _resolvePrimaryBackupPlan({
         'replacement': Map<String, dynamic>.from(first),
       };
     }
+  }
+  if (nextAction == null) {
+    return null;
   }
   if (backupPlans.isEmpty) return null;
   final firstPlan = backupPlans.first;
