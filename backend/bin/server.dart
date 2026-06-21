@@ -14978,6 +14978,11 @@ Future<List<Place>> _backfillVisiblePlaces(
       updated = _normalizePlaceForStorage(updated);
       changed = true;
     }
+    if (_needsTagBackfill(updated)) {
+      final tagged = _backfillPlaceTags(updated);
+      changed = changed || !_samePlaceData(updated, tagged);
+      updated = tagged;
+    }
     if (changed) {
       await store.upsertPlace(updated);
     }
@@ -15016,8 +15021,43 @@ Future<Place?> _findTrainingExportBackfill(Place place) async {
 
 bool _needsLocalExportBackfill(Place place) {
   return place.imageUrl.trim().isEmpty ||
+      place.tags.where((tag) => tag.trim().isNotEmpty).isEmpty ||
       place.rating == null ||
       place.userRatingsTotal == null;
+}
+
+bool _needsTagBackfill(Place place) {
+  return place.tags.where((tag) => tag.trim().isNotEmpty).isEmpty;
+}
+
+Place _backfillPlaceTags(Place place) {
+  final inferredTags = _googlePlaceTags(
+    name: place.name,
+    address: place.address,
+    description: place.description,
+    types: const <String>[],
+  );
+  if (inferredTags.isEmpty) {
+    return place;
+  }
+  return Place(
+    id: place.id,
+    name: place.name,
+    tags: inferredTags,
+    city: place.city,
+    address: place.address,
+    lat: place.lat,
+    lng: place.lng,
+    description: place.description,
+    imageUrl: place.imageUrl,
+    rating: place.rating,
+    userRatingsTotal: place.userRatingsTotal,
+    priceLevel: place.priceLevel,
+    priceCategory: place.priceCategory,
+    openingHours: place.openingHours,
+    source: place.source,
+    updatedAt: DateTime.now().toUtc(),
+  );
 }
 
 Future<Map<String, List<Place>>> _trainingPlacesExportIndex() async {
@@ -15841,6 +15881,7 @@ List<String> _googlePlaceTags({
     '$name $address $description ${typeSet.join(' ')}',
   );
   final tags = <String>{};
+  bool textHas(String keyword) => text.contains(_normalizeLocationText(keyword));
 
   if (typeSet.contains('university') || typeSet.contains('school')) {
     tags.addAll(const ['heritage', 'national_park', 'campus']);
@@ -15875,6 +15916,17 @@ List<String> _googlePlaceTags({
   if (typeSet.contains('spa')) {
     tags.add('hot_spring');
   }
+  if (typeSet.contains('train_station') ||
+      typeSet.contains('transit_station') ||
+      typeSet.contains('subway_station') ||
+      typeSet.contains('bus_station')) {
+    tags.add('heritage');
+  }
+  if (typeSet.contains('city_hall') ||
+      typeSet.contains('courthouse') ||
+      typeSet.contains('library')) {
+    tags.add('heritage');
+  }
   if (typeSet.contains('church') ||
       typeSet.contains('hindu_temple') ||
       typeSet.contains('place_of_worship')) {
@@ -15893,28 +15945,65 @@ List<String> _googlePlaceTags({
     }
   }
 
-  if (text.contains(_normalizeLocationText('夜市'))) {
+  if (textHas('夜市')) {
     tags.addAll(const ['night_market', 'street_food']);
   }
-  if (text.contains(_normalizeLocationText('商圈')) ||
-      text.contains(_normalizeLocationText('outlet')) ||
-      text.contains(_normalizeLocationText('百貨'))) {
+  if (textHas('商圈') || textHas('outlet') || textHas('百貨')) {
     tags.add('department_store');
   }
-  if (text.contains(_normalizeLocationText('老街')) ||
-      text.contains(_normalizeLocationText('古蹟')) ||
-      text.contains(_normalizeLocationText('教堂')) ||
-      text.contains(_normalizeLocationText('校園'))) {
+  if (textHas('老街') ||
+      textHas('古蹟') ||
+      textHas('教堂') ||
+      textHas('校園') ||
+      textHas('故事館') ||
+      textHas('故事屋') ||
+      textHas('歷史') ||
+      textHas('歷史建築') ||
+      textHas('車站') ||
+      textHas('鐵道') ||
+      textHas('糖廠') ||
+      textHas('碾米廠') ||
+      textHas('農會') ||
+      textHas('倉庫') ||
+      textHas('糧倉') ||
+      textHas('客家文化') ||
+      textHas('紀念館') ||
+      textHas('文化館')) {
     tags.add('heritage');
   }
-  if (text.contains(_normalizeLocationText('溪')) ||
-      text.contains(_normalizeLocationText('濕地'))) {
+  if (textHas('溪') ||
+      textHas('濕地') ||
+      textHas('河堤') ||
+      textHas('河濱') ||
+      textHas('埤') ||
+      textHas('湖')) {
     tags.add('lake_river');
   }
-  if (text.contains(_normalizeLocationText('創意')) ||
-      text.contains(_normalizeLocationText('彩繪')) ||
-      text.contains(_normalizeLocationText('文創'))) {
+  if (textHas('創意') ||
+      textHas('彩繪') ||
+      textHas('文創') ||
+      textHas('觀光工廠') ||
+      textHas('工坊') ||
+      textHas('園區')) {
     tags.add('creative_park');
+  }
+  if (textHas('公園') ||
+      textHas('步道') ||
+      textHas('自行車道') ||
+      textHas('生態') ||
+      textHas('綠廊') ||
+      textHas('綠園道') ||
+      textHas('牧場') ||
+      textHas('農場') ||
+      textHas('濱海') ||
+      textHas('沙丘')) {
+    tags.add('national_park');
+  }
+  if (textHas('寺') || textHas('宮') || textHas('廟')) {
+    tags.addAll(const ['temple', 'heritage']);
+  }
+  if (tags.isEmpty && typeSet.contains('tourist_attraction')) {
+    tags.add('heritage');
   }
   return tags.toList();
 }
