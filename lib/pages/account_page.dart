@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/backend_api.dart';
+import '../services/location_sync_service.dart';
 import '../state/user_state.dart';
 import 'edit_profile_page.dart';
 import 'select_interest_page.dart';
@@ -104,8 +105,13 @@ class _AccountPageState extends State<AccountPage> {
               _AccountActionTile(
                 icon: Icons.logout,
                 label: '登出',
-                onTap: () =>
-                    Navigator.popUntil(context, (route) => route.isFirst),
+                onTap: () async {
+                  final navigator = Navigator.of(context);
+                  await LocationSyncService.instance.stopTracking();
+                  await UserState.clearSession();
+                  if (!mounted) return;
+                  navigator.popUntil((route) => route.isFirst);
+                },
               ),
             ],
           ),

@@ -28,10 +28,20 @@
 	<string>AIzaSyAreR-LwJl7R3LYwdtn89Luzt4xp-Ld4-g</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Smart Travel 需要背景定位來即時判斷是否抵達下一站、是否延誤，並自動調整行程提醒。</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>Smart Travel 需要持續取得位置，才能在旅途中進行情境感知與行程調整。</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Smart Travel 需要你的定位來提供即時行程導航、抵達判定與情境感知提醒。</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>允許存取照片以更新大頭照</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

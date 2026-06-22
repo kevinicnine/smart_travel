@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../services/location_sync_service.dart';
 import '../state/user_state.dart';
 import '../services/backend_api.dart';
 
@@ -74,6 +75,7 @@ class _RegisterPageState extends State<RegisterPage> {
         linked: user['lineLinked'] == true,
         pushEnabled: user['linePushEnabled'] == true,
       );
+      await LocationSyncService.instance.refreshTracking();
       final rawInterests = user['interests'];
       if (rawInterests is List) {
         final interests = rawInterests

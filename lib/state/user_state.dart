@@ -108,6 +108,17 @@ class UserState {
     await _prefs!.remove(_interestKey(currentUserId));
   }
 
+  static Future<void> clearSession() async {
+    await _ensurePrefs();
+    userId = null;
+    lineLinked = false;
+    linePushEnabled = false;
+    selectedInterestIds = const [];
+    await _prefs!.remove(_kUserId);
+    await _prefs!.remove(_kLineLinked);
+    await _prefs!.remove(_kLinePushEnabled);
+  }
+
   static Future<void> _ensurePrefs() async {
     _prefs ??= await SharedPreferences.getInstance();
   }

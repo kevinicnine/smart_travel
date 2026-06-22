@@ -1941,6 +1941,32 @@ Future<void> main(List<String> args) async {
       }),
     )
     ..post(
+      '/api/location/update',
+      (req) => _json(req, (body) async {
+        final userId = _asString(body, 'userId').trim();
+        if (userId.isEmpty) {
+          throw ApiException(400, '缺少使用者 id');
+        }
+        final lat = _asDoubleValue(body['lat']);
+        final lng = _asDoubleValue(body['lng']);
+        if (lat == null || lng == null) {
+          throw ApiException(400, '缺少定位座標');
+        }
+        final result = await _buildLocationAwareContextForUser(
+          userId: userId,
+          lat: lat,
+          lng: lng,
+          accuracy: _asDoubleValue(body['accuracy']),
+          speed: _asDoubleValue(body['speed']),
+          heading: _asDoubleValue(body['heading']),
+          background: body['background'] == true,
+          referenceTime: _parseTaipeiReferenceTime(body['timestamp']),
+          triggerLinePush: body['triggerLinePush'] != false,
+        );
+        return successBody(message: '定位已更新', data: result);
+      }),
+    )
+    ..post(
       '/api/line/run-upcoming-reminders',
       (req) => _withReminderCron(req, () async {
         final result = await _runTrackedUpcomingReminderScan(
@@ -2300,6 +2326,7 @@ const String _lineReminderSignaturesStateKey =
     'notifications.lineReminderSignatures';
 const String _lineReminderPlansStateKey = 'notifications.lineReminderPlans';
 const String _lineContextStateKey = 'notifications.lineContextState';
+const String _userLocationStateKey = 'tracking.userLocations';
 
 String _trainingDataPath(String filename) => p.join(_dataDir, filename);
 
@@ -2307,6 +2334,158 @@ Future<Map<String, dynamic>> _readAppState() => _store.readAppState();
 
 Future<void> _writeAppState(Map<String, dynamic> state) =>
     _store.writeAppState(state);
+
+Future<Map<String, dynamic>> _readUserLocationStateRecords() async {
+  final appState = await _readAppState();
+  final raw = appState[_userLocationStateKey];
+  final records = raw is Map
+      ? Map<String, dynamic>.from(raw)
+      : <String, dynamic>{};
+  final cutoff = DateTime.now().toUtc().subtract(const Duration(days: 7));
+  records.removeWhere((_, value) {
+    if (value is! Map) return true;
+    final updatedAt = DateTime.tryParse(value['updatedAt']?.toString() ?? '');
+    return updatedAt == null || updatedAt.isBefore(cutoff);
+  });
+  if (records.length != (raw is Map ? raw.length : 0)) {
+    appState[_userLocationStateKey] = records;
+    await _writeAppState(appState);
+  }
+  return records;
+}
+
+Future<Map<String, dynamic>?> _readUserLocationStateRecord(String userId) async {
+  final records = await _readUserLocationStateRecords();
+  final raw = records[userId];
+  if (raw is Map<String, dynamic>) {
+    return Map<String, dynamic>.from(raw);
+  }
+  if (raw is Map) {
+    return Map<String, dynamic>.from(raw);
+  }
+  return null;
+}
+
+Future<void> _writeUserLocationStateRecord(
+  String userId,
+  Map<String, dynamic> record,
+) async {
+  final appState = await _readAppState();
+  final raw = appState[_userLocationStateKey];
+  final records = raw is Map
+      ? Map<String, dynamic>.from(raw)
+      : <String, dynamic>{};
+  records[userId] = record;
+  appState[_userLocationStateKey] = records;
+  await _writeAppState(appState);
+}
+
+Map<String, dynamic> _buildUserLocationSample({
+  required double lat,
+  required double lng,
+  required DateTime timestamp,
+  double? accuracy,
+  double? speed,
+  double? heading,
+  required bool background,
+}) {
+  return {
+    'lat': lat,
+    'lng': lng,
+    'timestamp': timestamp.toUtc().toIso8601String(),
+    if (accuracy != null) 'accuracy': accuracy,
+    if (speed != null) 'speed': speed,
+    if (heading != null) 'heading': heading,
+    'background': background,
+  };
+}
+
+bool _isAcceptedLocationSample(
+  Map<String, dynamic>? previous,
+  Map<String, dynamic> current,
+) {
+  final accuracy = _asDoubleValue(current['accuracy']);
+  if (accuracy != null && accuracy > 250) {
+    return false;
+  }
+  if (previous == null) {
+    return true;
+  }
+  final previousLat = _asDoubleValue(previous['lat']);
+  final previousLng = _asDoubleValue(previous['lng']);
+  final currentLat = _asDoubleValue(current['lat']);
+  final currentLng = _asDoubleValue(current['lng']);
+  if (previousLat == null ||
+      previousLng == null ||
+      currentLat == null ||
+      currentLng == null) {
+    return true;
+  }
+  final previousTime = DateTime.tryParse(previous['timestamp']?.toString() ?? '');
+  final currentTime = DateTime.tryParse(current['timestamp']?.toString() ?? '');
+  if (previousTime == null || currentTime == null) {
+    return true;
+  }
+  final seconds = currentTime.difference(previousTime).inSeconds;
+  if (seconds <= 0) {
+    return true;
+  }
+  final distanceKm = _distanceKm(previousLat, previousLng, currentLat, currentLng);
+  final speedKmh = distanceKm / (seconds / 3600.0);
+  return speedKmh <= 300;
+}
+
+Future<Map<String, dynamic>> _recordUserLocationSample({
+  required String userId,
+  required double lat,
+  required double lng,
+  double? accuracy,
+  double? speed,
+  double? heading,
+  required bool background,
+  required DateTime timestamp,
+}) async {
+  final existing = await _readUserLocationStateRecord(userId);
+  final previousAccepted = existing?['lastAccepted'] is Map
+      ? Map<String, dynamic>.from(existing!['lastAccepted'] as Map)
+      : null;
+  final sample = _buildUserLocationSample(
+    lat: lat,
+    lng: lng,
+    timestamp: timestamp,
+    accuracy: accuracy,
+    speed: speed,
+    heading: heading,
+    background: background,
+  );
+  final accepted = _isAcceptedLocationSample(previousAccepted, sample);
+  final samples =
+      (existing?['samples'] as List?)
+          ?.whereType<Map>()
+          .map((entry) => Map<String, dynamic>.from(entry))
+          .toList() ??
+      <Map<String, dynamic>>[];
+  samples.add(sample);
+  while (samples.length > 6) {
+    samples.removeAt(0);
+  }
+  final record = <String, dynamic>{
+    'updatedAt': DateTime.now().toUtc().toIso8601String(),
+    'lastSample': sample,
+    'samples': samples,
+    if (accepted)
+      'lastAccepted': sample
+    else if (previousAccepted != null)
+      'lastAccepted': previousAccepted,
+  };
+  await _writeUserLocationStateRecord(userId, record);
+  return {
+    'accepted': accepted,
+    'sample': sample,
+    'record': record,
+    if (!accepted) 'rejectedReason': 'unrealistic_jump_or_poor_accuracy',
+  };
+}
 
 void _reloadItineraryLearningProfile() {
   _itineraryLearningProfile = _ItineraryLearningProfile.load(_dataDir);
@@ -7091,6 +7270,437 @@ Future<Map<String, dynamic>> _buildContextAwareness(
   }
 
   return result;
+}
+
+Future<Map<String, dynamic>> _buildLocationAwareContextForUser({
+  required String userId,
+  required double lat,
+  required double lng,
+  required DateTime referenceTime,
+  double? accuracy,
+  double? speed,
+  double? heading,
+  required bool background,
+  required bool triggerLinePush,
+}) async {
+  final user = await _store.findUserById(userId);
+  if (user == null) {
+    throw ApiException(404, '查無此使用者');
+  }
+
+  final tracking = await _recordUserLocationSample(
+    userId: userId,
+    lat: lat,
+    lng: lng,
+    accuracy: accuracy,
+    speed: speed,
+    heading: heading,
+    background: background,
+    timestamp: referenceTime,
+  );
+  if (tracking['accepted'] != true) {
+    return {
+      'contextAvailable': false,
+      'locationAccepted': false,
+      'locationSample': tracking['sample'],
+      'reason': tracking['rejectedReason'],
+      'checkedAt': DateTime.now().toUtc().toIso8601String(),
+      'linePushed': false,
+    };
+  }
+
+  final activePlan = user.activePlan;
+  if (activePlan == null || activePlan.isEmpty) {
+    return {
+      'contextAvailable': false,
+      'locationAccepted': true,
+      'locationSample': tracking['sample'],
+      'reason': 'no_active_plan',
+      'checkedAt': DateTime.now().toUtc().toIso8601String(),
+      'linePushed': false,
+    };
+  }
+
+  final day = _resolveActivePlanDayForReference(
+    activePlan,
+    referenceTime: referenceTime,
+  );
+  if (day == null) {
+    return {
+      'contextAvailable': false,
+      'locationAccepted': true,
+      'locationSample': tracking['sample'],
+      'reason': 'no_matching_day',
+      'checkedAt': DateTime.now().toUtc().toIso8601String(),
+      'linePushed': false,
+    };
+  }
+
+  final result = await _buildContextAwareness({
+    'userId': userId,
+    'day': day,
+    'currentTime': referenceTime.toIso8601String(),
+    'triggerLinePush': false,
+  });
+  await _appendLocationContextSignals(
+    result: result,
+    day: day,
+    referenceTime: referenceTime,
+    lat: lat,
+    lng: lng,
+  );
+  result['contextAvailable'] = true;
+  result['locationAccepted'] = true;
+  result['locationSample'] = tracking['sample'];
+  result['linePushed'] = false;
+
+  final dayDate = _parseDate(day['date']?.toString());
+  final isToday =
+      dayDate != null &&
+      dayDate.year == referenceTime.year &&
+      dayDate.month == referenceTime.month &&
+      dayDate.day == referenceTime.day;
+  if (triggerLinePush && isToday && userId.isNotEmpty) {
+    result['linePushed'] = await _sendLineContextAwarenessNotification(
+      userId: userId,
+      dayDate: dayDate,
+      result: result,
+    );
+  }
+  return result;
+}
+
+Map<String, dynamic>? _resolveActivePlanDayForReference(
+  Map<String, dynamic> plan, {
+  required DateTime referenceTime,
+}) {
+  final rawDays = plan['days'];
+  final dayMaps = rawDays is List
+      ? rawDays.whereType<Map>().map((day) => Map<String, dynamic>.from(day)).toList()
+      : const <Map<String, dynamic>>[];
+  if (dayMaps.isEmpty) {
+    return null;
+  }
+  final refKey = _reminderDateKey(referenceTime);
+  for (final day in dayMaps) {
+    final date = _parseDate(day['date']?.toString());
+    if (date != null && _reminderDateKey(date) == refKey) {
+      return day;
+    }
+  }
+  if (dayMaps.length == 1) {
+    return dayMaps.first;
+  }
+  return null;
+}
+
+List<Map<String, dynamic>> _visitItemsFromDay(Map<String, dynamic> day) {
+  return (day['items'] as List?)
+          ?.whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .where((item) {
+            final place = item['place'];
+            if (place is! Map) return false;
+            final kind = place['kind']?.toString() ?? 'place';
+            return kind != 'meal_break';
+          })
+          .toList() ??
+      const <Map<String, dynamic>>[];
+}
+
+Map<String, dynamic>? _resolveLocationTravelTargetItem(
+  List<Map<String, dynamic>> visitItems,
+  _ContextFocus? focus,
+) {
+  if (focus == null || visitItems.isEmpty || focus.phase == 'completed') {
+    return null;
+  }
+  if (focus.phase == 'current') {
+    final nextIndex = focus.targetIndex + 1;
+    if (nextIndex >= visitItems.length) {
+      return null;
+    }
+    return visitItems[nextIndex];
+  }
+  return focus.targetItem;
+}
+
+void _mergeContextNextActionResult(
+  Map<String, dynamic> result,
+  Map<String, dynamic> candidate,
+) {
+  final existing = result['nextAction'];
+  if (existing is! Map) {
+    result['nextAction'] = candidate;
+    return;
+  }
+  final existingMap = Map<String, dynamic>.from(existing);
+  final existingRank = _contextSeverityRank(existingMap['severity']?.toString());
+  final candidateRank = _contextSeverityRank(candidate['severity']?.toString());
+  if (candidateRank > existingRank) {
+    result['nextAction'] = candidate;
+    return;
+  }
+  if (candidateRank == existingRank) {
+    final existingPhase = existingMap['phase']?.toString() ?? '';
+    final candidatePhase = candidate['phase']?.toString() ?? '';
+    if (existingPhase != 'current' && candidatePhase == 'current') {
+      result['nextAction'] = candidate;
+    }
+  }
+}
+
+String _distanceLabelFromKm(double distanceKm) {
+  if (distanceKm < 1) {
+    return '${(distanceKm * 1000).round()} m';
+  }
+  return '${distanceKm.toStringAsFixed(1)} km';
+}
+
+int _fallbackDrivingMinutes(double distanceKm) {
+  if (distanceKm <= 0.3) return 3;
+  if (distanceKm <= 1.2) return 6;
+  if (distanceKm <= 5) return max(8, (distanceKm / 24 * 60).round() + 4);
+  return max(15, (distanceKm / 32 * 60).round() + 6);
+}
+
+Future<Map<String, dynamic>> _fetchLiveTravelToPlace({
+  required double fromLat,
+  required double fromLng,
+  required Place to,
+}) async {
+  final distanceKm = _distanceKm(fromLat, fromLng, to.lat, to.lng);
+  final fallback = {
+    'provider': 'estimate',
+    'mode': 'car',
+    'label': '依目前定位估算',
+    'minutes': _fallbackDrivingMinutes(distanceKm),
+    'distanceText': _distanceLabelFromKm(distanceKm),
+  };
+  final key = _googleMapsServerKey();
+  if (key.isEmpty || (to.lat == 0 && to.lng == 0)) {
+    return fallback;
+  }
+
+  final departureEpoch =
+      (DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000).toString();
+  final uri = Uri.https('maps.googleapis.com', '/maps/api/directions/json', {
+    'origin': '$fromLat,$fromLng',
+    'destination': '${to.lat},${to.lng}',
+    'mode': 'driving',
+    'language': 'zh-TW',
+    'region': 'tw',
+    'departure_time': departureEpoch,
+    'key': key,
+  });
+  final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+  try {
+    final request = await client.getUrl(uri);
+    final response = await request.close().timeout(const Duration(seconds: 10));
+    if (response.statusCode != 200) {
+      return fallback;
+    }
+    final body = await utf8.decodeStream(response);
+    final decoded = jsonDecode(body);
+    if (decoded is! Map) {
+      return fallback;
+    }
+    if (decoded['status']?.toString() != 'OK') {
+      return fallback;
+    }
+    final routes = decoded['routes'];
+    if (routes is! List || routes.isEmpty || routes.first is! Map) {
+      return fallback;
+    }
+    final legs = (routes.first as Map)['legs'];
+    if (legs is! List || legs.isEmpty || legs.first is! Map) {
+      return fallback;
+    }
+    final leg = legs.first as Map;
+    final durationMap =
+        leg['duration_in_traffic'] is Map ? leg['duration_in_traffic'] : leg['duration'];
+    final durationSeconds = (durationMap as Map?)?['value'] as num?;
+    final durationMinutes = durationSeconds == null
+        ? null
+        : max(1, (durationSeconds.toInt() / 60).round());
+    if (durationMinutes == null) {
+      return fallback;
+    }
+    return {
+      'provider': 'google_directions',
+      'mode': 'car',
+      'label': '依目前路況',
+      'minutes': durationMinutes,
+      'distanceText':
+          (leg['distance'] as Map?)?['text']?.toString() ?? fallback['distanceText'],
+      if ((leg['duration_in_traffic'] as Map?)?['text'] != null)
+        'trafficText': (leg['duration_in_traffic'] as Map?)?['text'],
+    };
+  } catch (_) {
+    return fallback;
+  } finally {
+    client.close(force: true);
+  }
+}
+
+Future<void> _appendLocationContextSignals({
+  required Map<String, dynamic> result,
+  required Map<String, dynamic> day,
+  required DateTime referenceTime,
+  required double lat,
+  required double lng,
+}) async {
+  final dayDate = _parseDate(day['date']?.toString());
+  if (dayDate == null) {
+    return;
+  }
+  final visitItems = _visitItemsFromDay(day);
+  final focus = _resolveContextFocus(
+    dayDate: dayDate,
+    visitItems: visitItems,
+    referenceTime: referenceTime,
+  );
+  if (focus == null || visitItems.isEmpty) {
+    return;
+  }
+
+  final alerts =
+      (result['alerts'] as List?)
+          ?.whereType<Map>()
+          .map((entry) => Map<String, dynamic>.from(entry))
+          .toList() ??
+      <Map<String, dynamic>>[];
+  final suggestionSet = <String>{
+    ...((result['suggestions'] as List?)?.map((e) => e.toString()) ?? const <String>[]),
+  };
+  final locationInsights = <Map<String, dynamic>>[];
+
+  final arrivalPlace = _planPlaceToPlace(
+    Map<String, dynamic>.from(focus.targetItem['place'] as Map),
+  );
+  if (arrivalPlace.lat != 0 || arrivalPlace.lng != 0) {
+    final distanceKm = _distanceKm(lat, lng, arrivalPlace.lat, arrivalPlace.lng);
+    locationInsights.add({
+      'type': 'focus_distance',
+      'phase': focus.phase,
+      'targetPlaceId': arrivalPlace.id,
+      'targetPlaceName': arrivalPlace.name,
+      'distanceKm': distanceKm,
+      'distanceText': _distanceLabelFromKm(distanceKm),
+    });
+    if (distanceKm <= 0.2) {
+      alerts.add(
+        _contextAlert(
+          type: 'location_arrived',
+          severity: 'low',
+          title: '已接近 ${arrivalPlace.name}',
+          message: '目前距離 ${arrivalPlace.name} 約 ${_distanceLabelFromKm(distanceKm)}。',
+        ),
+      );
+      suggestionSet.add('可準備開始 ${arrivalPlace.name} 的停留安排。');
+    }
+  }
+
+  final targetItem = _resolveLocationTravelTargetItem(visitItems, focus);
+  if (targetItem == null) {
+    result['alerts'] = alerts;
+    result['suggestions'] = suggestionSet.toList();
+    result['severity'] = _contextOverallSeverity(alerts);
+    if (locationInsights.isNotEmpty) {
+      result['locationInsights'] = locationInsights;
+    }
+    return;
+  }
+
+  final targetPlace = _planPlaceToPlace(
+    Map<String, dynamic>.from(targetItem['place'] as Map),
+  );
+  if (targetPlace.lat == 0 && targetPlace.lng == 0) {
+    result['alerts'] = alerts;
+    result['suggestions'] = suggestionSet.toList();
+    result['severity'] = _contextOverallSeverity(alerts);
+    if (locationInsights.isNotEmpty) {
+      result['locationInsights'] = locationInsights;
+    }
+    return;
+  }
+
+  final travel = await _fetchLiveTravelToPlace(
+    fromLat: lat,
+    fromLng: lng,
+    to: targetPlace,
+  );
+  final travelMinutes = _asIntValue(travel['minutes']) ?? 0;
+  final nowMinute = referenceTime.hour * 60 + referenceTime.minute;
+  final predictedArrivalMinute = nowMinute + travelMinutes;
+  final startMinute = _parseHmToMinute(targetItem['time']?.toString());
+  final endMinute = _parseHmToMinute(targetItem['endTime']?.toString());
+  locationInsights.add({
+    'type': 'next_stop_eta',
+    'targetPlaceId': targetPlace.id,
+    'targetPlaceName': targetPlace.name,
+    'estimatedTravelMinutes': travelMinutes,
+    'predictedArrivalTime': _minutesToHm(predictedArrivalMinute),
+    'distanceText': travel['distanceText'],
+    'provider': travel['provider'],
+  });
+
+  if (endMinute != null && predictedArrivalMinute > endMinute + 5) {
+    final lateBy = predictedArrivalMinute - endMinute;
+    alerts.add(
+      _contextAlert(
+        type: 'location_delay',
+        severity: 'high',
+        title: '可能來不及 ${targetPlace.name}',
+        message:
+            '依目前位置估算前往約 $travelMinutes 分鐘，可能晚於預計結束時間 ${targetItem['endTime']}。',
+      ),
+    );
+    suggestionSet.add('建議壓縮目前停留時間、改走較快交通方式，或直接啟用備案。');
+    _mergeContextNextActionResult(result, {
+      'type': 'location_delay',
+      'severity': 'high',
+      'phase': focus.phase == 'current' ? 'after_current' : focus.phase,
+      'targetPlaceId': targetPlace.id,
+      'targetPlaceName': targetPlace.name,
+      'scheduledTime': targetItem['time']?.toString(),
+      'title': '依目前定位建議重排下一站',
+      'message': '${targetPlace.name} 預估會晚到約 $lateBy 分鐘，照原行程可能逛不完整。',
+      'recommendedAction': '優先縮短目前停留或直接切換備案景點。',
+    });
+  } else if (startMinute != null && predictedArrivalMinute > startMinute + 15) {
+    alerts.add(
+      _contextAlert(
+        type: 'location_running_late',
+        severity: 'medium',
+        title: '${targetPlace.name} 抵達時間偏晚',
+        message:
+            '依目前位置估算前往約 $travelMinutes 分鐘，可能比原定 ${targetItem['time']} 晚一些。',
+      ),
+    );
+    suggestionSet.add('若想保留 ${targetPlace.name} 停留品質，可略縮短前一站或提早出發。');
+    _mergeContextNextActionResult(result, {
+      'type': 'location_running_late',
+      'severity': 'medium',
+      'phase': focus.phase == 'current' ? 'after_current' : focus.phase,
+      'targetPlaceId': targetPlace.id,
+      'targetPlaceName': targetPlace.name,
+      'scheduledTime': targetItem['time']?.toString(),
+      'title': '依目前定位建議加快前往下一站',
+      'message': '${targetPlace.name} 可能會比原定時間晚到。',
+      'recommendedAction': '提早整理出發，或減少本段停留時間。',
+    });
+  }
+
+  result['alerts'] = alerts;
+  result['suggestions'] = suggestionSet.toList();
+  result['severity'] = _contextOverallSeverity(alerts);
+  result['locationInsights'] = locationInsights;
+  result['referenceLocation'] = {
+    'lat': lat,
+    'lng': lng,
+    'checkedAt': referenceTime.toUtc().toIso8601String(),
+  };
 }
 
 Map<String, dynamic>? _buildContextUpcomingReminder({

@@ -346,6 +346,38 @@ class BackendApi {
     );
   }
 
+  Future<Map<String, dynamic>> updateLocation({
+    required String userId,
+    required double lat,
+    required double lng,
+    DateTime? timestamp,
+    double? accuracy,
+    double? speed,
+    double? heading,
+    bool background = false,
+    bool triggerLinePush = true,
+    String? source,
+  }) async {
+    final response = await _post(
+      '/api/location/update',
+      {
+        'userId': userId,
+        'lat': lat,
+        'lng': lng,
+        'timestamp': (timestamp ?? DateTime.now()).toIso8601String(),
+        if (accuracy != null) 'accuracy': accuracy,
+        if (speed != null) 'speed': speed,
+        if (heading != null) 'heading': heading,
+        'background': background,
+        'triggerLinePush': triggerLinePush,
+        if (source != null && source.trim().isNotEmpty) 'source': source.trim(),
+      },
+      timeout: const Duration(seconds: 20),
+      timeoutMessage: '定位同步較久，請稍候再試。',
+    );
+    return _extractData(response);
+  }
+
   Future<List<Map<String, dynamic>>> fetchPlaces({
     List<String>? tags,
     String? query,

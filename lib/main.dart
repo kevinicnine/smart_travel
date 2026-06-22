@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'pages/start_page.dart';
+import 'services/location_sync_service.dart';
 import 'state/user_state.dart';
 
 Future<void> main() async {
@@ -8,8 +11,19 @@ Future<void> main() async {
   runApp(const SmartTravelApp());
 }
 
-class SmartTravelApp extends StatelessWidget {
+class SmartTravelApp extends StatefulWidget {
   const SmartTravelApp({super.key});
+
+  @override
+  State<SmartTravelApp> createState() => _SmartTravelAppState();
+}
+
+class _SmartTravelAppState extends State<SmartTravelApp> {
+  @override
+  void initState() {
+    super.initState();
+    unawaited(LocationSyncService.instance.initialize());
+  }
 
   @override
   Widget build(BuildContext context) {
