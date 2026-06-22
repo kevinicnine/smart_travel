@@ -10065,6 +10065,23 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
       candidates = strictlyScoped;
     }
   }
+  final planningStartDate = startDate ?? DateTime.now();
+  final isLiveSameDayPlanning =
+      (dayStartTime == null || dayStartTime.trim().isEmpty) &&
+      currentMinuteOfDay != null &&
+      _isSamePlanningDate(planningStartDate, referenceDate: currentDate);
+  if (isLiveSameDayPlanning && currentMinuteOfDay >= 20 * 60) {
+    final nightSuitable = candidates.where((place) {
+      return _isNightSuitablePlace(
+        place,
+        dayDate: planningStartDate,
+        referenceMinute: currentMinuteOfDay,
+      );
+    }).toList();
+    if (nightSuitable.isNotEmpty) {
+      candidates = nightSuitable;
+    }
+  }
   if (normalizedScopedArea != null &&
       normalizedScopedArea.isNotEmpty &&
       candidates.isEmpty) {
@@ -11459,6 +11476,11 @@ double _timeAwareSelectionCost({
       visitStart > 18 * 60) {
     tagPenalty += 140.0;
   }
+  tagPenalty += _timeOfDaySuitabilityPenalty(
+    candidate,
+    visitMinute: visitStart,
+    dayDate: dayDate,
+  );
 
   final popularityBonus = () {
     final rating = candidate.rating ?? 0;
@@ -12022,6 +12044,157 @@ bool _isSamePlanningDate(
       ? _planningDateKey(DateTime.now())
       : referenceDate.trim();
   return _planningDateKey(dayDate) == effectiveReferenceDate;
+}
+
+bool _placeHasAnyTag(Place place, Iterable<String> values) {
+  final tags = place.tags.map((tag) => tag.toLowerCase()).toSet();
+  return values.any(tags.contains);
+}
+
+bool _placeTextHasAny(Place place, Iterable<String> keywords) {
+  final text = _normalizeLocationText(
+    '${place.name} ${place.description} ${place.address}',
+  );
+  return keywords.any(
+    (keyword) => text.contains(_normalizeLocationText(keyword)),
+  );
+}
+
+bool _isOpenPastMinute(
+  Place place, {
+  required DateTime dayDate,
+  required int minute,
+}) {
+  final window = _openingWindowForDate(place, dayDate);
+  if (window == null) return false;
+  return window.$2 >= minute;
+}
+
+bool _isNightExperiencePlace(Place place) {
+  return _placeHasAnyTag(place, const [
+        'night_market',
+        'street_food',
+        'market',
+        'bar',
+        'pub',
+        'night_club',
+      ]) ||
+      _placeTextHasAny(place, const ['夜市', '商圈', '夜景', '酒吧', '宵夜']);
+}
+
+bool _isEveningFriendlyPlace(Place place) {
+  return _placeHasAnyTag(place, const [
+        'restaurant',
+        'cafe',
+        'department_store',
+        'shopping',
+        'creative_park',
+        'art_gallery',
+      ]) ||
+      _placeTextHasAny(place, const [
+        '餐廳',
+        '咖啡',
+        '百貨',
+        '商場',
+        '購物',
+        '文創',
+        '老街',
+        '景觀台',
+      ]);
+}
+
+bool _isDaytimeDominantPlace(Place place) {
+  return _placeHasAnyTag(place, const [
+        'temple',
+        'church',
+        'museum',
+        'heritage',
+        'national_park',
+        'lake_river',
+        'beach',
+        'waterfall',
+        'zoo',
+        'park',
+        'trail',
+        'hiking',
+        'garden',
+        'forest',
+        'farm',
+        'campus',
+      ]) ||
+      _placeTextHasAny(place, const [
+        '公園',
+        '步道',
+        '牧場',
+        '濕地',
+        '農場',
+        '寺',
+        '宮',
+        '古蹟',
+        '博物館',
+        '美術館',
+        '自行車道',
+      ]);
+}
+
+bool _isNightSuitablePlace(
+  Place place, {
+  required DateTime dayDate,
+  int? referenceMinute,
+}) {
+  final targetMinute = max(20 * 60, referenceMinute ?? 20 * 60);
+  if (_isNightExperiencePlace(place)) {
+    return _isOpenPastMinute(
+      place,
+      dayDate: dayDate,
+      minute: min(23 * 60, targetMinute),
+    );
+  }
+  if (_isEveningFriendlyPlace(place) && !_isDaytimeDominantPlace(place)) {
+    return _isOpenPastMinute(
+      place,
+      dayDate: dayDate,
+      minute: min(22 * 60, targetMinute),
+    );
+  }
+  return false;
+}
+
+double _timeOfDaySuitabilityPenalty(
+  Place place, {
+  required int visitMinute,
+  required DateTime dayDate,
+}) {
+  final isNight = visitMinute >= 20 * 60;
+  final isEvening = visitMinute >= 18 * 60;
+  if (isNight) {
+    if (_isNightSuitablePlace(
+      place,
+      dayDate: dayDate,
+      referenceMinute: visitMinute,
+    )) {
+      return -55.0;
+    }
+    if (_isDaytimeDominantPlace(place)) {
+      return 280.0;
+    }
+    if (_isEveningFriendlyPlace(place)) {
+      return 35.0;
+    }
+    return 120.0;
+  }
+  if (isEvening) {
+    if (_isNightExperiencePlace(place)) {
+      return -30.0;
+    }
+    if (_isDaytimeDominantPlace(place)) {
+      return 110.0;
+    }
+    if (_isEveningFriendlyPlace(place)) {
+      return -8.0;
+    }
+  }
+  return 0.0;
 }
 
 int? _parseHmToMinute(String? raw) {
@@ -13553,6 +13726,11 @@ Map<String, dynamic> _buildRuleBasedPlannerAssist({
       lunchStartTime = currentMinuteOfDay >= 15 * 60
           ? recommendedStartTime
           : lunchStartTime;
+    }
+    if (currentMinuteOfDay >= 20 * 60) {
+      dinnerStartTime = recommendedStartTime;
+      warnings.add('第一天已是晚間時段，系統會優先改排晚餐、夜景、商圈或夜間仍開放的室內點。');
+      improvements.add('晚上 8 點後會自動避開公園、步道、牧場、一般寺廟與多數白天型景點。');
     }
   }
   switch (normalizedTripPurpose) {
