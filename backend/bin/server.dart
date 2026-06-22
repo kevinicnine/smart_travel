@@ -6836,9 +6836,15 @@ Future<Map<String, dynamic>> _buildContextAwareness(
       )
       .toList();
   final outdoorCount = visitPlaces.where(_isOutdoorPlace).length;
+  final thunderProb =
+      weather == null
+          ? 0
+          : (_asIntValue(weather['thunderstormProbability']) ?? 0);
+  final weatherType = weather?['weatherType']?.toString().trim();
   final severeRain =
       (weather != null &&
-      ((_asIntValue(weather['code']) ?? 0) >= 95 ||
+      (thunderProb >= 35 ||
+          (_asIntValue(weather['code']) ?? 0) >= 95 ||
           (_asIntValue(weather['precipitationProbability']) ?? 0) >= 60));
   final hotOutdoorDay =
       (weather != null &&
@@ -6852,13 +6858,17 @@ Future<Map<String, dynamic>> _buildContextAwareness(
     final summary =
         weather['summary']?.toString() ?? _weatherCodeToText(weatherCode);
 
-    if (weatherCode != null && weatherCode >= 95 && outdoorCount > 0) {
+    if ((thunderProb >= 35 ||
+            (weatherType != null && weatherType.contains('THUNDER')) ||
+            (weatherCode != null && weatherCode >= 95)) &&
+        outdoorCount > 0) {
       alerts.add(
         _contextAlert(
           type: 'weather_thunder',
           severity: 'high',
           title: '雷雨風險偏高',
-          message: '今天預報為 $summary，戶外景點建議提前或改成室內點。',
+          message:
+              '今天預報為 $summary${thunderProb > 0 ? '，雷雨機率約 $thunderProb%' : ''}，戶外景點建議提前或改成室內點。',
         ),
       );
       suggestions.add('優先把戶外景點移到上午，午後改排室內景點或餐食休息。');
@@ -14439,14 +14449,34 @@ Future<Map<String, Map<String, dynamic>>> _fetchDailyWeatherForecast({
   required String startDate,
   required String endDate,
 }) async {
-  final uri = Uri.https('api.open-meteo.com', '/v1/forecast', {
-    'latitude': lat.toString(),
-    'longitude': lng.toString(),
-    'daily':
-        'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max',
-    'timezone': 'Asia/Taipei',
-    'start_date': startDate,
-    'end_date': endDate,
+  final key = _googleMapsServerKey().trim();
+  if (key.isEmpty) {
+    _log.warning(
+      'Google Weather API key missing: GOOGLE_PLACES_SERVER_API_KEY / GOOGLE_MAPS_API_KEY',
+    );
+    return const {};
+  }
+
+  final today = _todayInTaipei();
+  final requestedStart = _parseDate(startDate) ?? today;
+  final requestedEnd = _parseDate(endDate) ?? requestedStart;
+  final effectiveEnd = requestedEnd.isBefore(requestedStart)
+      ? requestedStart
+      : requestedEnd;
+  final fetchEnd = effectiveEnd.isBefore(today) ? today : effectiveEnd;
+  final totalDays = max(
+    1,
+    min(10, fetchEnd.difference(today).inDays + 1),
+  );
+
+  final uri = Uri.https('weather.googleapis.com', '/v1/forecast/days:lookup', {
+    'location.latitude': lat.toString(),
+    'location.longitude': lng.toString(),
+    'days': '$totalDays',
+    'pageSize': '$totalDays',
+    'languageCode': 'zh-TW',
+    'unitsSystem': 'METRIC',
+    'key': key,
   });
 
   Object? lastError;
@@ -14454,12 +14484,14 @@ Future<Map<String, Map<String, dynamic>>> _fetchDailyWeatherForecast({
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
     try {
       final request = await client.getUrl(uri);
+      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
       final response = await request.close().timeout(
         const Duration(seconds: 8),
       );
+      final body = await utf8.decodeStream(response);
       if (response.statusCode != 200) {
         _log.warning(
-          'Open-Meteo request failed: HTTP ${response.statusCode} ($uri)',
+          'Google Weather API request failed: HTTP ${response.statusCode} body=$body',
         );
         lastError = 'HTTP ${response.statusCode}';
         if (attempt < 2) {
@@ -14470,43 +14502,48 @@ Future<Map<String, Map<String, dynamic>>> _fetchDailyWeatherForecast({
         }
         return const {};
       }
-      final body = await utf8.decodeStream(response);
       final decoded = jsonDecode(body);
       if (decoded is! Map) {
         return const {};
       }
-      final daily = decoded['daily'];
-      if (daily is! Map) {
-        return const {};
-      }
-
-      final dates = (daily['time'] as List?)?.map((e) => e.toString()).toList();
-      final weatherCodes = (daily['weather_code'] as List?) ?? const [];
-      final tempMax = (daily['temperature_2m_max'] as List?) ?? const [];
-      final tempMin = (daily['temperature_2m_min'] as List?) ?? const [];
-      final precipMax =
-          (daily['precipitation_probability_max'] as List?) ?? const [];
-      if (dates == null || dates.isEmpty) {
+      final forecastDays = decoded['forecastDays'];
+      if (forecastDays is! List || forecastDays.isEmpty) {
         return const {};
       }
 
       final result = <String, Map<String, dynamic>>{};
-      for (var i = 0; i < dates.length; i++) {
-        final code = _asIntValue(
-          i < weatherCodes.length ? weatherCodes[i] : null,
+      for (final raw in forecastDays) {
+        if (raw is! Map) continue;
+        final day = Map<String, dynamic>.from(raw);
+        final dateText = _googleWeatherDisplayDateText(day['displayDate']);
+        if (dateText == null || dateText.isEmpty) continue;
+
+        final daytime = day['daytimeForecast'] is Map
+            ? Map<String, dynamic>.from(day['daytimeForecast'] as Map)
+            : null;
+        final nighttime = day['nighttimeForecast'] is Map
+            ? Map<String, dynamic>.from(day['nighttimeForecast'] as Map)
+            : null;
+        final summary = _googleWeatherConditionSummary(daytime, nighttime);
+        final weatherType = _googleWeatherPrimaryType(daytime, nighttime);
+        final code = _googleWeatherTypeToLegacyCode(weatherType);
+        final maxValue = _googleWeatherTemperatureDegrees(day['maxTemperature']);
+        final minValue = _googleWeatherTemperatureDegrees(day['minTemperature']);
+        final rainProb = _googleWeatherDailyRainProbability(daytime, nighttime);
+        final thunderProb = _googleWeatherDailyThunderProbability(
+          daytime,
+          nighttime,
         );
-        final maxValue = _asDoubleValue(i < tempMax.length ? tempMax[i] : null);
-        final minValue = _asDoubleValue(i < tempMin.length ? tempMin[i] : null);
-        final rainProb = _asIntValue(
-          i < precipMax.length ? precipMax[i] : null,
-        );
-        result[dates[i]] = {
-          'summary': _weatherCodeToText(code),
+
+        result[dateText] = {
+          'summary': summary ?? _weatherCodeToText(code),
           'code': code,
           'temperatureMax': maxValue,
           'temperatureMin': minValue,
           'precipitationProbability': rainProb,
-          'source': 'open-meteo',
+          'thunderstormProbability': thunderProb,
+          'weatherType': weatherType,
+          'source': 'google-weather',
         };
       }
       return result;
@@ -14520,8 +14557,231 @@ Future<Map<String, Map<String, dynamic>>> _fetchDailyWeatherForecast({
       client.close(force: true);
     }
   }
-  _log.warning('Open-Meteo request error: $lastError');
+  _log.warning('Google Weather API request error: $lastError');
   return const {};
+}
+
+DateTime _todayInTaipei() {
+  final now = _taipeiNow();
+  return DateTime(now.year, now.month, now.day);
+}
+
+String? _googleWeatherDisplayDateText(Object? value) {
+  if (value is! Map) return null;
+  final year = _asIntValue(value['year']);
+  final month = _asIntValue(value['month']);
+  final day = _asIntValue(value['day']);
+  if (year == null || month == null || day == null) {
+    return null;
+  }
+  return '${year.toString().padLeft(4, '0')}-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')}';
+}
+
+double? _googleWeatherTemperatureDegrees(Object? value) {
+  if (value is! Map) return null;
+  return _asDoubleValue(value['degrees']);
+}
+
+int? _googleWeatherDailyRainProbability(
+  Map<String, dynamic>? daytime,
+  Map<String, dynamic>? nighttime,
+) {
+  return _maxInt([
+    _googleWeatherPartRainProbability(daytime),
+    _googleWeatherPartRainProbability(nighttime),
+  ]);
+}
+
+int? _googleWeatherDailyThunderProbability(
+  Map<String, dynamic>? daytime,
+  Map<String, dynamic>? nighttime,
+) {
+  return _maxInt([
+    _asIntValue(daytime?['thunderstormProbability']),
+    _asIntValue(nighttime?['thunderstormProbability']),
+  ]);
+}
+
+int? _googleWeatherPartRainProbability(Map<String, dynamic>? part) {
+  final precipitation = part?['precipitation'];
+  if (precipitation is! Map) return null;
+  final probability = precipitation['probability'];
+  if (probability is! Map) return null;
+  return _asIntValue(probability['percent']);
+}
+
+String? _googleWeatherConditionSummary(
+  Map<String, dynamic>? daytime,
+  Map<String, dynamic>? nighttime,
+) {
+  final daytimeSummary = _googleWeatherPartSummary(daytime);
+  if (daytimeSummary != null && daytimeSummary.isNotEmpty) {
+    return daytimeSummary;
+  }
+  final nighttimeSummary = _googleWeatherPartSummary(nighttime);
+  if (nighttimeSummary != null && nighttimeSummary.isNotEmpty) {
+    return nighttimeSummary;
+  }
+  return _googleWeatherTypeToText(_googleWeatherPrimaryType(daytime, nighttime));
+}
+
+String? _googleWeatherPartSummary(Map<String, dynamic>? part) {
+  final condition = part?['weatherCondition'];
+  if (condition is! Map) return null;
+  final description = condition['description'];
+  if (description is Map) {
+    final text = description['text']?.toString().trim() ?? '';
+    if (text.isNotEmpty) {
+      return text;
+    }
+  }
+  return _googleWeatherTypeToText(condition['type']?.toString());
+}
+
+String? _googleWeatherPrimaryType(
+  Map<String, dynamic>? daytime,
+  Map<String, dynamic>? nighttime,
+) {
+  final types = <String?>[
+    daytime?['weatherCondition'] is Map
+        ? (daytime!['weatherCondition'] as Map)['type']?.toString()
+        : null,
+    nighttime?['weatherCondition'] is Map
+        ? (nighttime!['weatherCondition'] as Map)['type']?.toString()
+        : null,
+  ];
+  for (final candidate in types) {
+    if (candidate != null && candidate.trim().isNotEmpty) {
+      return candidate.trim();
+    }
+  }
+  return null;
+}
+
+int? _maxInt(List<int?> values) {
+  int? result;
+  for (final value in values) {
+    if (value == null) continue;
+    if (result == null || value > result) {
+      result = value;
+    }
+  }
+  return result;
+}
+
+int? _googleWeatherTypeToLegacyCode(String? type) {
+  switch (type) {
+    case 'CLEAR':
+      return 0;
+    case 'MOSTLY_CLEAR':
+      return 1;
+    case 'PARTLY_CLOUDY':
+      return 2;
+    case 'MOSTLY_CLOUDY':
+    case 'CLOUDY':
+      return 3;
+    case 'LIGHT_RAIN_SHOWERS':
+    case 'CHANCE_OF_SHOWERS':
+    case 'SCATTERED_SHOWERS':
+    case 'RAIN_SHOWERS':
+      return 80;
+    case 'LIGHT_TO_MODERATE_RAIN':
+    case 'RAIN':
+    case 'LIGHT_RAIN':
+      return 61;
+    case 'MODERATE_TO_HEAVY_RAIN':
+    case 'HEAVY_RAIN':
+    case 'RAIN_PERIODICALLY_HEAVY':
+    case 'HEAVY_RAIN_SHOWERS':
+    case 'WIND_AND_RAIN':
+      return 65;
+    case 'LIGHT_SNOW_SHOWERS':
+    case 'CHANCE_OF_SNOW_SHOWERS':
+    case 'SCATTERED_SNOW_SHOWERS':
+    case 'SNOW_SHOWERS':
+      return 71;
+    case 'LIGHT_TO_MODERATE_SNOW':
+    case 'SNOW':
+    case 'LIGHT_SNOW':
+    case 'HEAVY_SNOW_SHOWERS':
+    case 'MODERATE_TO_HEAVY_SNOW':
+    case 'HEAVY_SNOW':
+    case 'SNOW_PERIODICALLY_HEAVY':
+      return 75;
+    case 'SNOWSTORM':
+    case 'HEAVY_SNOW_STORM':
+    case 'THUNDERSTORM':
+    case 'THUNDERSHOWER':
+    case 'LIGHT_THUNDERSTORM_RAIN':
+    case 'SCATTERED_THUNDERSTORMS':
+    case 'HEAVY_THUNDERSTORM':
+      return 95;
+    case 'HAIL':
+    case 'HAIL_SHOWERS':
+      return 96;
+    default:
+      return null;
+  }
+}
+
+String? _googleWeatherTypeToText(String? type) {
+  switch (type) {
+    case 'CLEAR':
+      return '晴朗';
+    case 'MOSTLY_CLEAR':
+      return '大致晴朗';
+    case 'PARTLY_CLOUDY':
+      return '局部多雲';
+    case 'MOSTLY_CLOUDY':
+      return '多雲';
+    case 'CLOUDY':
+      return '陰天';
+    case 'WINDY':
+      return '風勢較強';
+    case 'WIND_AND_RAIN':
+      return '有風有雨';
+    case 'LIGHT_RAIN_SHOWERS':
+    case 'CHANCE_OF_SHOWERS':
+    case 'SCATTERED_SHOWERS':
+    case 'RAIN_SHOWERS':
+      return '陣雨';
+    case 'LIGHT_TO_MODERATE_RAIN':
+    case 'RAIN':
+    case 'LIGHT_RAIN':
+      return '降雨';
+    case 'MODERATE_TO_HEAVY_RAIN':
+    case 'HEAVY_RAIN':
+    case 'RAIN_PERIODICALLY_HEAVY':
+    case 'HEAVY_RAIN_SHOWERS':
+      return '大雨';
+    case 'LIGHT_SNOW_SHOWERS':
+    case 'CHANCE_OF_SNOW_SHOWERS':
+    case 'SCATTERED_SNOW_SHOWERS':
+    case 'SNOW_SHOWERS':
+      return '陣雪';
+    case 'LIGHT_TO_MODERATE_SNOW':
+    case 'SNOW':
+    case 'LIGHT_SNOW':
+      return '降雪';
+    case 'MODERATE_TO_HEAVY_SNOW':
+    case 'HEAVY_SNOW':
+    case 'SNOWSTORM':
+    case 'HEAVY_SNOW_STORM':
+      return '大雪';
+    case 'RAIN_AND_SNOW':
+      return '雨夾雪';
+    case 'HAIL':
+    case 'HAIL_SHOWERS':
+      return '冰雹';
+    case 'THUNDERSTORM':
+    case 'THUNDERSHOWER':
+    case 'LIGHT_THUNDERSTORM_RAIN':
+    case 'SCATTERED_THUNDERSTORMS':
+    case 'HEAVY_THUNDERSTORM':
+      return '雷雨';
+    default:
+      return null;
+  }
 }
 
 double? _asDoubleValue(Object? value) {
