@@ -6347,11 +6347,27 @@ Future<String?> _lastLineContextPushSignature({
   return signature.isEmpty ? null : signature;
 }
 
+Future<Map<String, dynamic>?> _readLineContextStateRecord({
+  required String userId,
+  required DateTime dayDate,
+}) async {
+  final records = await _readLineContextStateRecords();
+  final record = records[_lineContextStateRecordKey(
+    userId: userId,
+    dayDate: dayDate,
+  )];
+  if (record is! Map) {
+    return null;
+  }
+  return Map<String, dynamic>.from(record);
+}
+
 Future<void> _rememberLineContextPushSignature({
   required String userId,
   required DateTime dayDate,
   required String signature,
   required Map<String, dynamic>? nextAction,
+  Map<String, dynamic>? weatherSnapshot,
 }) async {
   final appState = await _readAppState();
   final raw = appState[_lineContextStateKey];
@@ -6376,6 +6392,7 @@ Future<void> _rememberLineContextPushSignature({
         'targetPlaceName': nextAction['targetPlaceName'],
         'scheduledTime': nextAction['scheduledTime'],
       },
+    if (weatherSnapshot != null) 'weatherSnapshot': weatherSnapshot,
   };
   appState[_lineContextStateKey] = records;
   await _writeAppState(appState);
@@ -6406,6 +6423,109 @@ String _buildContextChangeSignature({
     nextAction['scheduledTime']?.toString().trim() ?? '',
     relevantAlerts.join('|'),
   ].join('||');
+}
+
+bool _isWeatherDrivenContext({
+  required Map<String, dynamic>? nextAction,
+  required List<Map<String, dynamic>> alerts,
+}) {
+  final actionType = nextAction?['type']?.toString().trim() ?? '';
+  if (actionType.startsWith('swap_for_weather') ||
+      actionType.startsWith('swap_for_heat')) {
+    return true;
+  }
+  return alerts.any((alert) {
+    final type = alert['type']?.toString().trim() ?? '';
+    return type.startsWith('weather_');
+  });
+}
+
+Map<String, dynamic>? _buildWeatherRiskSnapshot(Map<String, dynamic>? weather) {
+  if (weather == null || weather.isEmpty) {
+    return null;
+  }
+  final rainProb = _asIntValue(weather['precipitationProbability']) ?? 0;
+  final thunderProb = _asIntValue(weather['thunderstormProbability']) ?? 0;
+  final tempMax = _asDoubleValue(weather['temperatureMax']) ?? 0;
+  final weatherType = weather['weatherType']?.toString().trim() ?? '';
+  final summary = weather['summary']?.toString().trim() ?? '';
+
+  var category = 'stable';
+  var score = 0;
+  if (thunderProb >= 35 || weatherType.contains('THUNDER')) {
+    category = 'thunder';
+    score = 4;
+  } else if (rainProb >= 70) {
+    category = 'heavy_rain';
+    score = 3;
+  } else if (rainProb >= 40) {
+    category = 'rain_watch';
+    score = 2;
+  } else if (tempMax >= 34) {
+    category = 'heat_high';
+    score = 2;
+  } else if (tempMax >= 31) {
+    category = 'heat_watch';
+    score = 1;
+  }
+
+  return {
+    'category': category,
+    'score': score,
+    'rainProbability': rainProb,
+    'thunderstormProbability': thunderProb,
+    'temperatureMax': tempMax,
+    if (weatherType.isNotEmpty) 'weatherType': weatherType,
+    if (summary.isNotEmpty) 'summary': summary,
+  };
+}
+
+bool _didWeatherContextMeaningfullyChange({
+  required Map<String, dynamic>? previousRecord,
+  required Map<String, dynamic>? currentSnapshot,
+  required Map<String, dynamic>? nextAction,
+}) {
+  if (currentSnapshot == null) {
+    return false;
+  }
+  final previousSnapshot = previousRecord?['weatherSnapshot'];
+  if (previousSnapshot is! Map) {
+    return (_asIntValue(currentSnapshot['score']) ?? 0) >= 2;
+  }
+
+  final currentScore = _asIntValue(currentSnapshot['score']) ?? 0;
+  final previousScore = _asIntValue(previousSnapshot['score']) ?? 0;
+  final currentCategory = currentSnapshot['category']?.toString().trim() ?? '';
+  final previousCategory =
+      previousSnapshot['category']?.toString().trim() ?? '';
+  if (currentScore > previousScore) {
+    return true;
+  }
+  if (currentCategory.isNotEmpty &&
+      previousCategory.isNotEmpty &&
+      currentCategory != previousCategory &&
+      currentScore >= previousScore &&
+      currentScore >= 2) {
+    return true;
+  }
+
+  final currentTarget = nextAction?['targetPlaceId']?.toString().trim().isNotEmpty == true
+      ? nextAction!['targetPlaceId'].toString().trim()
+      : nextAction?['targetPlaceName']?.toString().trim() ?? '';
+  final previousAction = previousRecord?['nextAction'];
+  final previousTarget = previousAction is Map
+      ? (previousAction['targetPlaceId']?.toString().trim().isNotEmpty == true
+            ? previousAction['targetPlaceId'].toString().trim()
+            : previousAction['targetPlaceName']?.toString().trim() ?? '')
+      : '';
+  if (currentTarget.isNotEmpty &&
+      previousTarget.isNotEmpty &&
+      currentTarget != previousTarget &&
+      currentScore >= 3) {
+    return true;
+  }
+
+  return false;
 }
 
 Future<Map<String, dynamic>> _runTrackedUpcomingReminderScan({
@@ -7261,6 +7381,7 @@ Future<Map<String, dynamic>> _buildContextAwareness(
     'alerts': alerts,
     'suggestions': suggestions.toList(),
     'backupPlans': backupPlans,
+    if (weather != null) 'weather': weather,
     if (nextAction != null) 'nextAction': nextAction,
     if (upcomingReminder != null) 'upcomingReminder': upcomingReminder,
     'checkedAt': DateTime.now().toUtc().toIso8601String(),
@@ -8386,20 +8507,36 @@ Future<bool> _sendLineContextAwarenessNotification({
       nextAction: nextAction,
       referenceTime: _taipeiNow(),
     );
+    final weather = result['weather'] is Map
+        ? Map<String, dynamic>.from(result['weather'] as Map)
+        : null;
+    final weatherSnapshot = _buildWeatherRiskSnapshot(weather);
     if (shouldPushReminder && upcomingReminder != null) {
       await _enrichUpcomingReminderLiveData(upcomingReminder);
     }
     String? contextChangeSignature;
+    Map<String, dynamic>? previousContextRecord;
     if (shouldPushContextAlert && nextAction != null) {
       contextChangeSignature = _buildContextChangeSignature(
         nextAction: nextAction,
         alerts: alerts,
+      );
+      previousContextRecord = await _readLineContextStateRecord(
+        userId: userId,
+        dayDate: dayDate,
       );
       final lastSignature = await _lastLineContextPushSignature(
         userId: userId,
         dayDate: dayDate,
       );
       if (lastSignature == contextChangeSignature) {
+        shouldPushContextAlert = false;
+      } else if (_isWeatherDrivenContext(nextAction: nextAction, alerts: alerts) &&
+          !_didWeatherContextMeaningfullyChange(
+            previousRecord: previousContextRecord,
+            currentSnapshot: weatherSnapshot,
+            nextAction: nextAction,
+          )) {
         shouldPushContextAlert = false;
       }
     }
@@ -8521,6 +8658,7 @@ Future<bool> _sendLineContextAwarenessNotification({
         dayDate: dayDate,
         signature: contextChangeSignature,
         nextAction: nextAction,
+        weatherSnapshot: weatherSnapshot,
       );
     }
     _log.info('LINE 情境感知提醒已送出：user=$userId lineUserId=$lineUserId');
