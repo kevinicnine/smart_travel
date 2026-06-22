@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'home_page.dart';
 import '../services/location_sync_service.dart';
 import '../state/user_state.dart';
 import '../services/backend_api.dart';
+import 'select_interest_page.dart';
 
 class RegisterPage extends StatefulWidget {
   const RegisterPage({super.key});
@@ -86,9 +88,18 @@ class _RegisterPageState extends State<RegisterPage> {
           await UserState.saveSelectedInterests(interests);
         }
       }
-      _showMessage('註冊成功！');
       if (!mounted) return;
-      Navigator.pop(context, displayName);
+      _showMessage('註冊成功！');
+      final nextPage = UserState.hasSavedInterests
+          ? HomePage(
+              selectedInterestIds: UserState.selectedInterestIds,
+              displayName: UserState.displayName,
+            )
+          : const SelectInterestPage();
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => nextPage),
+        (route) => false,
+      );
     } on ApiClientException catch (error) {
       _showMessage(error.message);
     } finally {

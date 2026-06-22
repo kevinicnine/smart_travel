@@ -1167,11 +1167,17 @@ class _ItineraryPageState extends State<ItineraryPage> {
   }) async {
     final previousItem = _previousNonMealItem(day, itemIndex);
     final nextItem = _nextNonMealItem(day, itemIndex);
+    final anchorPoint = _mealAnchorPoint(previousItem, nextItem);
     final city = item.place.city.isNotEmpty
         ? item.place.city
         : previousItem?.place.city.isNotEmpty == true
         ? previousItem!.place.city
         : nextItem?.place.city ?? '';
+    final targetArea = _resolveMealPlanningArea(
+      mealPlace: item.place,
+      previousItem: previousItem,
+      nextItem: nextItem,
+    );
     final mealType = item.place.tags.contains('dinner') ? 'dinner' : 'lunch';
     List<Map<String, dynamic>> raw;
     try {
@@ -1240,22 +1246,108 @@ class _ItineraryPageState extends State<ItineraryPage> {
           nextItem != null && _hasValidPlaceCoordinate(nextItem.place)
           ? _estimateTransitByMode(place, nextItem.place, 'car').minutes
           : 0;
+      final candidateArea = _normalizeAdministrativeArea(
+        place.city.isNotEmpty ? place.city : place.address,
+      );
+      if (targetArea != null &&
+          candidateArea != null &&
+          candidateArea != targetArea) {
+        continue;
+      }
+      final anchorDistanceKm = anchorPoint == null || !_hasValidPlaceCoordinate(place)
+          ? 0.0
+          : _haversineKm(
+              anchorPoint.$1,
+              anchorPoint.$2,
+              place.lat ?? 0,
+              place.lng ?? 0,
+            );
+      final maxSingleLegMinutes = query.trim().isEmpty ? 30 : 40;
+      final maxCombinedMinutes = query.trim().isEmpty ? 50 : 65;
+      final maxAnchorDistanceKm = query.trim().isEmpty ? 8.0 : 12.0;
+      if (fromPrevMinutes > maxSingleLegMinutes ||
+          toNextMinutes > maxSingleLegMinutes ||
+          fromPrevMinutes + toNextMinutes > maxCombinedMinutes ||
+          anchorDistanceKm > maxAnchorDistanceKm) {
+        continue;
+      }
       final fitScore =
           (place.rating ?? 0) * 18 -
-          fromPrevMinutes * 0.7 -
-          toNextMinutes * 0.7;
+          fromPrevMinutes * 0.9 -
+          toNextMinutes * 0.9 -
+          anchorDistanceKm * 2.5;
       options.add(
         _MealCandidateOption(
           raw: map,
           place: place,
           fromPrevMinutes: fromPrevMinutes,
           toNextMinutes: toNextMinutes,
+          anchorDistanceKm: anchorDistanceKm,
           fitScore: fitScore,
         ),
       );
     }
     options.sort((a, b) => b.fitScore.compareTo(a.fitScore));
     return options.take(8).toList();
+  }
+
+  (double, double)? _mealAnchorPoint(
+    _ItineraryItem? previousItem,
+    _ItineraryItem? nextItem,
+  ) {
+    final prev = previousItem?.place;
+    final next = nextItem?.place;
+    final hasPrev = prev != null && _hasValidPlaceCoordinate(prev);
+    final hasNext = next != null && _hasValidPlaceCoordinate(next);
+    if (!hasPrev && !hasNext) {
+      return null;
+    }
+    if (hasPrev && hasNext) {
+      return (
+        ((prev.lat ?? 0) + (next.lat ?? 0)) / 2,
+        ((prev.lng ?? 0) + (next.lng ?? 0)) / 2,
+      );
+    }
+    final single = hasPrev ? prev : next;
+    if (single == null) {
+      return null;
+    }
+    return (single.lat ?? 0, single.lng ?? 0);
+  }
+
+  String? _resolveMealPlanningArea({
+    required _ItineraryPlace mealPlace,
+    required _ItineraryItem? previousItem,
+    required _ItineraryItem? nextItem,
+  }) {
+    final candidates = <String>[
+      mealPlace.city,
+      mealPlace.address,
+      previousItem?.place.city ?? '',
+      previousItem?.place.address ?? '',
+      nextItem?.place.city ?? '',
+      nextItem?.place.address ?? '',
+    ];
+    for (final candidate in candidates) {
+      final normalized = _normalizeAdministrativeArea(candidate);
+      if (normalized != null) {
+        return normalized;
+      }
+    }
+    return null;
+  }
+
+  String? _normalizeAdministrativeArea(String raw) {
+    final text = raw.trim();
+    if (text.isEmpty) return null;
+    final match = RegExp(
+      r'(臺北市|台北市|新北市|基隆市|桃園市|新竹市|新竹縣|苗栗縣|臺中市|台中市|彰化縣|南投縣|雲林縣|嘉義市|嘉義縣|臺南市|台南市|高雄市|屏東縣|宜蘭縣|花蓮縣|臺東縣|台東縣|澎湖縣|金門縣|連江縣)',
+    ).firstMatch(text);
+    final area = match?.group(0);
+    if (area == null || area.isEmpty) {
+      return null;
+    }
+    return area.replaceAll('臺', '台');
   }
 
   Future<List<Map<String, dynamic>>> _fetchMealSuggestionsFromGoogleDirect({
@@ -1602,7 +1694,7 @@ class _ItineraryPageState extends State<ItineraryPage> {
                 Text(explanation['whyDuration']?.toString() ?? ''),
                 const SizedBox(height: 10),
                 Text(
-                  '前一站約 ${candidate.fromPrevMinutes} 分鐘，下一站約 ${candidate.toNextMinutes} 分鐘',
+                  '前一站約 ${candidate.fromPrevMinutes} 分鐘，下一站約 ${candidate.toNextMinutes} 分鐘，偏離主路線約 ${candidate.anchorDistanceKm.toStringAsFixed(1)} km',
                   style: const TextStyle(
                     fontSize: 12,
                     color: Color(0xFF5A5670),
@@ -1713,6 +1805,7 @@ class _ItineraryPageState extends State<ItineraryPage> {
     int itemIndex,
     _ItineraryItem item,
   ) async {
+    final pageContext = context;
     final previousItem = _previousNonMealItem(day, itemIndex);
     final nextItem = _nextNonMealItem(day, itemIndex);
     final searchController = TextEditingController();
@@ -1902,6 +1995,8 @@ class _ItineraryPageState extends State<ItineraryPage> {
                                         alignment: Alignment.centerRight,
                                         child: ElevatedButton(
                                           onPressed: () {
+                                            FocusManager.instance.primaryFocus
+                                                ?.unfocus();
                                             Navigator.of(
                                               context,
                                             ).pop(candidate);
@@ -1928,6 +2023,9 @@ class _ItineraryPageState extends State<ItineraryPage> {
     );
     searchController.dispose();
     if (!mounted || selectedCandidate == null) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+    await Future<void>.delayed(const Duration(milliseconds: 16));
+    if (!pageContext.mounted) return;
     await _confirmAndApplyMealSelection(
       day: day,
       itemIndex: itemIndex,
@@ -4358,6 +4456,7 @@ class _MealCandidateOption {
     required this.place,
     required this.fromPrevMinutes,
     required this.toNextMinutes,
+    required this.anchorDistanceKm,
     required this.fitScore,
   });
 
@@ -4365,6 +4464,7 @@ class _MealCandidateOption {
   final _ItineraryPlace place;
   final int fromPrevMinutes;
   final int toNextMinutes;
+  final double anchorDistanceKm;
   final double fitScore;
 }
 

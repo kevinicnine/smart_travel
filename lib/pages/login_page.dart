@@ -133,9 +133,9 @@ class _LoginPageState extends State<LoginPage> {
               displayName: UserState.displayName,
             )
           : const SelectInterestPage();
-      Navigator.push(
-        context,
+      Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => nextPage),
+        (route) => false,
       );
     } on ApiClientException catch (error) {
       unawaited(

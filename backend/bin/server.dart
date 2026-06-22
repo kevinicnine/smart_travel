@@ -1760,6 +1760,8 @@ Future<void> main(List<String> args) async {
         final dayStartTime = body['dayStartTime']?.toString().trim();
         final dayEndTime = body['dayEndTime']?.toString().trim();
         final extraSpots = _asInt(body, 'extraSpots');
+        final currentDate = body['currentDate']?.toString().trim();
+        final currentMinuteOfDay = _asInt(body, 'currentMinuteOfDay');
         final wishlistPlaces =
             (body['wishlistPlaces'] as List?)
                 ?.map((e) => e.toString().trim())
@@ -1796,6 +1798,10 @@ Future<void> main(List<String> args) async {
               ? null
               : dayEndTime,
           extraSpots: extraSpots,
+          currentDate: (currentDate == null || currentDate.isEmpty)
+              ? null
+              : currentDate,
+          currentMinuteOfDay: currentMinuteOfDay,
           wishlistPlaces: wishlistPlaces,
         );
         return successBody(message: '行程已生成', data: plan);
@@ -9833,6 +9839,8 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
   String? dayStartTime,
   String? dayEndTime,
   int? extraSpots,
+  String? currentDate,
+  int? currentMinuteOfDay,
   List<String> wishlistPlaces = const [],
 }) async {
   var places = await _store.listPlaces();
@@ -10100,6 +10108,8 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
     dayStartTime: dayStartTime,
     dayEndTime: dayEndTime,
     extraSpots: extraSpots,
+    currentDate: currentDate,
+    currentMinuteOfDay: currentMinuteOfDay,
     wishlistPlaces: effectiveWishlistPlaces,
   );
   final prioritizedCities = _stringListFromJson(
@@ -10197,6 +10207,10 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
     final dayDate = (startDate ?? DateTime.now()).add(Duration(days: dayIndex));
     var dayPreferredStartMinute = preferredStartMinute;
     var dayPreferredEndMinute = preferredEndMinute;
+    final isReferenceToday = _isSamePlanningDate(
+      dayDate,
+      referenceDate: currentDate,
+    );
     final requiresNightMarketToday =
         requirementSignals.preferNightMarket &&
         (requirementSignals.nightMarketDayIndex ?? 0) == dayIndex;
@@ -10208,14 +10222,32 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
       dayPreferredStartMinute = _effectiveStartMinuteForToday(
         dayDate: dayDate,
         fallbackStartMinute: preferredStartMinute,
-        dayEndMinute: dayPreferredEndMinute,
+        referenceDate: currentDate,
+        referenceMinuteOfDay: currentMinuteOfDay,
       );
+      if (isReferenceToday &&
+          currentMinuteOfDay != null &&
+          currentMinuteOfDay >= dayPreferredEndMinute - 90) {
+        dayPreferredEndMinute = min(
+          23 * 60 + 30,
+          max(dayPreferredEndMinute, currentMinuteOfDay + 150),
+        );
+      }
       if (dayPreferredEndMinute <= dayPreferredStartMinute) {
-        dayPreferredEndMinute = dayPreferredStartMinute + 3 * 60;
+        dayPreferredEndMinute = min(
+          23 * 60 + 30,
+          dayPreferredStartMinute + (isReferenceToday ? 120 : 180),
+        );
       }
     }
+    final lateStartToday =
+        isReferenceToday &&
+        dayIndex == 0 &&
+        (dayStartTime == null || dayStartTime.trim().isEmpty) &&
+        dayPreferredStartMinute >= 15 * 60;
+    final minWindowMinutes = lateStartToday ? 90 : 180;
     final dayTimeWindowMinutes = max(
-      180,
+      minWindowMinutes,
       dayPreferredEndMinute - dayPreferredStartMinute,
     );
     final dayDailyMinutesBudget = min(
@@ -10223,9 +10255,12 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
       dayTimeWindowMinutes,
     );
     final dayStayMinutesBudget = max(
-      180,
+      minWindowMinutes,
       (dayDailyMinutesBudget * weights.stayBudgetRatio).round(),
     );
+    final dayStopCap = lateStartToday
+        ? (dayPreferredStartMinute >= 19 * 60 ? min(perDay, 1) : min(perDay, 2))
+        : perDay;
     final items = <Map<String, dynamic>>[];
     if (remaining.isNotEmpty) {
       final adjustedScores = <String, double>{};
@@ -10265,7 +10300,7 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
       var dayPicked = _selectDayPlacesByBackpacker(
         candidates: remaining,
         scores: adjustedScores,
-        maxStops: perDay,
+        maxStops: dayStopCap,
         stayBudgetMinutes: dayStayMinutesBudget,
         weights: weights,
         requirementSignals: requirementSignals,
@@ -10291,7 +10326,7 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
           ...requiredForDay.where((place) => !selectedIds.contains(place.id)),
           ...dayPicked,
         ];
-        while (dayPicked.length > perDay) {
+        while (dayPicked.length > dayStopCap) {
           final removableIndex = dayPicked.lastIndexWhere(
             (place) => !requiredPlaceIds.contains(place.id),
           );
@@ -10332,7 +10367,7 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
           route: ordered,
           candidates: remaining,
           scores: adjustedScores,
-          maxStops: perDay,
+          maxStops: dayStopCap,
         );
       }
       ordered = _orderPlacesByTimeAwareRoute(
@@ -11960,26 +11995,33 @@ int _clampInt(int value, int minValue, int maxValue) {
 int _effectiveStartMinuteForToday({
   required DateTime dayDate,
   required int fallbackStartMinute,
-  required int dayEndMinute,
+  String? referenceDate,
+  int? referenceMinuteOfDay,
 }) {
-  final now = DateTime.now();
-  final isSameDay =
-      now.year == dayDate.year &&
-      now.month == dayDate.month &&
-      now.day == dayDate.day;
+  final isSameDay = _isSamePlanningDate(dayDate, referenceDate: referenceDate);
   if (!isSameDay) {
     return fallbackStartMinute;
   }
 
-  final nowMinute = now.hour * 60 + now.minute;
+  final nowMinute = (referenceMinuteOfDay ?? (DateTime.now().hour * 60 + DateTime.now().minute))
+      .clamp(0, 23 * 60 + 59);
   final bufferedNowMinute = nowMinute + 30;
   final roundedUp = ((bufferedNowMinute + 14) ~/ 15) * 15;
-  final latestAllowedStart = max(fallbackStartMinute, dayEndMinute - 180);
-  return _clampInt(
-    max(fallbackStartMinute, roundedUp),
-    fallbackStartMinute,
-    latestAllowedStart,
-  );
+  return max(fallbackStartMinute, roundedUp);
+}
+
+String _planningDateKey(DateTime value) =>
+    '${value.year.toString().padLeft(4, '0')}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
+
+bool _isSamePlanningDate(
+  DateTime dayDate, {
+  String? referenceDate,
+}) {
+  final effectiveReferenceDate =
+      referenceDate == null || referenceDate.trim().isEmpty
+      ? _planningDateKey(DateTime.now())
+      : referenceDate.trim();
+  return _planningDateKey(dayDate) == effectiveReferenceDate;
 }
 
 int? _parseHmToMinute(String? raw) {
@@ -13024,6 +13066,8 @@ Future<Map<String, dynamic>> _buildAiPlannerAssist({
   required String? dayStartTime,
   required String? dayEndTime,
   required int? extraSpots,
+  required String? currentDate,
+  required int? currentMinuteOfDay,
   required List<String> wishlistPlaces,
 }) async {
   final fallback = _buildRuleBasedPlannerAssist(
@@ -13045,6 +13089,8 @@ Future<Map<String, dynamic>> _buildAiPlannerAssist({
     dayStartTime: dayStartTime,
     dayEndTime: dayEndTime,
     extraSpots: extraSpots,
+    currentDate: currentDate,
+    currentMinuteOfDay: currentMinuteOfDay,
     wishlistPlaces: wishlistPlaces,
   );
   if (!_isLlmConfigured() || candidates.isEmpty) {
@@ -13077,6 +13123,8 @@ Future<Map<String, dynamic>> _buildAiPlannerAssist({
             dayStartTime: dayStartTime,
             dayEndTime: dayEndTime,
             extraSpots: extraSpots,
+            currentDate: currentDate,
+            currentMinuteOfDay: currentMinuteOfDay,
             wishlistPlaces: wishlistPlaces,
           ),
         },
@@ -13205,6 +13253,8 @@ Map<String, dynamic> _buildRuleBasedPlannerAssist({
   required String? dayStartTime,
   required String? dayEndTime,
   required int? extraSpots,
+  required String? currentDate,
+  required int? currentMinuteOfDay,
   required List<String> wishlistPlaces,
 }) {
   final warnings = <String>[];
@@ -13488,6 +13538,23 @@ Map<String, dynamic> _buildRuleBasedPlannerAssist({
       : originToFirstKm >= 60
       ? '若想避免第一天過趕，可把第一站改成更靠近出發地或主要進城動線的景點。'
       : '目前城市配置尚可，若想更悠閒可把單日景點數再減少 1 站。';
+  final hasLiveSameDayStart =
+      (dayStartTime == null || dayStartTime.trim().isEmpty) &&
+      startDate != null &&
+      _isSamePlanningDate(startDate, referenceDate: currentDate) &&
+      currentMinuteOfDay != null;
+  if (hasLiveSameDayStart) {
+    final roundedMinute = (((currentMinuteOfDay + 30) + 14) ~/ 15) * 15;
+    recommendedStartTime = _minutesToHm(
+      roundedMinute.clamp(0, 23 * 60 + 45),
+    );
+    if (currentMinuteOfDay >= 15 * 60) {
+      dailyStopCap = min(dailyStopCap, currentMinuteOfDay >= 19 * 60 ? 1 : 2);
+      lunchStartTime = currentMinuteOfDay >= 15 * 60
+          ? recommendedStartTime
+          : lunchStartTime;
+    }
+  }
   switch (normalizedTripPurpose) {
     case 'relax':
       improvements.add('這次以休閒放鬆為主，建議單日保留更多停留與休息彈性。');
@@ -14092,6 +14159,8 @@ String _buildAiPlannerAssistPrompt({
   required String? dayStartTime,
   required String? dayEndTime,
   required int? extraSpots,
+  required String? currentDate,
+  required int? currentMinuteOfDay,
   required List<String> wishlistPlaces,
 }) {
   final cities = <String, int>{};
@@ -14161,12 +14230,18 @@ String _buildAiPlannerAssistPrompt({
 - 已指定想去景點：${wishlistPlaces.isEmpty ? '無' : wishlistPlaces.join('、')}
 - 使用者手動指定出發時間：${dayStartTime ?? '未指定'}
 - 使用者手動指定結束時間：${dayEndTime ?? '未指定'}
+- App 端當下日期：${currentDate ?? '未提供'}
+- App 端當下分鐘數：${currentMinuteOfDay?.toString() ?? '未提供'}
 
 候選資料：
 - 可用候選景點數：${candidates.length}
 - 候選城市分布：${citySummary.take(8).map((e) => '${e.key}:${e.value}').join('、')}
 - 候選景點範例：$exampleStops
 - 可行性提醒：${feasibilityTips.isEmpty ? '暫無' : feasibilityTips.join('；')}
+
+補充規則：
+- 如果第一天就是使用者現在所在的日期，且未手動指定出發時間，recommended_start_time 不得早於使用者現在時間往後 30 分鐘再進位到 15 分鐘
+- 如果第一天已經是晚上，請改成夜間版輕量行程，不要安排午餐或需要白天體驗的主要景點
 ''';
 }
 

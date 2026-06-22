@@ -8,6 +8,7 @@ import '../state/user_state.dart';
 import 'edit_profile_page.dart';
 import 'select_interest_page.dart';
 import 'change_password_page.dart';
+import 'start_page.dart';
 
 class AccountPage extends StatefulWidget {
   const AccountPage({super.key});
@@ -106,11 +107,13 @@ class _AccountPageState extends State<AccountPage> {
                 icon: Icons.logout,
                 label: '登出',
                 onTap: () async {
-                  final navigator = Navigator.of(context);
                   await LocationSyncService.instance.stopTracking();
                   await UserState.clearSession();
-                  if (!mounted) return;
-                  navigator.popUntil((route) => route.isFirst);
+                  if (!context.mounted) return;
+                  Navigator.of(context).pushAndRemoveUntil(
+                    MaterialPageRoute(builder: (_) => const StartPage()),
+                    (route) => false,
+                  );
                 },
               ),
             ],

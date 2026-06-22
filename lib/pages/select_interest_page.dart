@@ -54,14 +54,14 @@ class _SelectInterestPageState extends State<SelectInterestPage> {
       );
       await UserState.saveSelectedInterests(_selected.toList());
       if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
+      Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(
           builder: (_) => HomePage(
             selectedInterestIds: UserState.selectedInterestIds,
             displayName: UserState.displayName,
           ),
         ),
+        (route) => false,
       );
     } on ApiClientException catch (error) {
       _showMessage(error.message);

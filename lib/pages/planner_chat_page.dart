@@ -483,6 +483,7 @@ class _PlannerChatPageState extends State<PlannerChatPage> {
         location: destinationLabel,
         budget: _inferBudgetValue(requirementsText),
         wishlistPlaces: _requiredPlaces,
+        currentTime: DateTime.now(),
       );
       if (!mounted) return;
       setState(() {

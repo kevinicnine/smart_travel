@@ -166,8 +166,10 @@ class BackendApi {
     String? dayEndTime,
     int? extraSpots,
     List<String>? wishlistPlaces,
+    DateTime? currentTime,
   }) async {
     final payload = <String, dynamic>{'interests': interestIds};
+    final effectiveCurrentTime = currentTime ?? DateTime.now();
     if (userId != null && userId.trim().isNotEmpty) {
       payload['userId'] = userId.trim();
     }
@@ -222,6 +224,9 @@ class BackendApi {
           .map((e) => e.trim())
           .toList();
     }
+    payload['currentDate'] = effectiveCurrentTime.toIso8601String().split('T').first;
+    payload['currentMinuteOfDay'] =
+        effectiveCurrentTime.hour * 60 + effectiveCurrentTime.minute;
 
     final response = await _post(
       '/api/travel/plans',
