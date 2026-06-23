@@ -61,18 +61,11 @@ class LocationSyncService with WidgetsBindingObserver {
           _maybeSendPosition(position, source: 'stream'),
         ),
       );
-      try {
-        final position = await Geolocator.getCurrentPosition().timeout(
-          const Duration(seconds: 8),
-        );
-        await _maybeSendPosition(position, source: 'bootstrap', force: true);
-      } catch (_) {
-        // Ignore bootstrap failures; stream/heartbeat can retry.
-      }
       _heartbeatTimer?.cancel();
       _heartbeatTimer = Timer.periodic(const Duration(minutes: 10), (_) {
         unawaited(_sendCurrentPosition());
       });
+      unawaited(_sendCurrentPosition(force: true));
     } finally {
       _starting = false;
     }

@@ -1253,6 +1253,8 @@ class _ItineraryPageState extends State<ItineraryPage>
     required _ItineraryItem item,
     String query = '',
   }) async {
+    final normalizedQuery = query.trim();
+    final hasManualQuery = normalizedQuery.isNotEmpty;
     final previousItem = _previousNonMealItem(day, itemIndex);
     final nextItem = _nextNonMealItem(day, itemIndex);
     final anchorPoint = _mealAnchorPoint(previousItem, nextItem);
@@ -1289,7 +1291,7 @@ class _ItineraryPageState extends State<ItineraryPage>
                 'lng': nextItem.place.lng,
               },
         city: city.isEmpty ? null : city,
-        query: query.trim().isEmpty ? null : query.trim(),
+        query: hasManualQuery ? normalizedQuery : null,
         mealType: mealType,
         limit: 18,
       );
@@ -1337,11 +1339,10 @@ class _ItineraryPageState extends State<ItineraryPage>
       final candidateArea = _normalizeAdministrativeArea(
         place.city.isNotEmpty ? place.city : place.address,
       );
-      if (targetArea != null &&
+      final areaMismatch =
+          targetArea != null &&
           candidateArea != null &&
-          candidateArea != targetArea) {
-        continue;
-      }
+          candidateArea != targetArea;
       final anchorDistanceKm = anchorPoint == null || !_hasValidPlaceCoordinate(place)
           ? 0.0
           : _haversineKm(
@@ -1353,17 +1354,21 @@ class _ItineraryPageState extends State<ItineraryPage>
       final maxSingleLegMinutes = query.trim().isEmpty ? 30 : 40;
       final maxCombinedMinutes = query.trim().isEmpty ? 50 : 65;
       final maxAnchorDistanceKm = query.trim().isEmpty ? 8.0 : 12.0;
-      if (fromPrevMinutes > maxSingleLegMinutes ||
+      final routeTooFar =
+          fromPrevMinutes > maxSingleLegMinutes ||
           toNextMinutes > maxSingleLegMinutes ||
           fromPrevMinutes + toNextMinutes > maxCombinedMinutes ||
-          anchorDistanceKm > maxAnchorDistanceKm) {
+          anchorDistanceKm > maxAnchorDistanceKm;
+      if (!hasManualQuery && (areaMismatch || routeTooFar)) {
         continue;
       }
       final fitScore =
           (place.rating ?? 0) * 18 -
           fromPrevMinutes * 0.9 -
           toNextMinutes * 0.9 -
-          anchorDistanceKm * 2.5;
+          anchorDistanceKm * 2.5 -
+          (areaMismatch ? 60 : 0) -
+          (routeTooFar ? 90 : 0);
       options.add(
         _MealCandidateOption(
           raw: map,
@@ -1372,6 +1377,8 @@ class _ItineraryPageState extends State<ItineraryPage>
           toNextMinutes: toNextMinutes,
           anchorDistanceKm: anchorDistanceKm,
           fitScore: fitScore,
+          areaMismatch: areaMismatch,
+          routeTooFar: routeTooFar,
         ),
       );
     }
@@ -1744,6 +1751,44 @@ class _ItineraryPageState extends State<ItineraryPage>
     required _ItineraryItem mealItem,
     required _MealCandidateOption candidate,
   }) async {
+    if (!candidate.isRouteReasonable) {
+      if (!mounted) return;
+      final reasons = candidate.blockReasons;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('${candidate.place.name} 不建議套用'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('搜尋結果可以顯示，但這間餐廳和目前行程動線不合理，因此不允許直接套用。'),
+              const SizedBox(height: 10),
+              for (final reason in reasons)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text('• $reason'),
+                ),
+              const SizedBox(height: 10),
+              Text(
+                '前一站約 ${candidate.fromPrevMinutes} 分鐘，下一站約 ${candidate.toNextMinutes} 分鐘，偏離主路線約 ${candidate.anchorDistanceKm.toStringAsFixed(1)} km',
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: Color(0xFF5A5670),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('知道了'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
     final explanation = await _fetchMealFitExplanation(
       day: day,
       itemIndex: itemIndex,
@@ -3608,12 +3653,27 @@ class _MealBreakPlannerSheetState extends State<_MealBreakPlannerSheet> {
                                   color: Color(0xFF5A5670),
                                 ),
                               ),
+                              if (!candidate.isRouteReasonable) ...[
+                                const SizedBox(height: 6),
+                                Text(
+                                  candidate.blockReasons.join(' / '),
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Color(0xFFB24C3A),
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
                               const SizedBox(height: 8),
                               Align(
                                 alignment: Alignment.centerRight,
                                 child: ElevatedButton(
                                   onPressed: () => _selectCandidate(candidate),
-                                  child: const Text('AI 檢查並套用'),
+                                  child: Text(
+                                    candidate.isRouteReasonable
+                                        ? 'AI 檢查並套用'
+                                        : '查看阻擋原因',
+                                  ),
                                 ),
                               ),
                             ],
@@ -4560,6 +4620,8 @@ class _MealCandidateOption {
     required this.toNextMinutes,
     required this.anchorDistanceKm,
     required this.fitScore,
+    required this.areaMismatch,
+    required this.routeTooFar,
   });
 
   final Map<String, dynamic> raw;
@@ -4568,6 +4630,15 @@ class _MealCandidateOption {
   final int toNextMinutes;
   final double anchorDistanceKm;
   final double fitScore;
+  final bool areaMismatch;
+  final bool routeTooFar;
+
+  bool get isRouteReasonable => !areaMismatch && !routeTooFar;
+
+  List<String> get blockReasons => [
+    if (areaMismatch) '不在目前行程區域內',
+    if (routeTooFar) '前後景點拉車距離過長',
+  ];
 }
 
 class _ItineraryPlace {

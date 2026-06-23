@@ -69,7 +69,10 @@ class _HomePageState extends State<HomePage> {
     _rebuildMarkers();
     _loadFavorites();
     _loadSavedTrips();
-    _loadPlacesFromBackend();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(_loadPlacesFromBackend());
+    });
     unawaited(
       _reportEvent(
         'page_view',
@@ -107,7 +110,7 @@ class _HomePageState extends State<HomePage> {
           _places = places;
           _syncPlannerSelections(places);
           _mapCenter = places.first.position;
-          _rebuildMarkers();
+          _rebuildMarkersIfVisible();
         });
       }
     } on ApiClientException catch (error) {
@@ -142,6 +145,12 @@ class _HomePageState extends State<HomePage> {
     }).toSet();
   }
 
+  void _rebuildMarkersIfVisible() {
+    if (_currentNavIndex == 1 || _showOnlySelectedMarker) {
+      _rebuildMarkers();
+    }
+  }
+
   String _markerIdForPlace(_Place place) {
     final id = place.id.trim();
     return id.isNotEmpty ? id : place.name;
@@ -161,7 +170,7 @@ class _HomePageState extends State<HomePage> {
     setState(() {
       _places.removeWhere((p) => p.id == place.id || p.name == place.name);
       _places = [place, ..._places];
-      _rebuildMarkers();
+      _rebuildMarkersIfVisible();
     });
   }
 

@@ -105,7 +105,6 @@ class _LoginPageState extends State<LoginPage> {
         linked: user['lineLinked'] == true,
         pushEnabled: user['linePushEnabled'] == true,
       );
-      await LocationSyncService.instance.refreshTracking();
       final rawInterests = user['interests'];
       if (rawInterests is List) {
         final interests = rawInterests
@@ -137,6 +136,7 @@ class _LoginPageState extends State<LoginPage> {
         MaterialPageRoute(builder: (_) => nextPage),
         (route) => false,
       );
+      unawaited(LocationSyncService.instance.refreshTracking());
     } on ApiClientException catch (error) {
       unawaited(
         _reportEvent(

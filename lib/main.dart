@@ -22,7 +22,9 @@ class _SmartTravelAppState extends State<SmartTravelApp> {
   @override
   void initState() {
     super.initState();
-    unawaited(LocationSyncService.instance.initialize());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(LocationSyncService.instance.initialize());
+    });
   }
 
   @override
