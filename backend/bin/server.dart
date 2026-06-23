@@ -6424,6 +6424,49 @@ Future<void> _rememberLineContextPushSignature({
   await _writeAppState(appState);
 }
 
+Future<void> _rememberLineContextResolution({
+  required String userId,
+  required DateTime dayDate,
+  required String action,
+  required String targetPlaceId,
+  required String replacementPlaceId,
+  required String replacementPlaceName,
+  Map<String, dynamic>? resolvedAction,
+  Map<String, dynamic>? weatherSnapshot,
+}) async {
+  final appState = await _readAppState();
+  final raw = appState[_lineContextStateKey];
+  final records = raw is Map
+      ? Map<String, dynamic>.from(raw)
+      : <String, dynamic>{};
+  final recordKey = _lineContextStateRecordKey(userId: userId, dayDate: dayDate);
+  final previous = records[recordKey];
+  final existing = previous is Map
+      ? Map<String, dynamic>.from(previous)
+      : <String, dynamic>{};
+  existing['updatedAt'] = DateTime.now().toUtc().toIso8601String();
+  existing['resolvedContext'] = {
+    'timestamp': DateTime.now().toUtc().toIso8601String(),
+    'action': action,
+    'targetPlaceId': targetPlaceId,
+    'replacementPlaceId': replacementPlaceId,
+    'replacementPlaceName': replacementPlaceName,
+    if (resolvedAction != null) ...{
+      'type': resolvedAction['type'],
+      'severity': resolvedAction['severity'],
+      'phase': resolvedAction['phase'],
+      'scheduledTime': resolvedAction['scheduledTime'],
+      'targetPlaceName': resolvedAction['targetPlaceName'],
+    },
+  };
+  if (weatherSnapshot != null) {
+    existing['weatherSnapshot'] = weatherSnapshot;
+  }
+  records[recordKey] = existing;
+  appState[_lineContextStateKey] = records;
+  await _writeAppState(appState);
+}
+
 String _buildContextChangeSignature({
   required Map<String, dynamic> nextAction,
   required List<Map<String, dynamic>> alerts,
@@ -6552,6 +6595,65 @@ bool _didWeatherContextMeaningfullyChange({
   }
 
   return false;
+}
+
+bool _shouldSuppressRecentlyResolvedContext({
+  required Map<String, dynamic>? previousRecord,
+  required Map<String, dynamic>? nextAction,
+  required List<Map<String, dynamic>> alerts,
+  required Map<String, dynamic>? currentSnapshot,
+  required DateTime referenceTime,
+}) {
+  if (nextAction == null || nextAction.isEmpty) {
+    return false;
+  }
+  final resolved = previousRecord?['resolvedContext'];
+  if (resolved is! Map) {
+    return false;
+  }
+  final resolvedAt = DateTime.tryParse(resolved['timestamp']?.toString() ?? '');
+  if (resolvedAt == null) {
+    return false;
+  }
+  final resolvedUtc = resolvedAt.toUtc();
+  final nowUtc = referenceTime.toUtc();
+  if (nowUtc.difference(resolvedUtc) > const Duration(hours: 3)) {
+    return false;
+  }
+
+  final resolvedType = resolved['type']?.toString().trim() ?? '';
+  final resolvedSeverity = resolved['severity']?.toString().trim() ?? '';
+  final isCurrentWeatherDriven = _isWeatherDrivenContext(
+    nextAction: nextAction,
+    alerts: alerts,
+  );
+  final isResolvedWeatherDriven =
+      resolvedType.startsWith('swap_for_weather') ||
+      resolvedType.startsWith('swap_for_heat');
+  if (!isCurrentWeatherDriven || !isResolvedWeatherDriven) {
+    return false;
+  }
+
+  final resolvedSnapshot = previousRecord?['weatherSnapshot'];
+  final resolvedRecord = <String, dynamic>{
+    if (resolvedSnapshot is Map) 'weatherSnapshot': resolvedSnapshot,
+    'nextAction': resolved,
+  };
+  if (_didWeatherContextMeaningfullyChange(
+    previousRecord: resolvedRecord,
+    currentSnapshot: currentSnapshot,
+    nextAction: nextAction,
+  )) {
+    return false;
+  }
+
+  final currentSeverity = nextAction['severity']?.toString().trim() ?? '';
+  if (_contextSeverityRank(currentSeverity) >
+      _contextSeverityRank(resolvedSeverity)) {
+    return false;
+  }
+
+  return true;
 }
 
 Future<Map<String, dynamic>> _runTrackedUpcomingReminderScan({
@@ -6982,6 +7084,17 @@ Future<Map<String, dynamic>> _buildContextAwareness(
       )
       .toList();
   final outdoorCount = visitPlaces.where(_isOutdoorPlace).length;
+  Place? focusPlace;
+  var focusPlaceIsOutdoor = false;
+  if (focus != null &&
+      focus.phase != 'completed' &&
+      focus.targetIndex >= 0 &&
+      focus.targetIndex < visitItems.length) {
+    focusPlace = _planPlaceToPlace(
+      Map<String, dynamic>.from(visitItems[focus.targetIndex]['place'] as Map),
+    );
+    focusPlaceIsOutdoor = _isOutdoorPlace(focusPlace);
+  }
   final thunderProb =
       weather == null
           ? 0
@@ -7007,59 +7120,59 @@ Future<Map<String, dynamic>> _buildContextAwareness(
     if ((thunderProb >= 35 ||
             (weatherType != null && weatherType.contains('THUNDER')) ||
             (weatherCode != null && weatherCode >= 95)) &&
-        outdoorCount > 0) {
+        focusPlaceIsOutdoor) {
       alerts.add(
         _contextAlert(
           type: 'weather_thunder',
           severity: 'high',
           title: '雷雨風險偏高',
           message:
-              '今天預報為 $summary${thunderProb > 0 ? '，雷雨機率約 $thunderProb%' : ''}，戶外景點建議提前或改成室內點。',
+              '${focusPlace?.name ?? '目前景點'} 受 $summary${thunderProb > 0 ? '，雷雨機率約 $thunderProb%' : ''} 影響，建議改成室內點。',
         ),
       );
-      suggestions.add('優先把戶外景點移到上午，午後改排室內景點或餐食休息。');
-    } else if (rainProb >= 70 && outdoorCount > 0) {
+      suggestions.add('優先調整目前這一站，改排室內景點或餐食休息。');
+    } else if (rainProb >= 70 && focusPlaceIsOutdoor) {
       alerts.add(
         _contextAlert(
           type: 'weather_rain',
           severity: 'high',
           title: '午後降雨機率高',
-          message: '降雨機率約 $rainProb%，戶外行程可能受影響。',
+          message: '${focusPlace?.name ?? '目前景點'} 的戶外安排可能受影響，降雨機率約 $rainProb%。',
         ),
       );
-      suggestions.add('保留雨備方案，將步道、海邊、公園等戶外點前移。');
-    } else if (rainProb >= 40 && outdoorCount >= 2) {
+      suggestions.add('保留這一站的雨備方案，必要時直接切換到室內替代點。');
+    } else if (rainProb >= 40 && focusPlaceIsOutdoor) {
       alerts.add(
         _contextAlert(
           type: 'weather_rain',
           severity: 'medium',
           title: '有降雨風險',
-          message: '降雨機率約 $rainProb%，今天的戶外景點較多，建議預留彈性。',
+          message: '${focusPlace?.name ?? '目前景點'} 為戶外景點，降雨機率約 $rainProb%，建議預留彈性。',
         ),
       );
-      suggestions.add('下午時段可預留咖啡館、博物館等室內替代點。');
+      suggestions.add('這一站可先準備咖啡館、博物館等室內替代點。');
     }
 
-    if (tempMax != null && tempMax >= 34 && outdoorCount >= 2) {
+    if (tempMax != null && tempMax >= 34 && focusPlaceIsOutdoor) {
       alerts.add(
         _contextAlert(
           type: 'weather_heat',
           severity: 'high',
           title: '高溫曝曬風險',
-          message: '今日高溫約 ${tempMax.toStringAsFixed(0)}°C，連續戶外停留可能偏累。',
+          message: '${focusPlace?.name ?? '目前景點'} 為戶外景點，今日高溫約 ${tempMax.toStringAsFixed(0)}°C。',
         ),
       );
-      suggestions.add('中午前後優先安排冷氣室內點或午餐休息，避免長時間曝曬。');
-    } else if (tempMax != null && tempMax >= 31 && outdoorCount >= 3) {
+      suggestions.add('中午前後優先改成冷氣室內點或午餐休息，避免長時間曝曬。');
+    } else if (tempMax != null && tempMax >= 31 && focusPlaceIsOutdoor) {
       alerts.add(
         _contextAlert(
           type: 'weather_heat',
           severity: 'medium',
           title: '中午體感偏熱',
-          message: '今日高溫約 ${tempMax.toStringAsFixed(0)}°C，戶外景點密度偏高。',
+          message: '${focusPlace?.name ?? '目前景點'} 為戶外景點，今日高溫約 ${tempMax.toStringAsFixed(0)}°C。',
         ),
       );
-      suggestions.add('最曬的 12:00-14:00 盡量安排午餐或室內景點。');
+      suggestions.add('最曬時段可先換成午餐或室內景點。');
     }
   } else {
     alerts.add(
@@ -7072,12 +7185,30 @@ Future<Map<String, dynamic>> _buildContextAwareness(
     );
   }
 
+  final focusedTransit = _resolveFocusedTransitSegment(
+    day: day,
+    visitItems: visitItems,
+    focus: focus,
+  );
+  final focusedTransitAction = _buildTransitImpactNextAction(
+    transit: focusedTransit,
+    focus: focus,
+    rainRisk: severeRain,
+    heatRisk: hotOutdoorDay,
+  );
+  if (focusedTransitAction != null) {
+    _setContextNextAction(day, focusedTransitAction);
+  }
+
   final catalog = (severeRain || hotOutdoorDay)
       ? await _store.listPlaces()
       : const <Place>[];
   final usedPlaceIds = visitPlaces.map((place) => place.id).toSet();
-  if (catalog.isNotEmpty) {
+  if (catalog.isNotEmpty && focusPlaceIsOutdoor && focus != null) {
     for (var visitIndex = 0; visitIndex < visitItems.length; visitIndex++) {
+      if (visitIndex != focus.targetIndex) {
+        continue;
+      }
       final item = visitItems[visitIndex];
       final placeMap = Map<String, dynamic>.from(item['place'] as Map);
       final place = _planPlaceToPlace(placeMap);
@@ -7126,7 +7257,7 @@ Future<Map<String, dynamic>> _buildContextAwareness(
             .map(_contextReplacementToJson)
             .toList(),
       });
-      if (focus != null && focus.targetIndex == visitIndex) {
+      if (focus.targetIndex == visitIndex) {
         final topNames = candidates.take(2).map((e) => e.name).join(' / ');
         _setContextNextAction(day, {
           'type': severeRain ? 'swap_for_weather' : 'swap_for_heat',
@@ -7404,6 +7535,10 @@ Future<Map<String, dynamic>> _buildContextAwareness(
   final result = <String, dynamic>{
     'summary': summary,
     'severity': overallSeverity,
+    'impactLayers': _contextImpactLayers(
+      alerts: alerts,
+      nextAction: nextAction,
+    ),
     'alerts': alerts,
     'suggestions': suggestions.toList(),
     'backupPlans': backupPlans,
@@ -8343,6 +8478,126 @@ void _appendTransitContextAlerts({
   }
 }
 
+Map<String, dynamic>? _resolveFocusedTransitSegment({
+  required Map<String, dynamic> day,
+  required List<Map<String, dynamic>> visitItems,
+  required _ContextFocus? focus,
+}) {
+  if (focus == null || visitItems.isEmpty || focus.phase == 'completed') {
+    return null;
+  }
+  if (focus.phase == 'current') {
+    final currentItem = focus.targetItem;
+    final transit = currentItem['transitToNext'];
+    return transit is Map ? Map<String, dynamic>.from(transit) : null;
+  }
+  if (focus.targetIndex == 0) {
+    final transit = day['originTransit'];
+    return transit is Map ? Map<String, dynamic>.from(transit) : null;
+  }
+  final previousItem = visitItems[focus.targetIndex - 1];
+  final transit = previousItem['transitToNext'];
+  return transit is Map ? Map<String, dynamic>.from(transit) : null;
+}
+
+Map<String, dynamic>? _buildTransitImpactNextAction({
+  required Map<String, dynamic>? transit,
+  required _ContextFocus? focus,
+  required bool rainRisk,
+  required bool heatRisk,
+}) {
+  if (transit == null || focus == null || focus.phase == 'completed') {
+    return null;
+  }
+  final mode = transit['mode']?.toString() ?? '';
+  final label = transit['label']?.toString() ?? '交通';
+  final minutes = _asIntValue(transit['minutes']) ?? 0;
+  final fromLabel = transit['fromLabel']?.toString() ?? '上一站';
+  final toLabel = transit['toLabel']?.toString() ?? '下一站';
+  final lines =
+      (transit['lines'] as List?)?.map((e) => e.toString()).toList() ??
+      const <String>[];
+  final isWalk = mode == 'walk' || label.contains('步行');
+  final isTransit = mode == 'transit' || mode == 'bus' || mode == 'rail';
+  final phase = focus.phase == 'current' ? 'after_current' : focus.phase;
+  final scheduledTime = focus.phase == 'current'
+      ? null
+      : focus.targetItem['time']?.toString();
+
+  if (rainRisk && isWalk && minutes >= 12) {
+    return {
+      'type': 'transit_rain_walk',
+      'severity': minutes >= 25 ? 'high' : 'medium',
+      'phase': phase,
+      'targetPlaceName': toLabel,
+      'scheduledTime': scheduledTime,
+      'title': '建議調整下一段移動方式',
+      'message': '$fromLabel 到 $toLabel 需要步行約 $minutes 分鐘，遇雨時會明顯影響移動。',
+      'recommendedAction': '優先改搭車、延後出發，或先插入室內休息點。',
+    };
+  }
+  if (rainRisk && isTransit && (minutes >= 45 || lines.length >= 2)) {
+    return {
+      'type': 'transit_rain_transfer',
+      'severity': minutes >= 80 ? 'high' : 'medium',
+      'phase': phase,
+      'targetPlaceName': toLabel,
+      'scheduledTime': scheduledTime,
+      'title': '建議保留雨天轉乘緩衝',
+      'message': '$fromLabel 到 $toLabel 約 $minutes 分鐘，雨天轉乘與等車風險較高。',
+      'recommendedAction': '建議多保留 15-20 分鐘緩衝，必要時調整下一站順序。',
+    };
+  }
+  if (heatRisk && isWalk && minutes >= 15) {
+    return {
+      'type': 'transit_heat_walk',
+      'severity': minutes >= 30 ? 'high' : 'medium',
+      'phase': phase,
+      'targetPlaceName': toLabel,
+      'scheduledTime': scheduledTime,
+      'title': '建議調整高溫時段移動',
+      'message': '$fromLabel 到 $toLabel 需要步行約 $minutes 分鐘，正午高溫可能影響體力。',
+      'recommendedAction': '改搭車、提早或延後移動，或先切到室內行程。',
+    };
+  }
+  return null;
+}
+
+List<String> _contextImpactLayers({
+  required List<Map<String, dynamic>> alerts,
+  required Map<String, dynamic>? nextAction,
+}) {
+  final layers = <String>{};
+  void collectType(String rawType) {
+    final type = rawType.trim();
+    if (type.isEmpty) return;
+    if (type.startsWith('weather_') || type.startsWith('swap_for_')) {
+      layers.add('place');
+      return;
+    }
+    if (type.startsWith('opening_') ||
+        type == 'delay_until_open' ||
+        type == 'skip_closed' ||
+        type == 'shorten_before_stop') {
+      layers.add('opening');
+      return;
+    }
+    if (type.startsWith('transit_') ||
+        type.startsWith('origin_transit_') ||
+        type.startsWith('location_')) {
+      layers.add('route');
+    }
+  }
+
+  for (final alert in alerts) {
+    collectType(alert['type']?.toString() ?? '');
+  }
+  if (nextAction != null) {
+    collectType(nextAction['type']?.toString() ?? '');
+  }
+  return layers.toList()..sort();
+}
+
 Place _planPlaceToPlace(Map<String, dynamic> json) {
   return Place(
     id: json['id']?.toString() ?? json['name']?.toString() ?? '_place_',
@@ -8563,6 +8818,14 @@ Future<bool> _sendLineContextAwarenessNotification({
             currentSnapshot: weatherSnapshot,
             nextAction: nextAction,
           )) {
+        shouldPushContextAlert = false;
+      } else if (_shouldSuppressRecentlyResolvedContext(
+        previousRecord: previousContextRecord,
+        nextAction: nextAction,
+        alerts: alerts,
+        currentSnapshot: weatherSnapshot,
+        referenceTime: _taipeiNow(),
+      )) {
         shouldPushContextAlert = false;
       }
     }
@@ -9313,6 +9576,10 @@ Future<Map<String, String>> _applyLineBackupReplacement({
   if (replacement == null) {
     throw ApiException(404, '找不到備案景點資料');
   }
+  final dayDate = _parseDate(targetDate);
+  final previousContextRecord = dayDate == null
+      ? null
+      : await _readLineContextStateRecord(userId: user.id, dayDate: dayDate);
 
   final plan = Map<String, dynamic>.from(
     jsonDecode(jsonEncode(activePlan)) as Map,
@@ -9361,7 +9628,6 @@ Future<Map<String, String>> _applyLineBackupReplacement({
   final meta = plan['meta'] is Map
       ? Map<String, dynamic>.from(plan['meta'] as Map)
       : <String, dynamic>{};
-  final dayDate = _parseDate(targetDate);
   if (dayDate != null) {
     await _refreshDayItemSchedule(
       items: items,
@@ -9394,6 +9660,26 @@ Future<Map<String, String>> _applyLineBackupReplacement({
   plan['meta'] = updatedMeta;
 
   await _syncUserActivePlan(userId: user.id, plan: plan);
+  if (dayDate != null) {
+    final weatherSnapshot = _buildWeatherRiskSnapshot(
+      targetDay['weather'] is Map
+          ? Map<String, dynamic>.from(targetDay['weather'] as Map)
+          : null,
+    );
+    final resolvedAction = previousContextRecord?['nextAction'];
+    await _rememberLineContextResolution(
+      userId: user.id,
+      dayDate: dayDate,
+      action: 'apply_backup',
+      targetPlaceId: targetPlaceId,
+      replacementPlaceId: replacement.id,
+      replacementPlaceName: replacement.name,
+      resolvedAction: resolvedAction is Map
+          ? Map<String, dynamic>.from(resolvedAction)
+          : null,
+      weatherSnapshot: weatherSnapshot,
+    );
+  }
   return {
     'originalName': originalPlace['name']?.toString() ?? '原景點',
     'replacementName': replacement.name,
