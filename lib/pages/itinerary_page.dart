@@ -23,7 +23,8 @@ class ItineraryPage extends StatefulWidget {
   State<ItineraryPage> createState() => _ItineraryPageState();
 }
 
-class _ItineraryPageState extends State<ItineraryPage> {
+class _ItineraryPageState extends State<ItineraryPage>
+    with WidgetsBindingObserver {
   static const _googleMapsApiKey = String.fromEnvironment(
     'GOOGLE_MAPS_API_KEY',
   );
@@ -42,10 +43,13 @@ class _ItineraryPageState extends State<ItineraryPage> {
   final Map<String, String> _transitModeOverrides = {};
   final Set<String> _manuallyEditedDayKeys = <String>{};
   bool _formalPlanConfirmationStarted = false;
+  bool _refreshingFromCloud = false;
+  DateTime? _lastCloudActivePlanUpdatedAt;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _planJson = Map<String, dynamic>.from(widget.plan);
     _plan = _ItineraryPlan.fromJson(_planJson);
     _dayPageController = PageController();
@@ -56,6 +60,9 @@ class _ItineraryPageState extends State<ItineraryPage> {
       });
     } else {
       unawaited(_syncActivePlanToCloud());
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_refreshActivePlanFromCloud());
+      });
     }
     unawaited(
       _reportEvent(
@@ -72,9 +79,17 @@ class _ItineraryPageState extends State<ItineraryPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _dayPageController.dispose();
     _timelineScrollController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_refreshActivePlanFromCloud());
+    }
   }
 
   @override
@@ -102,6 +117,20 @@ class _ItineraryPageState extends State<ItineraryPage> {
             tooltip: '旅程細節調整',
             onPressed: _openArrangementSettings,
             icon: const Icon(Icons.tune_rounded, color: Color(0xFF1F1F23)),
+          ),
+          IconButton(
+            tooltip: '同步雲端最新行程',
+            onPressed: _refreshingFromCloud
+                ? null
+                : () => unawaited(
+                    _refreshActivePlanFromCloud(showMessageIfUpdated: true),
+                  ),
+            icon: Icon(
+              Icons.refresh_rounded,
+              color: _refreshingFromCloud
+                  ? const Color(0xFF1F1F23).withValues(alpha: 0.4)
+                  : const Color(0xFF1F1F23),
+            ),
           ),
         ],
       ),
@@ -600,6 +629,7 @@ class _ItineraryPageState extends State<ItineraryPage> {
     final userId = UserState.userId?.trim() ?? '';
     try {
       await _api.confirmItinerary(userId: userId, plan: _planJson);
+      _lastCloudActivePlanUpdatedAt = DateTime.now().toUtc();
       unawaited(
         _reportEvent(
           'formal_plan_confirmed',
@@ -624,6 +654,7 @@ class _ItineraryPageState extends State<ItineraryPage> {
     }
     try {
       await _api.syncActivePlan(userId: userId, plan: _planJson);
+      _lastCloudActivePlanUpdatedAt = DateTime.now().toUtc();
       unawaited(
         _reportEvent(
           'active_plan_sync_success',
@@ -633,6 +664,63 @@ class _ItineraryPageState extends State<ItineraryPage> {
     } on ApiClientException {
       unawaited(_reportEvent('active_plan_sync_failed'));
       // 保持前端可用；雲端同步失敗時不阻斷本地行程操作。
+    }
+  }
+
+  Future<void> _refreshActivePlanFromCloud({
+    bool showMessageIfUpdated = false,
+  }) async {
+    if (_refreshingFromCloud) return;
+    final userId = UserState.userId?.trim() ?? '';
+    if (userId.isEmpty) return;
+    _refreshingFromCloud = true;
+    try {
+      final result = await _api.fetchActivePlan(userId: userId);
+      final rawPlan = result['activePlan'];
+      final updatedAt = DateTime.tryParse(
+        result['activePlanUpdatedAt']?.toString() ?? '',
+      )?.toUtc();
+      if (rawPlan is! Map) {
+        _lastCloudActivePlanUpdatedAt = updatedAt;
+        return;
+      }
+      if (_lastCloudActivePlanUpdatedAt != null &&
+          updatedAt != null &&
+          !updatedAt.isAfter(_lastCloudActivePlanUpdatedAt!)) {
+        return;
+      }
+
+      final normalizedPlan = Map<String, dynamic>.from(
+        jsonDecode(jsonEncode(rawPlan)) as Map,
+      );
+      final cloudJson = jsonEncode(normalizedPlan);
+      final localJson = jsonEncode(_planJson);
+      _lastCloudActivePlanUpdatedAt = updatedAt;
+      if (cloudJson == localJson) {
+        return;
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _planJson = normalizedPlan;
+        _plan = _ItineraryPlan.fromJson(normalizedPlan);
+        _transitModeOverrides.clear();
+        if (_selectedDayIndex >= _plan.days.length) {
+          _selectedDayIndex = math.max(0, _plan.days.length - 1);
+        }
+      });
+      if (showMessageIfUpdated) {
+        _showTopMessage('已同步雲端最新行程');
+      }
+    } on ApiClientException {
+      if (showMessageIfUpdated && mounted) {
+        _showTopMessage('目前無法同步雲端行程，請稍後再試');
+      }
+    } finally {
+      _refreshingFromCloud = false;
+      if (mounted) {
+        setState(() {});
+      }
     }
   }
 
@@ -1808,220 +1896,25 @@ class _ItineraryPageState extends State<ItineraryPage> {
     final pageContext = context;
     final previousItem = _previousNonMealItem(day, itemIndex);
     final nextItem = _nextNonMealItem(day, itemIndex);
-    final searchController = TextEditingController();
-    Future<List<_MealCandidateOption>> candidatesFuture = _fetchMealCandidates(
-      day: day,
-      itemIndex: itemIndex,
-      item: item,
-    );
-
     final selectedCandidate = await showModalBottomSheet<_MealCandidateOption>(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            return SafeArea(
-              child: SizedBox(
-                height: MediaQuery.of(context).size.height * 0.78,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        item.place.name,
-                        style: const TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        '${previousItem?.place.name ?? '前一站未定'} -> ${item.place.name} -> ${nextItem?.place.name ?? '下一站未定'}',
-                        style: const TextStyle(
-                          fontSize: 12.5,
-                          color: Color(0xFF5A5670),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      TextField(
-                        controller: searchController,
-                        textInputAction: TextInputAction.search,
-                        decoration: InputDecoration(
-                          hintText: '搜尋想要的餐廳名稱',
-                          suffixIcon: IconButton(
-                            onPressed: () {
-                              setModalState(() {
-                                candidatesFuture = _fetchMealCandidates(
-                                  day: day,
-                                  itemIndex: itemIndex,
-                                  item: item,
-                                  query: searchController.text,
-                                );
-                              });
-                            },
-                            icon: const Icon(Icons.search_rounded),
-                          ),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                        ),
-                        onSubmitted: (_) {
-                          setModalState(() {
-                            candidatesFuture = _fetchMealCandidates(
-                              day: day,
-                              itemIndex: itemIndex,
-                              item: item,
-                              query: searchController.text,
-                            );
-                          });
-                        },
-                      ),
-                      const SizedBox(height: 12),
-                      const Text(
-                        '推薦餐廳',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Expanded(
-                        child: FutureBuilder<List<_MealCandidateOption>>(
-                          future: candidatesFuture,
-                          builder: (context, snapshot) {
-                            if (snapshot.connectionState ==
-                                ConnectionState.waiting) {
-                              return const Center(
-                                child: CircularProgressIndicator(),
-                              );
-                            }
-                            if (snapshot.hasError) {
-                              return Center(
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 20,
-                                  ),
-                                  child: Text(
-                                    _mealCandidateLoadErrorText(snapshot.error),
-                                    textAlign: TextAlign.center,
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      color: Color(0xFF5A5670),
-                                    ),
-                                  ),
-                                ),
-                              );
-                            }
-                            final candidates =
-                                snapshot.data ?? const <_MealCandidateOption>[];
-                            if (candidates.isEmpty) {
-                              return const Center(child: Text('找不到符合的餐廳'));
-                            }
-                            return ListView.separated(
-                              itemCount: candidates.length,
-                              separatorBuilder: (_, __) =>
-                                  const SizedBox(height: 8),
-                              itemBuilder: (context, index) {
-                                final candidate = candidates[index];
-                                return Container(
-                                  padding: const EdgeInsets.all(12),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFFFFFBF7),
-                                    borderRadius: BorderRadius.circular(16),
-                                    border: Border.all(
-                                      color: const Color(0xFFF0D8C9),
-                                    ),
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Row(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Expanded(
-                                            child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                Text(
-                                                  candidate.place.name,
-                                                  style: const TextStyle(
-                                                    fontSize: 15,
-                                                    fontWeight: FontWeight.w800,
-                                                  ),
-                                                ),
-                                                const SizedBox(height: 4),
-                                                Text(
-                                                  candidate
-                                                          .place
-                                                          .address
-                                                          .isNotEmpty
-                                                      ? candidate.place.address
-                                                      : candidate.place.city,
-                                                  style: const TextStyle(
-                                                    fontSize: 12,
-                                                    color: Colors.black54,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                          if (candidate.place.rating != null)
-                                            Text(
-                                              '${candidate.place.rating!.toStringAsFixed(1)}★',
-                                              style: const TextStyle(
-                                                fontWeight: FontWeight.w700,
-                                              ),
-                                            ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 6),
-                                      Text(
-                                        '前一站約 ${candidate.fromPrevMinutes} 分鐘，下一站約 ${candidate.toNextMinutes} 分鐘',
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          color: Color(0xFF5A5670),
-                                        ),
-                                      ),
-                                      const SizedBox(height: 8),
-                                      Align(
-                                        alignment: Alignment.centerRight,
-                                        child: ElevatedButton(
-                                          onPressed: () {
-                                            FocusManager.instance.primaryFocus
-                                                ?.unfocus();
-                                            Navigator.of(
-                                              context,
-                                            ).pop(candidate);
-                                          },
-                                          child: const Text('AI 檢查並套用'),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              },
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          },
-        );
-      },
+      builder: (context) => _MealBreakPlannerSheet(
+        title: item.place.name,
+        routeSummary:
+            '${previousItem?.place.name ?? '前一站未定'} -> ${item.place.name} -> ${nextItem?.place.name ?? '下一站未定'}',
+        loadCandidates: (query) => _fetchMealCandidates(
+          day: day,
+          itemIndex: itemIndex,
+          item: item,
+          query: query,
+        ),
+        buildErrorText: _mealCandidateLoadErrorText,
+      ),
     );
-    searchController.dispose();
     if (!mounted || selectedCandidate == null) return;
     FocusManager.instance.primaryFocus?.unfocus();
     await Future<void>.delayed(const Duration(milliseconds: 16));
@@ -3527,6 +3420,215 @@ class _ItineraryPageState extends State<ItineraryPage> {
     if (code >= 71 && code <= 77) return Icons.ac_unit_rounded;
     if (code >= 95) return Icons.thunderstorm_rounded;
     return Icons.cloud_rounded;
+  }
+}
+
+class _MealBreakPlannerSheet extends StatefulWidget {
+  const _MealBreakPlannerSheet({
+    required this.title,
+    required this.routeSummary,
+    required this.loadCandidates,
+    required this.buildErrorText,
+  });
+
+  final String title;
+  final String routeSummary;
+  final Future<List<_MealCandidateOption>> Function(String query)
+  loadCandidates;
+  final String Function(Object? error) buildErrorText;
+
+  @override
+  State<_MealBreakPlannerSheet> createState() => _MealBreakPlannerSheetState();
+}
+
+class _MealBreakPlannerSheetState extends State<_MealBreakPlannerSheet> {
+  late final TextEditingController _searchController;
+  late Future<List<_MealCandidateOption>> _candidatesFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _searchController = TextEditingController();
+    _candidatesFuture = widget.loadCandidates('');
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _reloadCandidates() {
+    if (!mounted) return;
+    setState(() {
+      _candidatesFuture = widget.loadCandidates(_searchController.text);
+    });
+  }
+
+  Future<void> _selectCandidate(_MealCandidateOption candidate) async {
+    FocusManager.instance.primaryFocus?.unfocus();
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    if (!mounted) return;
+    Navigator.of(context).pop(candidate);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: SizedBox(
+        height: MediaQuery.of(context).size.height * 0.78,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                widget.title,
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                widget.routeSummary,
+                style: const TextStyle(
+                  fontSize: 12.5,
+                  color: Color(0xFF5A5670),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _searchController,
+                textInputAction: TextInputAction.search,
+                decoration: InputDecoration(
+                  hintText: '搜尋想要的餐廳名稱',
+                  suffixIcon: IconButton(
+                    onPressed: _reloadCandidates,
+                    icon: const Icon(Icons.search_rounded),
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+                onSubmitted: (_) => _reloadCandidates(),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                '推薦餐廳',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: FutureBuilder<List<_MealCandidateOption>>(
+                  future: _candidatesFuture,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    if (snapshot.hasError) {
+                      return Center(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          child: Text(
+                            widget.buildErrorText(snapshot.error),
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              color: Color(0xFF5A5670),
+                            ),
+                          ),
+                        ),
+                      );
+                    }
+                    final candidates =
+                        snapshot.data ?? const <_MealCandidateOption>[];
+                    if (candidates.isEmpty) {
+                      return const Center(child: Text('找不到符合的餐廳'));
+                    }
+                    return ListView.separated(
+                      itemCount: candidates.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 8),
+                      itemBuilder: (context, index) {
+                        final candidate = candidates[index];
+                        return Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFFFBF7),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(
+                              color: const Color(0xFFF0D8C9),
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          candidate.place.name,
+                                          style: const TextStyle(
+                                            fontSize: 15,
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          candidate.place.address.isNotEmpty
+                                              ? candidate.place.address
+                                              : candidate.place.city,
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            color: Colors.black54,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  if (candidate.place.rating != null)
+                                    Text(
+                                      '${candidate.place.rating!.toStringAsFixed(1)}★',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                '前一站約 ${candidate.fromPrevMinutes} 分鐘，下一站約 ${candidate.toNextMinutes} 分鐘',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Color(0xFF5A5670),
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: ElevatedButton(
+                                  onPressed: () => _selectCandidate(candidate),
+                                  child: const Text('AI 檢查並套用'),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 

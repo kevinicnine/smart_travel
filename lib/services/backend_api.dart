@@ -317,6 +317,18 @@ class BackendApi {
     );
   }
 
+  Future<Map<String, dynamic>> fetchActivePlan({
+    required String userId,
+  }) async {
+    final response = await _post(
+      '/api/travel/active-plan/read',
+      {'userId': userId},
+      timeout: const Duration(seconds: 20),
+      timeoutMessage: '抓取最新行程較久，請稍候再試。',
+    );
+    return _extractData(response);
+  }
+
   Future<void> confirmItinerary({
     required String userId,
     required Map<String, dynamic> plan,

@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="10" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#333" />
+    </marker>
+    <style>
+      .box { fill:#ffffff; stroke:#2b6cb0; stroke-width:2; rx:6; }
+      .box-alt { fill:#fff7ed; stroke:#dd6b20; stroke-width:2; rx:6; }
+      .text { font-size:14px; fill:#111827; }
+      .title { font-size:18px; font-weight:700; fill:#0f172a; }
+      .minor { font-size:12px; fill:#374151; }
+      .cloud { fill:#eef2ff; stroke:#4c51bf; stroke-width:1.5; rx:12; }
+      .ext { fill:#f0fdf4; stroke:#065f46; stroke-width:1.5; rx:6; }
+    </style>
+  </defs>
+
+  <!-- Title -->
+  <text x="24" y="36" class="title">Smart Travel — 系統架構總覽</text>
+  <text x="24" y="58" class="minor">前端 / 行動 App → API (Render) → 後端服務 → 資料庫 / 第三方</text>
+
+  <!-- Left: Clients -->
+  <rect x="24" y="96" width="220" height="120" class="box"/>
+  <text x="38" y="128" class="text">Next.js 前端 (browser)</text>
+  <text x="38" y="148" class="minor">pROject/smart-travel-frontend</text>
+  <text x="38" y="168" class="minor">uses NEXT_PUBLIC_API_BASE</text>
+
+  <rect x="24" y="236" width="220" height="120" class="box"/>
+  <text x="38" y="268" class="text">Flutter App (mobile)</text>
+  <text x="38" y="288" class="minor">smart_travel/lib</text>
+  <text x="38" y="308" class="minor">SMART_TRAVEL_API_BASE / dart-define</text>
+
+  <rect x="24" y="376" width="220" height="90" class="box"/>
+  <text x="38" y="403" class="text">Admin UI (static)</text>
+  <text x="38" y="423" class="minor">backend/web/admin.html</text>
+
+  <!-- Middle: API / Platform -->
+  <g>
+    <rect x="320" y="96" width="380" height="130" class="cloud"/>
+    <text x="340" y="126" class="text">Render (PaaS) — public endpoint</text>
+    <text x="340" y="146" class="minor">https://smart-travel-backend-6ant.onrender.com</text>
+       <text x="340" y="166" class="minor">TLS / Certs &amp; load balancing handled by Render</text>
+  </g>
+
+  <!-- Backend services inside render -->
+  <rect x="740" y="86" width="380" height="140" class="box-alt"/>
+  <text x="760" y="112" class="text">Dart Backend (main server)</text>
+  <text x="760" y="132" class="minor">backend/bin/server.dart</text>
+  <text x="760" y="152" class="minor">Handles API, LINE integration, cron, sync</text>
+
+  <rect x="740" y="242" width="380" height="120" class="box"/>
+  <text x="760" y="272" class="text">FastAPI Service (optional)</text>
+  <text x="760" y="292" class="minor">pROject/smart-travel-api</text>
+  <text x="760" y="312" class="minor">JWT auth, bcrypt, other routes</text>
+
+  <!-- Connections: Clients -> Render -->
+  <line x1="244" y1="156" x2="320" y2="156" stroke="#333" stroke-width="2" marker-end="url(#arrow)" />
+  <line x1="244" y1="276" x2="320" y2="276" stroke="#333" stroke-width="2" marker-end="url(#arrow)" />
+  <line x1="244" y1="412" x2="320" y2="412" stroke="#333" stroke-width="2" marker-end="url(#arrow)" />
+
+  <!-- Render -> Backends -->
+  <line x1="700" y1="156" x2="740" y2="156" stroke="#333" stroke-width="2" marker-end="url(#arrow)" />
+  <line x1="700" y1="276" x2="740" y2="276" stroke="#333" stroke-width="2" marker-end="url(#arrow)" />
+
+  <!-- Databases / Storage -->
+  <rect x="320" y="360" width="340" height="120" class="box"/>
+  <text x="340" y="392" class="text">Datastore</text>
+  <text x="340" y="412" class="minor">Postgres (or local JSON fallback)</text>
+  <text x="340" y="432" class="minor">Redis / Cache</text>
+
+  <!-- Arrows backend -> datastore -->
+  <line x1="880" y1="200" x2="660" y2="420" stroke="#333" stroke-width="2" marker-end="url(#arrow)" />
+
+  <!-- External services -->
+  <rect x="320" y="504" width="220" height="170" class="ext"/>
+  <text x="340" y="532" class="text">External Services</text>
+  <text x="340" y="556" class="minor">Google Maps API (GOOGLE_MAPS_API_KEY)</text>
+  <text x="340" y="578" class="minor">OpenAI / Gemini (LLM)</text>
+  <text x="340" y="600" class="minor">SendGrid (Email)</text>
+  <text x="340" y="622" class="minor">LINE (webhook / push)</text>
+
+  <!-- arrows to external -->
+  <line x1="880" y1="200" x2="540" y2="560" stroke="#666" stroke-width="1.8" marker-end="url(#arrow)" />
+
+  <!-- Scripts / Cron -->
+  <rect x="740" y="384" width="220" height="80" class="box"/>
+  <text x="760" y="412" class="text">Scripts / Cron</text>
+  <text x="760" y="432" class="minor">import_agency_itineraries.py, run_reminder_cron.py</text>
+  <line x1="820" y1="384" x2="820" y2="360" stroke="#333" stroke-width="2" marker-end="url(#arrow)" />
+  <line x1="820" y1="464" x2="540" y2="560" stroke="#333" stroke-width="1.8" marker-end="url(#arrow)" />
+
+  <!-- Admin UI token path annotation -->
+  <text x="260" y="460" class="minor">Admin UI stores token in localStorage; sends x-admin-token</text>
+  <line x1="260" y1="468" x2="320" y2="420" stroke="#b91c1c" stroke-dasharray="6,4" stroke-width="1.6" marker-end="url(#arrow)" />
+
+  <!-- Legend / Notes -->
+  <rect x="1080" y="520" width="96" height="160" class="box"/>
+  <text x="1092" y="548" class="text">Notes</text>
+  <text x="1092" y="568" class="minor">- USE_RENDER=true -> use Render</text>
+  <text x="1092" y="588" class="minor">- Env secrets: store in Render secrets</text>
+  <text x="1092" y="608" class="minor">- TLS handled by Render</text>
+
+</svg>

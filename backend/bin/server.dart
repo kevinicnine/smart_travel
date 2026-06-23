@@ -1933,6 +1933,26 @@ Future<void> main(List<String> args) async {
       }),
     )
     ..post(
+      '/api/travel/active-plan/read',
+      (req) => _json(req, (body) async {
+        final userId = _asString(body, 'userId').trim();
+        if (userId.isEmpty) {
+          throw ApiException(400, '缺少使用者 id');
+        }
+        final user = await _store.findUserById(userId);
+        if (user == null) {
+          throw ApiException(404, '找不到使用者');
+        }
+        return successBody(
+          message: '已取得雲端正式行程',
+          data: {
+            'activePlan': user.activePlan,
+            'activePlanUpdatedAt': user.activePlanUpdatedAt?.toIso8601String(),
+          },
+        );
+      }),
+    )
+    ..post(
       '/api/travel/stop-explanation',
       (req) => _json(req, (body) async {
         final result = await _buildStopExplanation(body);
@@ -9266,7 +9286,7 @@ Future<String> _handleLineContextPostback({
         targetPlaceId: data['t']?.trim() ?? '',
         replacementPlaceId: data['r']?.trim() ?? '',
       );
-      return '已套用備案：${result['originalName']} 改為 ${result['replacementName']}，並同步到雲端正式行程。';
+      return '已套用備案：${result['originalName']} 改為 ${result['replacementName']}。回到 App 行程頁後會自動同步最新正式行程。';
     default:
       return '目前無法辨識這個操作，請回到 App 查看最新行程。';
   }
