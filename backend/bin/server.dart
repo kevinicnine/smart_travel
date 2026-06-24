@@ -114,6 +114,18 @@ class _PlacePhotoPayload {
   final String contentType;
 }
 
+class _DirectionsOverviewPolylineResult {
+  const _DirectionsOverviewPolylineResult({
+    this.encodedPolyline,
+    this.usedMode,
+    this.lastStatus,
+  });
+
+  final String? encodedPolyline;
+  final String? usedMode;
+  final String? lastStatus;
+}
+
 class _LlmJsonResult {
   const _LlmJsonResult({
     required this.provider,
@@ -637,6 +649,83 @@ Future<void> main(List<String> args) async {
           limit: limit,
         );
         return successBody(message: '已取得餐廳候選', data: {'places': suggestions});
+      }),
+    )
+    ..post(
+      '/api/route/polyline',
+      (req) => _json(req, (body) async {
+        final origin = body['origin'];
+        final destination = body['destination'];
+        if (origin is! Map || destination is! Map) {
+          throw ApiException(400, '缺少起點或終點座標');
+        }
+
+        final originLat = _asDoubleValue(origin['lat']);
+        final originLng = _asDoubleValue(origin['lng']);
+        final destinationLat = _asDoubleValue(destination['lat']);
+        final destinationLng = _asDoubleValue(destination['lng']);
+        if (originLat == null ||
+            originLng == null ||
+            destinationLat == null ||
+            destinationLng == null) {
+          throw ApiException(400, '起訖點座標格式不正確');
+        }
+
+        final requestedModes = body['modes'];
+        final modes = requestedModes is List
+            ? requestedModes
+                  .map((value) => value.toString().trim().toLowerCase())
+                  .where(
+                    (value) =>
+                        const {'driving', 'walking', 'transit'}.contains(value),
+                  )
+                  .toList()
+            : <String>[];
+
+        final result = await _fetchDirectionsOverviewPolyline(
+          originLat: originLat,
+          originLng: originLng,
+          destinationLat: destinationLat,
+          destinationLng: destinationLng,
+          modes: modes,
+        );
+        if (result.encodedPolyline == null || result.encodedPolyline!.isEmpty) {
+          final status = result.lastStatus ?? 'UNKNOWN';
+          if (status == 'MISSING_API_KEY') {
+            throw ApiException(
+              503,
+              '後端尚未設定 Google Maps API 金鑰',
+              details: {'status': status},
+            );
+          }
+          if (status == 'ZERO_RESULTS') {
+            throw ApiException(
+              404,
+              'Directions 沒有回傳可用路線',
+              details: {'status': status},
+            );
+          }
+          if (status == 'REQUEST_DENIED' ||
+              status == 'OVER_DAILY_LIMIT' ||
+              status == 'OVER_QUERY_LIMIT' ||
+              status == 'HTTP_403') {
+            throw ApiException(
+              502,
+              'Google Directions 請求被拒絕，請確認後端 API 金鑰設定',
+              details: {'status': status},
+            );
+          }
+          throw ApiException(502, '目前無法取得道路路線', details: {'status': status});
+        }
+
+        return successBody(
+          message: '已取得路線地圖',
+          data: {
+            'encodedPolyline': result.encodedPolyline,
+            'mode': result.usedMode,
+            if (result.lastStatus != null) 'status': result.lastStatus,
+          },
+        );
       }),
     )
     ..post(
@@ -7891,6 +7980,83 @@ Future<Map<String, dynamic>> _fetchLiveTravelToPlace({
   } finally {
     client.close(force: true);
   }
+}
+
+Future<_DirectionsOverviewPolylineResult> _fetchDirectionsOverviewPolyline({
+  required double originLat,
+  required double originLng,
+  required double destinationLat,
+  required double destinationLng,
+  required List<String> modes,
+}) async {
+  final key = _googleMapsServerKey();
+  if (key.isEmpty) {
+    return const _DirectionsOverviewPolylineResult(
+      lastStatus: 'MISSING_API_KEY',
+    );
+  }
+
+  final tryModes = modes.isEmpty ? const ['driving'] : modes;
+  String? lastStatus;
+  for (final mode in tryModes) {
+    final uri = Uri.https('maps.googleapis.com', '/maps/api/directions/json', {
+      'origin': '$originLat,$originLng',
+      'destination': '$destinationLat,$destinationLng',
+      'mode': mode,
+      'language': 'zh-TW',
+      'region': 'tw',
+      'key': key,
+    });
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+    try {
+      final request = await client.getUrl(uri);
+      final response = await request.close().timeout(
+        const Duration(seconds: 10),
+      );
+      if (response.statusCode != 200) {
+        lastStatus = 'HTTP_${response.statusCode}';
+        continue;
+      }
+      final body = await utf8.decodeStream(response);
+      final decoded = jsonDecode(body);
+      if (decoded is! Map) {
+        lastStatus = 'INVALID_RESPONSE';
+        continue;
+      }
+      final status = decoded['status']?.toString() ?? 'UNKNOWN';
+      lastStatus = status;
+      if (status != 'OK') {
+        continue;
+      }
+      final routes = decoded['routes'];
+      if (routes is! List || routes.isEmpty || routes.first is! Map) {
+        lastStatus = 'EMPTY_ROUTE';
+        continue;
+      }
+      final route = routes.first as Map;
+      final overview = route['overview_polyline'];
+      if (overview is! Map) {
+        lastStatus = 'EMPTY_POLYLINE';
+        continue;
+      }
+      final encodedPolyline = overview['points']?.toString().trim() ?? '';
+      if (encodedPolyline.isEmpty) {
+        lastStatus = 'EMPTY_POLYLINE';
+        continue;
+      }
+      return _DirectionsOverviewPolylineResult(
+        encodedPolyline: encodedPolyline,
+        usedMode: mode,
+        lastStatus: status,
+      );
+    } catch (_) {
+      lastStatus = 'EXCEPTION';
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  return _DirectionsOverviewPolylineResult(lastStatus: lastStatus);
 }
 
 Future<void> _appendLocationContextSignals({

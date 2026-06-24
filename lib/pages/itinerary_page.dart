@@ -3763,6 +3763,7 @@ class _DayRouteMapSheetState extends State<_DayRouteMapSheet> {
     'GOOGLE_MAPS_API_KEY',
   );
 
+  final BackendApi _api = BackendApi.instance;
   GoogleMapController? _mapController;
   bool _didFitBounds = false;
   bool _loadingRoadRoute = false;
@@ -3812,7 +3813,7 @@ class _DayRouteMapSheetState extends State<_DayRouteMapSheet> {
               ],
           color: _segmentColor(widget.segments[i].selectedMode),
           width: 5,
-          geodesic: true,
+          geodesic: false,
         ),
     };
 
@@ -3929,7 +3930,7 @@ class _DayRouteMapSheetState extends State<_DayRouteMapSheet> {
   }
 
   Future<void> _loadRoadPolylines() async {
-    if (_googleMapsApiKey.trim().isEmpty || widget.segments.isEmpty) return;
+    if (widget.segments.isEmpty) return;
     setState(() {
       _loadingRoadRoute = true;
     });
@@ -3954,7 +3955,9 @@ class _DayRouteMapSheetState extends State<_DayRouteMapSheet> {
       } else {
         if (result.lastStatus == 'REQUEST_DENIED' ||
             result.lastStatus == 'OVER_DAILY_LIMIT' ||
-            result.lastStatus == 'OVER_QUERY_LIMIT') {
+            result.lastStatus == 'OVER_QUERY_LIMIT' ||
+            result.lastStatus == 'MISSING_API_KEY' ||
+            result.lastStatus == 'HTTP_403') {
           deniedCount++;
         } else if (result.lastStatus == 'ZERO_RESULTS') {
           zeroResultCount++;
@@ -3970,7 +3973,7 @@ class _DayRouteMapSheetState extends State<_DayRouteMapSheet> {
       }
     } else if (widget.segments.isNotEmpty) {
       if (deniedCount > 0) {
-        hint = 'Directions 請求被拒絕，請確認 API 金鑰已啟用 Directions API。';
+        hint = '無法取得 Directions 道路路線，請確認後端或 App 的 Google Directions API 設定。';
       } else if (zeroResultCount > 0) {
         hint = 'Directions 沒有回傳可用路線，暫以直線顯示。';
       } else {
@@ -4014,6 +4017,90 @@ class _DayRouteMapSheetState extends State<_DayRouteMapSheet> {
     required LatLng destination,
     required List<String> modes,
   }) async {
+    final backendResult = await _fetchDirectionsPolylineFromBackend(
+      origin: origin,
+      destination: destination,
+      modes: modes,
+    );
+    if (backendResult.points != null && backendResult.points!.length > 1) {
+      return backendResult;
+    }
+    if (_googleMapsApiKey.trim().isEmpty) {
+      return backendResult;
+    }
+
+    final directResult = await _fetchDirectionsPolylineDirect(
+      origin: origin,
+      destination: destination,
+      modes: modes,
+    );
+    if (directResult.points != null && directResult.points!.length > 1) {
+      return directResult;
+    }
+    return directResult.lastStatus != null ? directResult : backendResult;
+  }
+
+  Future<_DirectionsFetchResult> _fetchDirectionsPolylineFromBackend({
+    required LatLng origin,
+    required LatLng destination,
+    required List<String> modes,
+  }) async {
+    try {
+      final data = await _api.fetchRoutePolyline(
+        originLat: origin.latitude,
+        originLng: origin.longitude,
+        destinationLat: destination.latitude,
+        destinationLng: destination.longitude,
+        modes: modes,
+      );
+      final encoded = data['encodedPolyline']?.toString().trim() ?? '';
+      if (encoded.isEmpty) {
+        return _DirectionsFetchResult(
+          usedMode: data['mode']?.toString(),
+          lastStatus: data['status']?.toString() ?? 'EMPTY_POLYLINE',
+        );
+      }
+      final decoded = _decodePolyline(encoded);
+      if (decoded.length < 2) {
+        return _DirectionsFetchResult(
+          usedMode: data['mode']?.toString(),
+          lastStatus: data['status']?.toString() ?? 'EMPTY_POLYLINE',
+        );
+      }
+      return _DirectionsFetchResult(
+        points: decoded,
+        usedMode: data['mode']?.toString(),
+        lastStatus: data['status']?.toString() ?? 'OK',
+      );
+    } on ApiClientException catch (error) {
+      final status = error.details?['status']?.toString();
+      if (status != null && status.isNotEmpty) {
+        return _DirectionsFetchResult(lastStatus: status);
+      }
+      if (error.statusCode == 404) {
+        return const _DirectionsFetchResult(lastStatus: 'ZERO_RESULTS');
+      }
+      if (error.statusCode == 503) {
+        return const _DirectionsFetchResult(lastStatus: 'MISSING_API_KEY');
+      }
+      if (error.statusCode == 403) {
+        return const _DirectionsFetchResult(lastStatus: 'REQUEST_DENIED');
+      }
+      return _DirectionsFetchResult(
+        lastStatus: error.statusCode == null
+            ? 'EXCEPTION'
+            : 'HTTP_${error.statusCode}',
+      );
+    } catch (_) {
+      return const _DirectionsFetchResult(lastStatus: 'EXCEPTION');
+    }
+  }
+
+  Future<_DirectionsFetchResult> _fetchDirectionsPolylineDirect({
+    required LatLng origin,
+    required LatLng destination,
+    required List<String> modes,
+  }) async {
     String? lastStatus;
     for (final mode in modes) {
       final uri =
@@ -4022,6 +4109,7 @@ class _DayRouteMapSheetState extends State<_DayRouteMapSheet> {
             'destination': '${destination.latitude},${destination.longitude}',
             'mode': mode,
             'language': 'zh-TW',
+            'region': 'tw',
             'key': _googleMapsApiKey,
           });
       try {

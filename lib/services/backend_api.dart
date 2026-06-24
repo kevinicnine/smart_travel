@@ -338,6 +338,26 @@ class BackendApi {
     return _extractData(response);
   }
 
+  Future<Map<String, dynamic>> fetchRoutePolyline({
+    required double originLat,
+    required double originLng,
+    required double destinationLat,
+    required double destinationLng,
+    List<String>? modes,
+  }) async {
+    final response = await _post(
+      '/api/route/polyline',
+      {
+        'origin': {'lat': originLat, 'lng': originLng},
+        'destination': {'lat': destinationLat, 'lng': destinationLng},
+        if (modes != null && modes.isNotEmpty) 'modes': modes,
+      },
+      timeout: const Duration(seconds: 12),
+      timeoutMessage: '路線地圖載入較久，請稍候再試。',
+    );
+    return _extractData(response);
+  }
+
   Future<void> confirmItinerary({
     required String userId,
     required Map<String, dynamic> plan,
