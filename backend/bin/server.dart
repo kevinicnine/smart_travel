@@ -10508,10 +10508,11 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
     wishlistPlaces: effectiveWishlistPlaces,
     favoritePlaces: effectiveFavoritePlaces,
   );
-  final prioritizedCities = _stringListFromJson(
+  final prioritizedCityList = _stringListFromJson(
     plannerAssist['prioritizedCities'],
     maxItems: 6,
-  ).map(_normalizeLocationText).where((e) => e.isNotEmpty).toSet();
+  ).map(_normalizeLocationText).where((e) => e.isNotEmpty).toList();
+  final prioritizedCities = prioritizedCityList.toSet();
   final feasibilityDecision = _evaluateRouteFeasibilityDecision(
     allPlaces: places,
     totalDays: totalDays,
@@ -10569,6 +10570,26 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
   candidates.sort(
     (a, b) => (baseScores[b.id] ?? 0).compareTo(baseScores[a.id] ?? 0),
   );
+  final selectedCitySet = normalizedDestinationCities.toSet();
+  final coverageCityOrder = <String>[];
+  for (final city in prioritizedCityList) {
+    if (!selectedCitySet.contains(city) || coverageCityOrder.contains(city)) {
+      continue;
+    }
+    if (candidates.any(
+      (place) => _placeMatchesNormalizedCityTarget(place, city),
+    )) {
+      coverageCityOrder.add(city);
+    }
+  }
+  for (final city in normalizedDestinationCities) {
+    if (coverageCityOrder.contains(city)) continue;
+    if (candidates.any(
+      (place) => _placeMatchesNormalizedCityTarget(place, city),
+    )) {
+      coverageCityOrder.add(city);
+    }
+  }
 
   final basePerDay = switch (normalizedTripPurpose) {
     'relax' => totalDays <= 2 ? 3 : 2,
@@ -10662,6 +10683,12 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
     final dayStopCap = lateStartToday
         ? (dayPreferredStartMinute >= 19 * 60 ? min(perDay, 1) : min(perDay, 2))
         : perDay;
+    final desiredCityForDay =
+        coverageCityOrder.isNotEmpty &&
+            coverageCityOrder.length <= totalDays &&
+            dayIndex < coverageCityOrder.length
+        ? coverageCityOrder[dayIndex]
+        : null;
     final items = <Map<String, dynamic>>[];
     if (remaining.isNotEmpty) {
       final adjustedScores = <String, double>{};
@@ -10689,6 +10716,16 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
             score += 0.35;
           }
         }
+        if (desiredCityForDay != null) {
+          if (_placeMatchesNormalizedCityTarget(place, desiredCityForDay)) {
+            score += 2.4;
+          } else if (coverageCityOrder.length <= totalDays &&
+              coverageCityOrder.any(
+                (city) => _placeMatchesNormalizedCityTarget(place, city),
+              )) {
+            score -= 0.45;
+          }
+        }
         score += _openingFeasibilityScore(
           place,
           dayDate: dayDate,
@@ -10709,6 +10746,35 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
       );
       if (dayPicked.isEmpty) {
         dayPicked = [remaining.first];
+      }
+      if (desiredCityForDay != null) {
+        final citySeedCandidates =
+            remaining
+                .where(
+                  (place) => _placeMatchesNormalizedCityTarget(
+                    place,
+                    desiredCityForDay,
+                  ),
+                )
+                .toList()
+              ..sort(
+                (a, b) => (adjustedScores[b.id] ?? double.negativeInfinity)
+                    .compareTo(adjustedScores[a.id] ?? double.negativeInfinity),
+              );
+        final citySeed = citySeedCandidates.firstOrNull;
+        if (citySeed != null &&
+            !dayPicked.any((place) => place.id == citySeed.id)) {
+          dayPicked = [citySeed, ...dayPicked];
+          while (dayPicked.length > dayStopCap) {
+            final removableIndex = dayPicked.lastIndexWhere(
+              (place) =>
+                  place.id != citySeed.id &&
+                  !requiredPlaceIds.contains(place.id),
+            );
+            if (removableIndex < 0) break;
+            dayPicked.removeAt(removableIndex);
+          }
+        }
       }
       final requiredForDay = <Place>[
         for (
@@ -16340,6 +16406,13 @@ double _plannerPriorityBoost(Place place, Set<String> prioritizedCities) {
     }
   }
   return 0;
+}
+
+bool _placeMatchesNormalizedCityTarget(Place place, String normalizedCity) {
+  if (normalizedCity.trim().isEmpty) return false;
+  final city = _normalizeLocationText(place.city);
+  final address = _normalizeLocationText(place.address);
+  return city.contains(normalizedCity) || address.contains(normalizedCity);
 }
 
 double _wishlistBoost(Place place, List<String> wishKeywords) {
