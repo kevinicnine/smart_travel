@@ -167,6 +167,7 @@ class BackendApi {
     String? dayEndTime,
     int? extraSpots,
     List<String>? wishlistPlaces,
+    List<String>? favoritePlaces,
     DateTime? currentTime,
   }) async {
     final payload = <String, dynamic>{'interests': interestIds};
@@ -221,6 +222,12 @@ class BackendApi {
     }
     if (wishlistPlaces != null && wishlistPlaces.isNotEmpty) {
       payload['wishlistPlaces'] = wishlistPlaces
+          .where((e) => e.trim().isNotEmpty)
+          .map((e) => e.trim())
+          .toList();
+    }
+    if (favoritePlaces != null && favoritePlaces.isNotEmpty) {
+      payload['favoritePlaces'] = favoritePlaces
           .where((e) => e.trim().isNotEmpty)
           .map((e) => e.trim())
           .toList();

@@ -359,6 +359,11 @@ class _HomePageState extends State<HomePage> {
             originCity: _selectedOriginCity!,
             destinationCities: List<String>.from(_selectedDestinationCities),
             interestIds: List<String>.from(_selectedInterestMatchTags),
+            favoritePlaces: _favorites
+                .map((place) => place.name.trim())
+                .where((name) => name.isNotEmpty)
+                .toSet()
+                .toList(),
           ),
         ),
       );

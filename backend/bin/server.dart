@@ -1806,6 +1806,12 @@ Future<void> main(List<String> args) async {
                 .where((e) => e.isNotEmpty)
                 .toList() ??
             const <String>[];
+        final favoritePlaces =
+            (body['favoritePlaces'] as List?)
+                ?.map((e) => e.toString().trim())
+                .where((e) => e.isNotEmpty)
+                .toList() ??
+            const <String>[];
 
         final plan = await _buildItineraryPlan(
           interests: interests,
@@ -1841,6 +1847,7 @@ Future<void> main(List<String> args) async {
               : currentDate,
           currentMinuteOfDay: currentMinuteOfDay,
           wishlistPlaces: wishlistPlaces,
+          favoritePlaces: favoritePlaces,
         );
         return successBody(message: '行程已生成', data: plan);
       }),
@@ -10203,6 +10210,7 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
   String? currentDate,
   int? currentMinuteOfDay,
   List<String> wishlistPlaces = const [],
+  List<String> favoritePlaces = const [],
 }) async {
   var places = await _store.listPlaces();
   final normalizedOriginCity = originCity == null
@@ -10240,6 +10248,11 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
         .map((place) => place.trim())
         .where((place) => place.isNotEmpty),
     ..._extractRequiredPlaceNames(requirementsText ?? ''),
+  }.toList();
+  final effectiveFavoritePlaces = <String>{
+    ...favoritePlaces.map((place) => place.trim()).where((place) {
+      return place.isNotEmpty && !effectiveWishlistPlaces.contains(place);
+    }),
   }.toList();
   final preferredTags = {
     ...interests.map((tag) => tag.toLowerCase()),
@@ -10380,6 +10393,7 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
     location: effectiveLocation,
     requirementsText: requirementsText,
     wishlistPlaces: effectiveWishlistPlaces,
+    favoritePlaces: effectiveFavoritePlaces,
   );
   if (discoveredPlaces.isNotEmpty) {
     final byId = <String, Place>{for (final place in places) place.id: place};
@@ -10492,6 +10506,7 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
     currentDate: currentDate,
     currentMinuteOfDay: currentMinuteOfDay,
     wishlistPlaces: effectiveWishlistPlaces,
+    favoritePlaces: effectiveFavoritePlaces,
   );
   final prioritizedCities = _stringListFromJson(
     plannerAssist['prioritizedCities'],
@@ -10526,6 +10541,10 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
       .map(_normalizeLocationText)
       .where((e) => e.isNotEmpty)
       .toList();
+  final favoriteKeywords = effectiveFavoritePlaces
+      .map(_normalizeLocationText)
+      .where((e) => e.isNotEmpty)
+      .toList();
   final originAnchor = _resolveOriginAnchor(
     places: places,
     originCity: normalizedOriginCity,
@@ -10544,6 +10563,7 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
           ) +
           _plannerPriorityBoost(place, prioritizedCities) +
           _wishlistBoost(place, wishKeywords) +
+          _favoriteBoost(place, favoriteKeywords) +
           (formalPlanReviewBoosts[place.id] ?? 0),
   };
   candidates.sort(
@@ -10970,6 +10990,7 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
       'dayEndTime': dayEndTime,
       'extraSpots': extraSpots,
       'wishlistPlaces': effectiveWishlistPlaces,
+      'favoritePlaces': effectiveFavoritePlaces,
       'requiredPlacesScheduled': scheduledRequiredPlaces,
       'missingRequiredPlaces': missingRequiredPlaces,
       'requirementsSignals': requirementSignals.toJson(),
@@ -11007,6 +11028,7 @@ Future<List<Place>> _discoverItineraryPlacesFromGoogle({
   required String? location,
   required String? requirementsText,
   required List<String> wishlistPlaces,
+  required List<String> favoritePlaces,
 }) async {
   final key = _googleMapsServerKey();
   if (key.trim().isEmpty) {
@@ -11055,6 +11077,7 @@ Future<List<Place>> _discoverItineraryPlacesFromGoogle({
     cityHints: cityHints,
     requirementsText: requirementsText,
     wishlistPlaces: wishlistPlaces,
+    favoritePlaces: favoritePlaces,
   );
   if (queries.isEmpty) {
     return const <Place>[];
@@ -11091,6 +11114,15 @@ Future<List<Place>> _discoverItineraryPlacesFromGoogle({
               ).contains(_normalizeLocationText(place)),
         )
         .firstOrNull;
+    final requestedFavorite = favoritePlaces
+        .where(
+          (place) =>
+              place.trim().isNotEmpty &&
+              _normalizeLocationText(
+                query,
+              ).contains(_normalizeLocationText(place)),
+        )
+        .firstOrNull;
     final ranked =
         results.where((result) {
           return _isUsefulDiscoveredPlaceCandidate(
@@ -11106,7 +11138,15 @@ Future<List<Place>> _discoverItineraryPlacesFromGoogle({
                       a,
                       rawName: requestedTarget,
                       cityHint: cityHints.first,
-                    ));
+                    )) +
+              (requestedFavorite == null
+                  ? 0
+                  : _scoreGooglePlaceCandidate(
+                          a,
+                          rawName: requestedFavorite,
+                          cityHint: cityHints.first,
+                        ) *
+                        0.35);
           final bScore =
               _scoreDiscoveredGooglePlace(b, cityHints: cityHints) +
               (requestedTarget == null
@@ -11115,7 +11155,15 @@ Future<List<Place>> _discoverItineraryPlacesFromGoogle({
                       b,
                       rawName: requestedTarget,
                       cityHint: cityHints.first,
-                    ));
+                    )) +
+              (requestedFavorite == null
+                  ? 0
+                  : _scoreGooglePlaceCandidate(
+                          b,
+                          rawName: requestedFavorite,
+                          cityHint: cityHints.first,
+                        ) *
+                        0.35);
           return bScore.compareTo(aScore);
         });
     // Check several results because the top result is often already in the
@@ -11170,14 +11218,21 @@ Future<List<String>> _buildPlaceDiscoveryQueries({
   required List<String> cityHints,
   required String? requirementsText,
   required List<String> wishlistPlaces,
+  required List<String> favoritePlaces,
 }) async {
   final requiredQueries = <String>[
     for (final city in cityHints)
       for (final place in wishlistPlaces)
         if (place.trim().isNotEmpty) '$city ${place.trim()}',
   ];
+  final favoriteQueries = <String>[
+    for (final city in cityHints)
+      for (final place in favoritePlaces.take(6))
+        if (place.trim().isNotEmpty) '$city ${place.trim()}',
+  ];
   final fallback = <String>[
     ...requiredQueries,
+    ...favoriteQueries,
     ..._ruleBasedPlaceDiscoveryQueries(
       preferredTags: preferredTags,
       requirementSignals: requirementSignals,
@@ -11228,6 +11283,7 @@ Future<List<String>> _buildPlaceDiscoveryQueries({
 - 不要重複目前候選或資料庫已有景點，優先尋找能增加行程多樣性的新景點。
 - 必須優先遵守使用者原句，例如室內多一點、百貨逛街、情侶約會、低步行負擔、拍照等。
 - 使用者指定必去景點必須原名加入查詢：${wishlistPlaces.isEmpty ? '無' : wishlistPlaces.join('、')}
+- 使用者收藏景點只是偏好參考，不可當成硬性必去：${favoritePlaces.isEmpty ? '無' : favoritePlaces.join('、')}
 - 具名景點可以大膽提出，但不得直接當成已驗證資料，最終由 Google Places 結果決定是否採用。
 
 城市：${cityHints.join('、')}
@@ -13605,6 +13661,7 @@ Future<Map<String, dynamic>> _buildAiPlannerAssist({
   required String? currentDate,
   required int? currentMinuteOfDay,
   required List<String> wishlistPlaces,
+  required List<String> favoritePlaces,
 }) async {
   final fallback = _buildRuleBasedPlannerAssist(
     allPlaces: allPlaces,
@@ -13628,6 +13685,7 @@ Future<Map<String, dynamic>> _buildAiPlannerAssist({
     currentDate: currentDate,
     currentMinuteOfDay: currentMinuteOfDay,
     wishlistPlaces: wishlistPlaces,
+    favoritePlaces: favoritePlaces,
   );
   if (!_isLlmConfigured() || candidates.isEmpty) {
     return fallback;
@@ -13662,6 +13720,7 @@ Future<Map<String, dynamic>> _buildAiPlannerAssist({
             currentDate: currentDate,
             currentMinuteOfDay: currentMinuteOfDay,
             wishlistPlaces: wishlistPlaces,
+            favoritePlaces: favoritePlaces,
           ),
         },
       ],
@@ -13792,6 +13851,7 @@ Map<String, dynamic> _buildRuleBasedPlannerAssist({
   required String? currentDate,
   required int? currentMinuteOfDay,
   required List<String> wishlistPlaces,
+  required List<String> favoritePlaces,
 }) {
   final warnings = <String>[];
   final improvements = <String>[];
@@ -14046,6 +14106,9 @@ Map<String, dynamic> _buildRuleBasedPlannerAssist({
   }
   if (wishlistPlaces.isNotEmpty) {
     improvements.add('你另外指定的景點願望清單會被優先加分，但若與主要城市距離過遠，建議拆到其他天。');
+  }
+  if (favoritePlaces.isNotEmpty) {
+    improvements.add('收藏景點會列入偏好加分，但仍以整體動線、距離與停留合理性為優先。');
   }
   final stayStyle = switch (normalizedTripPurpose) {
     'relax' || 'family' => 'slow',
@@ -14701,6 +14764,7 @@ String _buildAiPlannerAssistPrompt({
   required String? currentDate,
   required int? currentMinuteOfDay,
   required List<String> wishlistPlaces,
+  required List<String> favoritePlaces,
 }) {
   final cities = <String, int>{};
   for (final place in candidates) {
@@ -14767,6 +14831,7 @@ String _buildAiPlannerAssistPrompt({
 - 需求抽取摘要：${requirementSignals.summary.isEmpty ? '未抽取到明確偏好' : requirementSignals.summary}
 - 想再多排景點：${extraSpots?.toString() ?? '0'}
 - 已指定想去景點：${wishlistPlaces.isEmpty ? '無' : wishlistPlaces.join('、')}
+- 收藏景點偏好（僅加分，不能破壞動線）：${favoritePlaces.isEmpty ? '無' : favoritePlaces.join('、')}
 - 使用者手動指定出發時間：${dayStartTime ?? '未指定'}
 - 使用者手動指定結束時間：${dayEndTime ?? '未指定'}
 - App 端當下日期：${currentDate ?? '未提供'}
@@ -16287,6 +16352,21 @@ double _wishlistBoost(Place place, List<String> wishKeywords) {
     if (keyword.isEmpty) continue;
     if (hay.contains(keyword)) {
       boost += 1.4;
+    }
+  }
+  return boost;
+}
+
+double _favoriteBoost(Place place, List<String> favoriteKeywords) {
+  if (favoriteKeywords.isEmpty) return 0;
+  final hay = _normalizeLocationText(
+    '${place.name} ${place.city} ${place.address} ${place.description}',
+  );
+  var boost = 0.0;
+  for (final keyword in favoriteKeywords) {
+    if (keyword.isEmpty) continue;
+    if (hay.contains(keyword)) {
+      boost += 0.55;
     }
   }
   return boost;

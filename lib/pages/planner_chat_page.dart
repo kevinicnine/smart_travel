@@ -13,6 +13,7 @@ class PlannerChatPage extends StatefulWidget {
     required this.originCity,
     required this.destinationCities,
     required this.interestIds,
+    required this.favoritePlaces,
   });
 
   final DateTime startDate;
@@ -20,6 +21,7 @@ class PlannerChatPage extends StatefulWidget {
   final String originCity;
   final List<String> destinationCities;
   final List<String> interestIds;
+  final List<String> favoritePlaces;
 
   @override
   State<PlannerChatPage> createState() => _PlannerChatPageState();
@@ -483,6 +485,7 @@ class _PlannerChatPageState extends State<PlannerChatPage> {
         location: destinationLabel,
         budget: _inferBudgetValue(requirementsText),
         wishlistPlaces: _requiredPlaces,
+        favoritePlaces: widget.favoritePlaces,
         currentTime: DateTime.now(),
       );
       if (!mounted) return;

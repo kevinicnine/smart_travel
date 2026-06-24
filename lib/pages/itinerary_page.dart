@@ -40,6 +40,7 @@ class _ItineraryPageState extends State<ItineraryPage>
   TimeOfDay _preferredEndTime = const TimeOfDay(hour: 18, minute: 30);
   int _extraSpotsPreference = 0;
   final List<String> _wishlistPlaces = [];
+  final List<String> _favoritePlaces = [];
   final Map<String, String> _transitModeOverrides = {};
   final Set<String> _manuallyEditedDayKeys = <String>{};
   bool _formalPlanConfirmationStarted = false;
@@ -527,6 +528,7 @@ class _ItineraryPageState extends State<ItineraryPage>
     final end = _parseTimeOfDay(meta['dayEndTime']?.toString());
     final extra = meta['extraSpots'];
     final wishlist = meta['wishlistPlaces'];
+    final favorites = meta['favoritePlaces'];
     if (start != null) _preferredStartTime = start;
     if (end != null) _preferredEndTime = end;
     if (extra is num) {
@@ -537,6 +539,13 @@ class _ItineraryPageState extends State<ItineraryPage>
         ..clear()
         ..addAll(
           wishlist.map((e) => e.toString().trim()).where((e) => e.isNotEmpty),
+        );
+    }
+    if (favorites is List) {
+      _favoritePlaces
+        ..clear()
+        ..addAll(
+          favorites.map((e) => e.toString().trim()).where((e) => e.isNotEmpty),
         );
     }
   }
@@ -582,6 +591,7 @@ class _ItineraryPageState extends State<ItineraryPage>
         dayEndTime: _timeOfDayLabel(_preferredEndTime),
         extraSpots: _extraSpotsPreference,
         wishlistPlaces: _wishlistPlaces,
+        favoritePlaces: _favoritePlaces,
       );
       if (!mounted) return;
       setState(() {
@@ -1343,7 +1353,8 @@ class _ItineraryPageState extends State<ItineraryPage>
           targetArea != null &&
           candidateArea != null &&
           candidateArea != targetArea;
-      final anchorDistanceKm = anchorPoint == null || !_hasValidPlaceCoordinate(place)
+      final anchorDistanceKm =
+          anchorPoint == null || !_hasValidPlaceCoordinate(place)
           ? 0.0
           : _haversineKm(
               anchorPoint.$1,
@@ -1772,10 +1783,7 @@ class _ItineraryPageState extends State<ItineraryPage>
               const SizedBox(height: 10),
               Text(
                 '前一站約 ${candidate.fromPrevMinutes} 分鐘，下一站約 ${candidate.toNextMinutes} 分鐘，偏離主路線約 ${candidate.anchorDistanceKm.toStringAsFixed(1)} km',
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: Color(0xFF5A5670),
-                ),
+                style: const TextStyle(fontSize: 12, color: Color(0xFF5A5670)),
               ),
             ],
           ),
@@ -2607,7 +2615,8 @@ class _ItineraryPageState extends State<ItineraryPage>
             const SizedBox(width: 8),
             ClipRRect(
               borderRadius: BorderRadius.circular(10),
-              child: _api
+              child:
+                  _api
                       .resolveImageUrl(
                         item.place.imageUrl,
                         placeId: item.place.id,
@@ -3601,9 +3610,7 @@ class _MealBreakPlannerSheetState extends State<_MealBreakPlannerSheet> {
                           decoration: BoxDecoration(
                             color: const Color(0xFFFFFBF7),
                             borderRadius: BorderRadius.circular(16),
-                            border: Border.all(
-                              color: const Color(0xFFF0D8C9),
-                            ),
+                            border: Border.all(color: const Color(0xFFF0D8C9)),
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
