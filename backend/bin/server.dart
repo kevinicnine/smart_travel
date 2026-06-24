@@ -576,6 +576,41 @@ Future<void> main(List<String> args) async {
         );
       }),
     )
+    ..get(
+      '/api/place-search',
+      (req) => _json(req, (_) async {
+        final query = req.url.queryParameters['q']?.trim() ?? '';
+        if (query.isEmpty) {
+          throw ApiException(400, '缺少搜尋關鍵字');
+        }
+
+        final requestedLimit =
+            int.tryParse(req.url.queryParameters['limit'] ?? '') ?? 8;
+        final limit = requestedLimit.clamp(1, 12);
+        final data = await store.read();
+        final localMatches = await _searchCatalogPlaces(
+          store: store,
+          places: data.places,
+          query: query,
+          limit: limit,
+        );
+        if (localMatches.isNotEmpty) {
+          return successBody(
+            message: '已取得景點候選',
+            data: {
+              'source': 'catalog',
+              'places': localMatches.map(_placeToApiJson).toList(),
+            },
+          );
+        }
+
+        final liveMatches = await _searchLivePlaces(query: query, limit: limit);
+        return successBody(
+          message: '已取得景點候選',
+          data: {'source': 'google_places', 'places': liveMatches},
+        );
+      }),
+    )
     ..post(
       '/api/meal-suggestions',
       (req) => _json(req, (body) async {
@@ -1430,7 +1465,10 @@ Future<void> main(List<String> args) async {
         if (_crawlModeNeedsGoogleKey(mode)) {
           final googleKey = _googleMapsServerKey();
           if (googleKey.isEmpty) {
-            throw ApiException(400, '需要設定 GOOGLE_PLACES_SERVER_API_KEY 或 GOOGLE_MAPS_API_KEY');
+            throw ApiException(
+              400,
+              '需要設定 GOOGLE_PLACES_SERVER_API_KEY 或 GOOGLE_MAPS_API_KEY',
+            );
           }
         }
         if (mode != 'google_places' && batchCities.length > 1) {
@@ -2302,14 +2340,7 @@ String? _cleanScopedAreaText(String raw) {
       .replaceFirst(RegExp(r'^(?:在|於|到|去|往)'), '')
       .replaceFirst(RegExp(r'(?:附近|一帶|這邊|那邊)$'), '')
       .trim();
-  const generic = <String>{
-    '這裡',
-    '那裡',
-    '當地',
-    '同一區',
-    '同一個地方',
-    '單一城市',
-  };
+  const generic = <String>{'這裡', '那裡', '當地', '同一區', '同一個地方', '單一城市'};
   if (value.length < 2 || value.length > 20 || generic.contains(value)) {
     return null;
   }
@@ -2380,7 +2411,9 @@ Future<Map<String, dynamic>> _readUserLocationStateRecords() async {
   return records;
 }
 
-Future<Map<String, dynamic>?> _readUserLocationStateRecord(String userId) async {
+Future<Map<String, dynamic>?> _readUserLocationStateRecord(
+  String userId,
+) async {
   final records = await _readUserLocationStateRecords();
   final raw = records[userId];
   if (raw is Map<String, dynamic>) {
@@ -2447,7 +2480,9 @@ bool _isAcceptedLocationSample(
       currentLng == null) {
     return true;
   }
-  final previousTime = DateTime.tryParse(previous['timestamp']?.toString() ?? '');
+  final previousTime = DateTime.tryParse(
+    previous['timestamp']?.toString() ?? '',
+  );
   final currentTime = DateTime.tryParse(current['timestamp']?.toString() ?? '');
   if (previousTime == null || currentTime == null) {
     return true;
@@ -2456,7 +2491,12 @@ bool _isAcceptedLocationSample(
   if (seconds <= 0) {
     return true;
   }
-  final distanceKm = _distanceKm(previousLat, previousLng, currentLat, currentLng);
+  final distanceKm = _distanceKm(
+    previousLat,
+    previousLng,
+    currentLat,
+    currentLng,
+  );
   final speedKmh = distanceKm / (seconds / 3600.0);
   return speedKmh <= 300;
 }
@@ -5717,8 +5757,7 @@ Future<Map<String, dynamic>> _buildAdminMetricsSnapshot() async {
           (_lineChannelSecret?.isNotEmpty ?? false) &&
           ((Platform.environment['LINE_CHANNEL_ACCESS_TOKEN'] ?? '')
               .isNotEmpty),
-      'googleMapsConfigured':
-          _googleMapsServerKey().isNotEmpty,
+      'googleMapsConfigured': _googleMapsServerKey().isNotEmpty,
       'itineraryLearningConfigured': _itineraryLearningProfile.enabled,
       'cronConfigured':
           _reminderCronToken != null && _reminderCronToken!.isNotEmpty,
@@ -6053,12 +6092,13 @@ Future<_PlacePhotoPayload?> _fetchPlacePhotoByLegacyReference({
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 12);
   try {
     final upstreamRequest = await client.getUrl(uri);
-    final upstreamResponse =
-        await upstreamRequest.close().timeout(const Duration(seconds: 20));
+    final upstreamResponse = await upstreamRequest.close().timeout(
+      const Duration(seconds: 20),
+    );
     if (upstreamResponse.statusCode != 200) {
-      final body = await utf8.decodeStream(upstreamResponse).catchError(
-        (_) => '',
-      );
+      final body = await utf8
+          .decodeStream(upstreamResponse)
+          .catchError((_) => '');
       _log.warning(
         'Legacy place photo failed: status=${upstreamResponse.statusCode} '
         'photoReference=${photoReference.substring(0, min(12, photoReference.length))} '
@@ -6100,12 +6140,13 @@ Future<_PlacePhotoPayload?> _fetchPlacePhotoByPlaceIdNew({
     final detailsRequest = await client.getUrl(detailsUri);
     detailsRequest.headers.set('X-Goog-Api-Key', key);
     detailsRequest.headers.set('X-Goog-FieldMask', 'photos');
-    final detailsResponse =
-        await detailsRequest.close().timeout(const Duration(seconds: 20));
+    final detailsResponse = await detailsRequest.close().timeout(
+      const Duration(seconds: 20),
+    );
     if (detailsResponse.statusCode != 200) {
-      final body = await utf8.decodeStream(detailsResponse).catchError(
-        (_) => '',
-      );
+      final body = await utf8
+          .decodeStream(detailsResponse)
+          .catchError((_) => '');
       _log.warning(
         'Place photo details (new) failed: status=${detailsResponse.statusCode} '
         'placeId=$placeId body=${body.toString().trim()}',
@@ -6140,12 +6181,11 @@ Future<_PlacePhotoPayload?> _fetchPlacePhotoByPlaceIdNew({
     );
     final mediaRequest = await client.getUrl(mediaUri);
     mediaRequest.headers.set('X-Goog-Api-Key', key);
-    final mediaResponse =
-        await mediaRequest.close().timeout(const Duration(seconds: 20));
+    final mediaResponse = await mediaRequest.close().timeout(
+      const Duration(seconds: 20),
+    );
     if (mediaResponse.statusCode != 200) {
-      final body = await utf8.decodeStream(mediaResponse).catchError(
-        (_) => '',
-      );
+      final body = await utf8.decodeStream(mediaResponse).catchError((_) => '');
       _log.warning(
         'Place photo media (new) failed: status=${mediaResponse.statusCode} '
         'placeId=$placeId photoName=$photoName body=${body.toString().trim()}',
@@ -6168,12 +6208,11 @@ Future<_PlacePhotoPayload?> _fetchPlacePhotoByPlaceIdNew({
       return null;
     }
     final photoRequest = await client.getUrl(photoUri);
-    final photoResponse =
-        await photoRequest.close().timeout(const Duration(seconds: 20));
+    final photoResponse = await photoRequest.close().timeout(
+      const Duration(seconds: 20),
+    );
     if (photoResponse.statusCode != 200) {
-      final body = await utf8.decodeStream(photoResponse).catchError(
-        (_) => '',
-      );
+      final body = await utf8.decodeStream(photoResponse).catchError((_) => '');
       _log.warning(
         'Resolved photoUri fetch failed: status=${photoResponse.statusCode} '
         'placeId=$placeId body=${body.toString().trim()}',
@@ -6364,10 +6403,8 @@ Future<String?> _lastLineContextPushSignature({
   required DateTime dayDate,
 }) async {
   final records = await _readLineContextStateRecords();
-  final record = records[_lineContextStateRecordKey(
-    userId: userId,
-    dayDate: dayDate,
-  )];
+  final record =
+      records[_lineContextStateRecordKey(userId: userId, dayDate: dayDate)];
   if (record is! Map) return null;
   final signature = record['lastPushedSignature']?.toString().trim() ?? '';
   return signature.isEmpty ? null : signature;
@@ -6378,10 +6415,8 @@ Future<Map<String, dynamic>?> _readLineContextStateRecord({
   required DateTime dayDate,
 }) async {
   final records = await _readLineContextStateRecords();
-  final record = records[_lineContextStateRecordKey(
-    userId: userId,
-    dayDate: dayDate,
-  )];
+  final record =
+      records[_lineContextStateRecordKey(userId: userId, dayDate: dayDate)];
   if (record is! Map) {
     return null;
   }
@@ -6439,7 +6474,10 @@ Future<void> _rememberLineContextResolution({
   final records = raw is Map
       ? Map<String, dynamic>.from(raw)
       : <String, dynamic>{};
-  final recordKey = _lineContextStateRecordKey(userId: userId, dayDate: dayDate);
+  final recordKey = _lineContextStateRecordKey(
+    userId: userId,
+    dayDate: dayDate,
+  );
   final previous = records[recordKey];
   final existing = previous is Map
       ? Map<String, dynamic>.from(previous)
@@ -6471,17 +6509,18 @@ String _buildContextChangeSignature({
   required Map<String, dynamic> nextAction,
   required List<Map<String, dynamic>> alerts,
 }) {
-  final relevantAlerts = alerts
-      .where(
-        (alert) => _contextSeverityRank(alert['severity']?.toString()) >= 2,
-      )
-      .map(
-        (alert) =>
-            '${alert['type']}:${alert['severity']}:${alert['title']}',
-      )
-      .take(4)
-      .toList()
-    ..sort();
+  final relevantAlerts =
+      alerts
+          .where(
+            (alert) => _contextSeverityRank(alert['severity']?.toString()) >= 2,
+          )
+          .map(
+            (alert) =>
+                '${alert['type']}:${alert['severity']}:${alert['title']}',
+          )
+          .take(4)
+          .toList()
+        ..sort();
   return [
     nextAction['type']?.toString().trim() ?? '',
     nextAction['severity']?.toString().trim() ?? '',
@@ -6578,7 +6617,8 @@ bool _didWeatherContextMeaningfullyChange({
     return true;
   }
 
-  final currentTarget = nextAction?['targetPlaceId']?.toString().trim().isNotEmpty == true
+  final currentTarget =
+      nextAction?['targetPlaceId']?.toString().trim().isNotEmpty == true
       ? nextAction!['targetPlaceId'].toString().trim()
       : nextAction?['targetPlaceName']?.toString().trim() ?? '';
   final previousAction = previousRecord?['nextAction'];
@@ -6723,7 +6763,9 @@ Future<Map<String, dynamic>> _runUpcomingReminderScan({
     }
     final plan = Map<String, dynamic>.from(rawPlan);
     final recordId = record['id']?.toString().trim() ?? '';
-    final key = recordId.isNotEmpty ? recordId : _lineReminderPlanKey(user.id, plan);
+    final key = recordId.isNotEmpty
+        ? recordId
+        : _lineReminderPlanKey(user.id, plan);
     if (!seenPlanKeys.add(key)) {
       continue;
     }
@@ -7095,10 +7137,9 @@ Future<Map<String, dynamic>> _buildContextAwareness(
     );
     focusPlaceIsOutdoor = _isOutdoorPlace(focusPlace);
   }
-  final thunderProb =
-      weather == null
-          ? 0
-          : (_asIntValue(weather['thunderstormProbability']) ?? 0);
+  final thunderProb = weather == null
+      ? 0
+      : (_asIntValue(weather['thunderstormProbability']) ?? 0);
   final weatherType = weather?['weatherType']?.toString().trim();
   final severeRain =
       (weather != null &&
@@ -7147,7 +7188,8 @@ Future<Map<String, dynamic>> _buildContextAwareness(
           type: 'weather_rain',
           severity: 'medium',
           title: '有降雨風險',
-          message: '${focusPlace?.name ?? '目前景點'} 為戶外景點，降雨機率約 $rainProb%，建議預留彈性。',
+          message:
+              '${focusPlace?.name ?? '目前景點'} 為戶外景點，降雨機率約 $rainProb%，建議預留彈性。',
         ),
       );
       suggestions.add('這一站可先準備咖啡館、博物館等室內替代點。');
@@ -7159,7 +7201,8 @@ Future<Map<String, dynamic>> _buildContextAwareness(
           type: 'weather_heat',
           severity: 'high',
           title: '高溫曝曬風險',
-          message: '${focusPlace?.name ?? '目前景點'} 為戶外景點，今日高溫約 ${tempMax.toStringAsFixed(0)}°C。',
+          message:
+              '${focusPlace?.name ?? '目前景點'} 為戶外景點，今日高溫約 ${tempMax.toStringAsFixed(0)}°C。',
         ),
       );
       suggestions.add('中午前後優先改成冷氣室內點或午餐休息，避免長時間曝曬。');
@@ -7169,7 +7212,8 @@ Future<Map<String, dynamic>> _buildContextAwareness(
           type: 'weather_heat',
           severity: 'medium',
           title: '中午體感偏熱',
-          message: '${focusPlace?.name ?? '目前景點'} 為戶外景點，今日高溫約 ${tempMax.toStringAsFixed(0)}°C。',
+          message:
+              '${focusPlace?.name ?? '目前景點'} 為戶外景點，今日高溫約 ${tempMax.toStringAsFixed(0)}°C。',
         ),
       );
       suggestions.add('最曬時段可先換成午餐或室內景點。');
@@ -7668,7 +7712,10 @@ Map<String, dynamic>? _resolveActivePlanDayForReference(
 }) {
   final rawDays = plan['days'];
   final dayMaps = rawDays is List
-      ? rawDays.whereType<Map>().map((day) => Map<String, dynamic>.from(day)).toList()
+      ? rawDays
+            .whereType<Map>()
+            .map((day) => Map<String, dynamic>.from(day))
+            .toList()
       : const <Map<String, dynamic>>[];
   if (dayMaps.isEmpty) {
     return null;
@@ -7727,7 +7774,9 @@ void _mergeContextNextActionResult(
     return;
   }
   final existingMap = Map<String, dynamic>.from(existing);
-  final existingRank = _contextSeverityRank(existingMap['severity']?.toString());
+  final existingRank = _contextSeverityRank(
+    existingMap['severity']?.toString(),
+  );
   final candidateRank = _contextSeverityRank(candidate['severity']?.toString());
   if (candidateRank > existingRank) {
     result['nextAction'] = candidate;
@@ -7774,8 +7823,8 @@ Future<Map<String, dynamic>> _fetchLiveTravelToPlace({
     return fallback;
   }
 
-  final departureEpoch =
-      (DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000).toString();
+  final departureEpoch = (DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000)
+      .toString();
   final uri = Uri.https('maps.googleapis.com', '/maps/api/directions/json', {
     'origin': '$fromLat,$fromLng',
     'destination': '${to.lat},${to.lng}',
@@ -7809,8 +7858,9 @@ Future<Map<String, dynamic>> _fetchLiveTravelToPlace({
       return fallback;
     }
     final leg = legs.first as Map;
-    final durationMap =
-        leg['duration_in_traffic'] is Map ? leg['duration_in_traffic'] : leg['duration'];
+    final durationMap = leg['duration_in_traffic'] is Map
+        ? leg['duration_in_traffic']
+        : leg['duration'];
     final durationSeconds = (durationMap as Map?)?['value'] as num?;
     final durationMinutes = durationSeconds == null
         ? null
@@ -7824,7 +7874,8 @@ Future<Map<String, dynamic>> _fetchLiveTravelToPlace({
       'label': '依目前路況',
       'minutes': durationMinutes,
       'distanceText':
-          (leg['distance'] as Map?)?['text']?.toString() ?? fallback['distanceText'],
+          (leg['distance'] as Map?)?['text']?.toString() ??
+          fallback['distanceText'],
       if ((leg['duration_in_traffic'] as Map?)?['text'] != null)
         'trafficText': (leg['duration_in_traffic'] as Map?)?['text'],
     };
@@ -7863,7 +7914,8 @@ Future<void> _appendLocationContextSignals({
           .toList() ??
       <Map<String, dynamic>>[];
   final suggestionSet = <String>{
-    ...((result['suggestions'] as List?)?.map((e) => e.toString()) ?? const <String>[]),
+    ...((result['suggestions'] as List?)?.map((e) => e.toString()) ??
+        const <String>[]),
   };
   final locationInsights = <Map<String, dynamic>>[];
 
@@ -7871,7 +7923,12 @@ Future<void> _appendLocationContextSignals({
     Map<String, dynamic>.from(focus.targetItem['place'] as Map),
   );
   if (arrivalPlace.lat != 0 || arrivalPlace.lng != 0) {
-    final distanceKm = _distanceKm(lat, lng, arrivalPlace.lat, arrivalPlace.lng);
+    final distanceKm = _distanceKm(
+      lat,
+      lng,
+      arrivalPlace.lat,
+      arrivalPlace.lng,
+    );
     locationInsights.add({
       'type': 'focus_distance',
       'phase': focus.phase,
@@ -7886,7 +7943,8 @@ Future<void> _appendLocationContextSignals({
           type: 'location_arrived',
           severity: 'low',
           title: '已接近 ${arrivalPlace.name}',
-          message: '目前距離 ${arrivalPlace.name} 約 ${_distanceLabelFromKm(distanceKm)}。',
+          message:
+              '目前距離 ${arrivalPlace.name} 約 ${_distanceLabelFromKm(distanceKm)}。',
         ),
       );
       suggestionSet.add('可準備開始 ${arrivalPlace.name} 的停留安排。');
@@ -8812,7 +8870,10 @@ Future<bool> _sendLineContextAwarenessNotification({
       );
       if (lastSignature == contextChangeSignature) {
         shouldPushContextAlert = false;
-      } else if (_isWeatherDrivenContext(nextAction: nextAction, alerts: alerts) &&
+      } else if (_isWeatherDrivenContext(
+            nextAction: nextAction,
+            alerts: alerts,
+          ) &&
           !_didWeatherContextMeaningfullyChange(
             previousRecord: previousContextRecord,
             currentSnapshot: weatherSnapshot,
@@ -9159,8 +9220,7 @@ List<Map<String, dynamic>>? _buildLineContextAwarenessMessages({
               date: dayDate.toIso8601String().substring(0, 10),
               targetPlaceId:
                   primaryBackup['targetPlaceId']?.toString().trim() ?? '',
-              replacementPlaceId:
-                  replacement['id']?.toString().trim() ?? '',
+              replacementPlaceId: replacement['id']?.toString().trim() ?? '',
             ),
             'displayText':
                 '套用備案：${primaryBackup['targetPlaceName']} 改為 ${replacement['name']}',
@@ -9188,11 +9248,7 @@ List<Map<String, dynamic>>? _buildLineContextAwarenessMessages({
       footerButtons.add(
         _lineFlexButton(
           label: '打開 App',
-          action: {
-            'type': 'uri',
-            'label': '打開 App',
-            'uri': appUrl,
-          },
+          action: {'type': 'uri', 'label': '打開 App', 'uri': appUrl},
         ),
       );
     }
@@ -9215,11 +9271,14 @@ List<Map<String, dynamic>>? _buildLineContextAwarenessMessages({
           '建議',
           '${(primaryBackup['replacement'] as Map)['name'] ?? ''}',
         ),
-        if (((primaryBackup['replacement'] as Map)['address']?.toString().trim() ??
+        if (((primaryBackup['replacement'] as Map)['address']
+                    ?.toString()
+                    .trim() ??
                 '')
             .isNotEmpty)
           _lineFlexText(
-            ((primaryBackup['replacement'] as Map)['address']?.toString() ?? ''),
+            ((primaryBackup['replacement'] as Map)['address']?.toString() ??
+                ''),
             size: 'xs',
             color: '#7B758B',
             wrap: true,
@@ -9244,13 +9303,18 @@ List<Map<String, dynamic>>? _buildLineContextAwarenessMessages({
   }
 
   if (upcomingReminder != null) {
-    final target = upcomingReminder['targetPlaceName']?.toString().trim() ?? '下一站';
-    final departureTime = upcomingReminder['departureTime']?.toString().trim() ?? '';
-    final scheduledTime = upcomingReminder['scheduledTime']?.toString().trim() ?? '';
+    final target =
+        upcomingReminder['targetPlaceName']?.toString().trim() ?? '下一站';
+    final departureTime =
+        upcomingReminder['departureTime']?.toString().trim() ?? '';
+    final scheduledTime =
+        upcomingReminder['scheduledTime']?.toString().trim() ?? '';
     final routeText = upcomingReminder['transitLabel']?.toString().trim() ?? '';
-    final weatherSummary = upcomingReminder['weatherSummary']?.toString().trim() ?? '';
+    final weatherSummary =
+        upcomingReminder['weatherSummary']?.toString().trim() ?? '';
     final rainProbability = _asIntValue(upcomingReminder['rainProbability']);
-    final navigationUrl = upcomingReminder['navigationUrl']?.toString().trim() ?? '';
+    final navigationUrl =
+        upcomingReminder['navigationUrl']?.toString().trim() ?? '';
     final temporaryStatus =
         upcomingReminder['temporaryStatus']?.toString().trim() ?? '';
     final reminderButtons = <Map<String, dynamic>>[];
@@ -9260,11 +9324,7 @@ List<Map<String, dynamic>>? _buildLineContextAwarenessMessages({
           label: '立即導航',
           style: 'primary',
           color: '#4E8DFF',
-          action: {
-            'type': 'uri',
-            'label': '立即導航',
-            'uri': navigationUrl,
-          },
+          action: {'type': 'uri', 'label': '立即導航', 'uri': navigationUrl},
         ),
       );
     }
@@ -9272,11 +9332,7 @@ List<Map<String, dynamic>>? _buildLineContextAwarenessMessages({
       reminderButtons.add(
         _lineFlexButton(
           label: '查看 App',
-          action: {
-            'type': 'uri',
-            'label': '查看 App',
-            'uri': appUrl,
-          },
+          action: {'type': 'uri', 'label': '查看 App', 'uri': appUrl},
         ),
       );
     }
@@ -9284,10 +9340,7 @@ List<Map<String, dynamic>>? _buildLineContextAwarenessMessages({
       _lineFlexBubble(
         altText: fallbackText,
         bodyContents: [
-          _lineFlexHeaderChip(
-            label: '下一站提醒',
-            backgroundColor: '#4E8DFF',
-          ),
+          _lineFlexHeaderChip(label: '下一站提醒', backgroundColor: '#4E8DFF'),
           _lineFlexTitle(target),
           if (departureTime.isNotEmpty)
             _lineFlexLabelValue('建議出發', departureTime),
@@ -9315,9 +9368,7 @@ List<Map<String, dynamic>>? _buildLineContextAwarenessMessages({
       ? bubbles.first['contents']
       : {
           'type': 'carousel',
-          'contents': [
-            for (final bubble in bubbles) bubble['contents'],
-          ],
+          'contents': [for (final bubble in bubbles) bubble['contents']],
         };
   return [
     {
@@ -9459,10 +9510,7 @@ Map<String, dynamic> _lineFlexText(
 }
 
 Map<String, dynamic> _lineFlexSeparator() {
-  return {
-    'type': 'separator',
-    'margin': 'sm',
-  };
+  return {'type': 'separator', 'margin': 'sm'};
 }
 
 Map<String, dynamic> _lineFlexLabelValue(String label, String value) {
@@ -9561,7 +9609,9 @@ Future<Map<String, String>> _applyLineBackupReplacement({
   required String targetPlaceId,
   required String replacementPlaceId,
 }) async {
-  if (targetDate.isEmpty || targetPlaceId.isEmpty || replacementPlaceId.isEmpty) {
+  if (targetDate.isEmpty ||
+      targetPlaceId.isEmpty ||
+      replacementPlaceId.isEmpty) {
     throw ApiException(400, '缺少套用備案所需參數');
   }
   final user = await _store.findByLineUserId(lineUserId);
@@ -9608,7 +9658,10 @@ Future<Map<String, String>> _applyLineBackupReplacement({
   if (rawItems is! List) {
     throw ApiException(400, '行程項目格式不正確');
   }
-  final items = rawItems.whereType<Map>().map(Map<String, dynamic>.from).toList();
+  final items = rawItems
+      .whereType<Map>()
+      .map(Map<String, dynamic>.from)
+      .toList();
   final itemIndex = items.indexWhere((item) {
     final place = item['place'];
     if (place is! Map) return false;
@@ -9898,7 +9951,9 @@ Future<void> _handleLineEvent(Map<String, dynamic> event) async {
   }
   if (eventType == 'postback') {
     final postback = event['postback'];
-    final data = postback is Map ? _parseLinePostbackData(postback['data']?.toString() ?? '') : const <String, String>{};
+    final data = postback is Map
+        ? _parseLinePostbackData(postback['data']?.toString() ?? '')
+        : const <String, String>{};
     if (replyToken != null && replyToken.isNotEmpty) {
       try {
         final reply = await _handleLineContextPostback(
@@ -10168,15 +10223,16 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
       ? null
       : _normalizeLocationText(scopedArea);
   final scopedLocationParts = _parseLocationParts(scopedArea);
-  final locationParts = normalizedScopedArea != null && normalizedScopedArea.isNotEmpty
+  final locationParts =
+      normalizedScopedArea != null && normalizedScopedArea.isNotEmpty
       ? scopedLocationParts
       : _parseLocationParts(location);
-  final effectiveDestinationCities = normalizedScopedArea != null &&
-          normalizedScopedArea.isNotEmpty
+  final effectiveDestinationCities =
+      normalizedScopedArea != null && normalizedScopedArea.isNotEmpty
       ? <String>[scopedArea!]
       : destinationCities;
-  final effectiveLocation = normalizedScopedArea != null &&
-          normalizedScopedArea.isNotEmpty
+  final effectiveLocation =
+      normalizedScopedArea != null && normalizedScopedArea.isNotEmpty
       ? scopedArea
       : location;
   final effectiveWishlistPlaces = <String>{
@@ -10263,7 +10319,9 @@ Future<Map<String, dynamic>> _buildItineraryPlan({
   if (normalizedScopedArea != null && normalizedScopedArea.isNotEmpty) {
     final exportPlaces = await _loadTrainingPlacesExportPlaces();
     if (exportPlaces.isNotEmpty) {
-      final mergedById = <String, Place>{for (final place in places) place.id: place};
+      final mergedById = <String, Place>{
+        for (final place in places) place.id: place,
+      };
       for (final place in exportPlaces) {
         if (!matchesCityScope(place) || !matchesTownshipScope(place)) {
           continue;
@@ -12331,8 +12389,10 @@ int _effectiveStartMinuteForToday({
     return fallbackStartMinute;
   }
 
-  final nowMinute = (referenceMinuteOfDay ?? (DateTime.now().hour * 60 + DateTime.now().minute))
-      .clamp(0, 23 * 60 + 59);
+  final nowMinute =
+      (referenceMinuteOfDay ??
+              (DateTime.now().hour * 60 + DateTime.now().minute))
+          .clamp(0, 23 * 60 + 59);
   final bufferedNowMinute = nowMinute + 30;
   final roundedUp = ((bufferedNowMinute + 14) ~/ 15) * 15;
   return max(fallbackStartMinute, roundedUp);
@@ -12341,10 +12401,7 @@ int _effectiveStartMinuteForToday({
 String _planningDateKey(DateTime value) =>
     '${value.year.toString().padLeft(4, '0')}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
 
-bool _isSamePlanningDate(
-  DateTime dayDate, {
-  String? referenceDate,
-}) {
+bool _isSamePlanningDate(DateTime dayDate, {String? referenceDate}) {
   final effectiveReferenceDate =
       referenceDate == null || referenceDate.trim().isEmpty
       ? _planningDateKey(DateTime.now())
@@ -14024,9 +14081,7 @@ Map<String, dynamic> _buildRuleBasedPlannerAssist({
       currentMinuteOfDay != null;
   if (hasLiveSameDayStart) {
     final roundedMinute = (((currentMinuteOfDay + 30) + 14) ~/ 15) * 15;
-    recommendedStartTime = _minutesToHm(
-      roundedMinute.clamp(0, 23 * 60 + 45),
-    );
+    recommendedStartTime = _minutesToHm(roundedMinute.clamp(0, 23 * 60 + 45));
     if (currentMinuteOfDay >= 15 * 60) {
       dailyStopCap = min(dailyStopCap, currentMinuteOfDay >= 19 * 60 ? 1 : 2);
       lunchStartTime = currentMinuteOfDay >= 15 * 60
@@ -15161,10 +15216,7 @@ Future<Map<String, Map<String, dynamic>>> _fetchDailyWeatherForecast({
       ? requestedStart
       : requestedEnd;
   final fetchEnd = effectiveEnd.isBefore(today) ? today : effectiveEnd;
-  final totalDays = max(
-    1,
-    min(10, fetchEnd.difference(today).inDays + 1),
-  );
+  final totalDays = max(1, min(10, fetchEnd.difference(today).inDays + 1));
 
   final uri = Uri.https('weather.googleapis.com', '/v1/forecast/days:lookup', {
     'location.latitude': lat.toString(),
@@ -15224,8 +15276,12 @@ Future<Map<String, Map<String, dynamic>>> _fetchDailyWeatherForecast({
         final summary = _googleWeatherConditionSummary(daytime, nighttime);
         final weatherType = _googleWeatherPrimaryType(daytime, nighttime);
         final code = _googleWeatherTypeToLegacyCode(weatherType);
-        final maxValue = _googleWeatherTemperatureDegrees(day['maxTemperature']);
-        final minValue = _googleWeatherTemperatureDegrees(day['minTemperature']);
+        final maxValue = _googleWeatherTemperatureDegrees(
+          day['maxTemperature'],
+        );
+        final minValue = _googleWeatherTemperatureDegrees(
+          day['minTemperature'],
+        );
         final rainProb = _googleWeatherDailyRainProbability(daytime, nighttime);
         final thunderProb = _googleWeatherDailyThunderProbability(
           daytime,
@@ -15319,7 +15375,9 @@ String? _googleWeatherConditionSummary(
   if (nighttimeSummary != null && nighttimeSummary.isNotEmpty) {
     return nighttimeSummary;
   }
-  return _googleWeatherTypeToText(_googleWeatherPrimaryType(daytime, nighttime));
+  return _googleWeatherTypeToText(
+    _googleWeatherPrimaryType(daytime, nighttime),
+  );
 }
 
 String? _googleWeatherPartSummary(Map<String, dynamic>? part) {
@@ -16537,7 +16595,10 @@ Future<List<Place>> _backfillVisiblePlaces(
     var changed = false;
     final localExportMatch = await _findTrainingExportBackfill(place);
     if (localExportMatch != null) {
-      final merged = _mergePlaceWithBackfillCandidate(updated, localExportMatch);
+      final merged = _mergePlaceWithBackfillCandidate(
+        updated,
+        localExportMatch,
+      );
       changed = changed || !_samePlaceData(updated, merged);
       updated = merged;
     }
@@ -16660,7 +16721,11 @@ Future<Map<String, List<Place>>> _trainingPlacesExportIndex() async {
     _trainingPlacesExportIndexCache = index;
     return index;
   } catch (error, stack) {
-    _log.warning('Load training_places_export.json failed: $error', error, stack);
+    _log.warning(
+      'Load training_places_export.json failed: $error',
+      error,
+      stack,
+    );
     _trainingPlacesExportCache = const <Place>[];
     _trainingPlacesExportIndexCache = const <String, List<Place>>{};
     return _trainingPlacesExportIndexCache!;
@@ -16950,7 +17015,10 @@ Future<void> _autofillMealBreakRestaurants({
   for (final day in days) {
     final rawItems = day['items'];
     if (rawItems is! List) continue;
-    final items = rawItems.whereType<Map>().map(Map<String, dynamic>.from).toList();
+    final items = rawItems
+        .whereType<Map>()
+        .map(Map<String, dynamic>.from)
+        .toList();
     if (items.isEmpty) continue;
 
     var replacedAny = false;
@@ -16961,15 +17029,19 @@ Future<void> _autofillMealBreakRestaurants({
       final place = Map<String, dynamic>.from(rawPlace);
       final kind = place['kind']?.toString().trim() ?? '';
       if (kind != 'meal_break') continue;
-      if (_asDoubleValue(place['lat']) != null && _asDoubleValue(place['lng']) != null) {
+      if (_asDoubleValue(place['lat']) != null &&
+          _asDoubleValue(place['lng']) != null) {
         continue;
       }
 
       final previous = index > 0 ? _planItemPlaceMap(items[index - 1]) : null;
-      final next = index + 1 < items.length ? _planItemPlaceMap(items[index + 1]) : null;
+      final next = index + 1 < items.length
+          ? _planItemPlaceMap(items[index + 1])
+          : null;
       if (previous == null && next == null) continue;
 
-      final mealType = (place['tags'] as List?)
+      final mealType =
+          (place['tags'] as List?)
                   ?.map((e) => e.toString().trim().toLowerCase())
                   .contains('dinner') ==
               true
@@ -17104,7 +17176,8 @@ Future<void> _refreshDayItemSchedule({
 }) async {
   if (items.isEmpty) return;
 
-  var currentMinute = _parseHmToMinute(items.first['time']?.toString()) ?? 9 * 60;
+  var currentMinute =
+      _parseHmToMinute(items.first['time']?.toString()) ?? 9 * 60;
   for (var index = 0; index < items.length; index++) {
     final item = items[index];
     final existingTransit = item['transitToNext'] is Map
@@ -17162,7 +17235,8 @@ Place? _planJsonToPlace(dynamic raw) {
   return Place(
     id: json['id']?.toString() ?? '',
     name: json['name']?.toString() ?? '',
-    tags: (json['tags'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+    tags:
+        (json['tags'] as List?)?.map((e) => e.toString()).toList() ?? const [],
     city: json['city']?.toString() ?? '',
     address: json['address']?.toString() ?? '',
     lat: _asDoubleValue(json['lat']) ?? 0,
@@ -17402,6 +17476,70 @@ Place? _findRequestedPlaceMatch(Iterable<Place> places, String requestedName) {
   return partialMatch;
 }
 
+Future<List<Place>> _searchCatalogPlaces({
+  required DataStore store,
+  required List<Place> places,
+  required String query,
+  required int limit,
+}) async {
+  final normalizedQuery = _normalizeLocationText(query);
+  if (normalizedQuery.isEmpty) {
+    return const <Place>[];
+  }
+
+  var matches = places.where((place) {
+    final haystack = _normalizeLocationText(
+      '${place.name} ${place.address} ${place.city}',
+    );
+    return haystack.contains(normalizedQuery);
+  }).toList();
+  if (matches.isEmpty) {
+    return const <Place>[];
+  }
+
+  matches.sort((a, b) {
+    final scoreCmp = _scorePlaceSearchCandidate(
+      b,
+      normalizedQuery,
+    ).compareTo(_scorePlaceSearchCandidate(a, normalizedQuery));
+    if (scoreCmp != 0) return scoreCmp;
+    return a.name.compareTo(b.name);
+  });
+
+  if (matches.length > limit) {
+    matches = matches.take(limit).toList();
+  }
+  return _backfillVisiblePlaces(store, matches);
+}
+
+int _scorePlaceSearchCandidate(Place place, String normalizedQuery) {
+  final name = _normalizeLocationText(place.name);
+  final address = _normalizeLocationText(place.address);
+  final city = _normalizeLocationText(place.city);
+  var score = 0;
+
+  if (name == normalizedQuery) {
+    score += 1000;
+  } else if (name.startsWith(normalizedQuery)) {
+    score += 700;
+  } else if (name.contains(normalizedQuery)) {
+    score += 500;
+  }
+
+  if (address.contains(normalizedQuery)) {
+    score += 220;
+  }
+  if (city == normalizedQuery) {
+    score += 150;
+  } else if (city.contains(normalizedQuery)) {
+    score += 80;
+  }
+
+  score += min(place.userRatingsTotal ?? 0, 200);
+  score += ((place.rating ?? 0) * 20).round();
+  return score;
+}
+
 int _scoreGooglePlaceCandidate(
   Map<String, dynamic> result, {
   required String rawName,
@@ -17436,6 +17574,72 @@ int _scoreGooglePlaceCandidate(
   return score;
 }
 
+Future<List<Map<String, dynamic>>> _searchLivePlaces({
+  required String query,
+  required int limit,
+}) async {
+  final key = _googleMapsServerKey();
+  if (key.isEmpty) {
+    throw ApiException(
+      400,
+      '後端未設定 GOOGLE_PLACES_SERVER_API_KEY 或 GOOGLE_MAPS_API_KEY，無法搜尋外部地點',
+    );
+  }
+
+  final candidateQueries = <String>[
+    query.trim(),
+    '${query.trim()} 台灣',
+  ].where((value) => value.isNotEmpty).toList(growable: false);
+
+  final merged = <String, Map<String, dynamic>>{};
+  for (final currentQuery in candidateQueries) {
+    final results = await _googlePlaceSearch(
+      key: key,
+      path: '/maps/api/place/textsearch/json',
+      params: {'query': currentQuery, 'language': 'zh-TW', 'region': 'tw'},
+    );
+    for (final result in results) {
+      final placeId = result['place_id']?.toString().trim();
+      final dedupeKey = placeId != null && placeId.isNotEmpty
+          ? placeId
+          : '${result['name']}-${result['formatted_address']}';
+      merged.putIfAbsent(dedupeKey, () => result);
+    }
+    if (merged.length >= limit) {
+      break;
+    }
+  }
+
+  final candidates = merged.values.toList()
+    ..sort((a, b) {
+      final scoreCmp = _scoreGooglePlaceCandidate(
+        b,
+        rawName: query,
+        cityHint: '',
+      ).compareTo(_scoreGooglePlaceCandidate(a, rawName: query, cityHint: ''));
+      if (scoreCmp != 0) return scoreCmp;
+      return (b['rating'] as num? ?? 0).compareTo(a['rating'] as num? ?? 0);
+    });
+
+  return candidates
+      .take(limit)
+      .map((result) {
+        final place = _buildPlaceFromGoogleResult(
+          key: key,
+          result: result,
+          fallbackName: query,
+          fallbackCity: '',
+        );
+        final json = _placeToApiJson(place);
+        json['description'] = place.description.trim().isNotEmpty
+            ? place.description
+            : 'Google Places 即時搜尋結果';
+        json['source'] = 'google_places_live_search';
+        return json;
+      })
+      .toList(growable: false);
+}
+
 List<String> _googlePlaceTags({
   required String name,
   required String address,
@@ -17447,7 +17651,8 @@ List<String> _googlePlaceTags({
     '$name $address $description ${typeSet.join(' ')}',
   );
   final tags = <String>{};
-  bool textHas(String keyword) => text.contains(_normalizeLocationText(keyword));
+  bool textHas(String keyword) =>
+      text.contains(_normalizeLocationText(keyword));
   bool textHasAny(Iterable<String> keywords) => keywords.any(textHas);
   final hasExplicitHeritageSignal = textHasAny(const [
     '老街',

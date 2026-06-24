@@ -5,10 +5,10 @@ import 'package:http/http.dart' as http;
 
 class BackendApi {
   BackendApi._internal()
-      : baseUrl = const String.fromEnvironment(
-          'SMART_TRAVEL_API_BASE',
-          defaultValue: 'https://smart-travel-backend-6ant.onrender.com',
-        );
+    : baseUrl = const String.fromEnvironment(
+        'SMART_TRAVEL_API_BASE',
+        defaultValue: 'https://smart-travel-backend-6ant.onrender.com',
+      );
 
   static final BackendApi instance = BackendApi._internal();
 
@@ -55,7 +55,8 @@ class BackendApi {
           : buildPhotoProxyUrl(photoReference: trimmed);
     }
 
-    final isGooglePhoto = uri.host == 'maps.googleapis.com' &&
+    final isGooglePhoto =
+        uri.host == 'maps.googleapis.com' &&
         uri.path == '/maps/api/place/photo';
     final photoReference = uri.queryParameters['photo_reference'];
     if (!isGooglePhoto || photoReference == null || photoReference.isEmpty) {
@@ -224,7 +225,10 @@ class BackendApi {
           .map((e) => e.trim())
           .toList();
     }
-    payload['currentDate'] = effectiveCurrentTime.toIso8601String().split('T').first;
+    payload['currentDate'] = effectiveCurrentTime
+        .toIso8601String()
+        .split('T')
+        .first;
     payload['currentMinuteOfDay'] =
         effectiveCurrentTime.hour * 60 + effectiveCurrentTime.minute;
 
@@ -317,9 +321,7 @@ class BackendApi {
     );
   }
 
-  Future<Map<String, dynamic>> fetchActivePlan({
-    required String userId,
-  }) async {
+  Future<Map<String, dynamic>> fetchActivePlan({required String userId}) async {
     final response = await _post(
       '/api/travel/active-plan/read',
       {'userId': userId},
@@ -447,6 +449,71 @@ class BackendApi {
         details: decoded['details'] as Map<String, dynamic>?,
       );
     }
+    final data = decoded['data'];
+    if (data is Map<String, dynamic>) {
+      final places = data['places'];
+      if (places is List) {
+        return places.whereType<Map<String, dynamic>>().toList();
+      }
+    }
+    return <Map<String, dynamic>>[];
+  }
+
+  Future<List<Map<String, dynamic>>> searchPlaces({
+    required String query,
+    int? limit,
+  }) async {
+    final trimmedQuery = query.trim();
+    if (trimmedQuery.isEmpty) {
+      return <Map<String, dynamic>>[];
+    }
+
+    final params = <String, String>{'q': trimmedQuery};
+    if (limit != null && limit > 0) {
+      params['limit'] = '$limit';
+    }
+
+    final uri = Uri.parse(
+      '$baseUrl/api/place-search',
+    ).replace(queryParameters: params);
+    http.Response response;
+    try {
+      response = await http.get(uri).timeout(const Duration(seconds: 20));
+    } on TimeoutException catch (error) {
+      throw ApiClientException('景點搜尋逾時，請稍候再試。', cause: error);
+    } on Exception catch (error) {
+      throw ApiClientException('無法連線到伺服器，請稍後再試。', cause: error);
+    }
+
+    if (response.statusCode == 404) {
+      throw ApiClientException(
+        '後端尚未更新或尚未重啟，找不到 /api/place-search。請重啟目前使用中的後端服務。',
+        statusCode: 404,
+      );
+    }
+
+    Map<String, dynamic> decoded;
+    try {
+      decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    } on Exception {
+      throw ApiClientException(
+        '景點搜尋失敗：伺服器回應格式不正確 (HTTP ${response.statusCode})。',
+        statusCode: response.statusCode,
+      );
+    }
+
+    final success = decoded['success'] == true && response.statusCode < 400;
+    if (!success) {
+      final message =
+          decoded['message']?.toString() ??
+          '景點搜尋失敗 (HTTP ${response.statusCode})';
+      throw ApiClientException(
+        message,
+        statusCode: response.statusCode,
+        details: decoded['details'] as Map<String, dynamic>?,
+      );
+    }
+
     final data = decoded['data'];
     if (data is Map<String, dynamic>) {
       final places = data['places'];

@@ -4,7 +4,6 @@ import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/backend_api.dart';
 import '../state/user_state.dart';
@@ -28,10 +27,6 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  static const _googleMapsApiKey = String.fromEnvironment(
-    'GOOGLE_MAPS_API_KEY',
-  );
-
   late final TextEditingController _startController;
   late final TextEditingController _endController;
 
@@ -1698,79 +1693,26 @@ class _HomePageState extends State<HomePage> {
       _selectPlace(localHit, moveCamera: true);
       return;
     }
-    if (_googleMapsApiKey.isEmpty) {
-      _showMessage(
-        '缺少 Google Maps API 金鑰，請先在 dart-define 設定 GOOGLE_MAPS_API_KEY',
-      );
-      return;
-    }
 
     setState(() {
       _isSearching = true;
     });
 
     try {
-      final uri = Uri.https(
-        'maps.googleapis.com',
-        '/maps/api/place/findplacefromtext/json',
-        {
-          'input': trimmed,
-          'inputtype': 'textquery',
-          'fields': 'name,geometry,formatted_address',
-          'language': 'zh-TW',
-          'region': 'tw',
-          'key': _googleMapsApiKey,
-        },
-      );
-      final response = await http.get(uri);
-      if (response.statusCode != 200) {
-        _showMessage('搜尋失敗 (${response.statusCode})');
-        return;
-      }
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
-      final status = data['status'] as String? ?? '';
-      final errMsg = data['error_message'] as String?;
-      if (status != 'OK') {
-        _showMessage(
-          errMsg == null ? '搜尋失敗（$status）' : '搜尋失敗：$errMsg（$status）',
-        );
-        debugPrint('Places API response: $data');
-        return;
-      }
-      final candidates = (data['candidates'] as List<dynamic>? ?? [])
-          .whereType<Map<String, dynamic>>()
-          .toList();
+      final candidates = await _api.searchPlaces(query: trimmed, limit: 8);
       if (candidates.isEmpty) {
-        _showMessage('找不到相關地點（status: $status）');
+        _showMessage('找不到相關地點');
         return;
       }
-      final candidate = candidates.first;
-      final location = (candidate['geometry'] as Map?)?['location'] as Map?;
-      if (location == null ||
-          location['lat'] == null ||
-          location['lng'] == null) {
-        _showMessage('取得座標失敗');
-        return;
-      }
-      final place = _Place(
-        id: 'google:${candidate['place_id'] ?? trimmed}',
-        name: candidate['name'] as String? ?? trimmed,
-        position: LatLng(
-          (location['lat'] as num).toDouble(),
-          (location['lng'] as num).toDouble(),
-        ),
-        description: candidate['formatted_address'] as String? ?? 'Google Maps',
-        address: candidate['formatted_address'] as String? ?? '',
-        imageUrl: '',
-        city: '',
-        tags: const [],
-      );
+      final place = _Place.fromBackend(candidates.first);
       _addOrReplacePlace(place);
       _selectPlace(place, moveCamera: true);
+    } on ApiClientException catch (error) {
+      _showMessage(error.message);
     } catch (error) {
       final msg = '搜尋失敗：$error';
       _showMessage(msg);
-      debugPrint('Places API error: $error');
+      debugPrint(msg);
     } finally {
       if (mounted) {
         setState(() {
