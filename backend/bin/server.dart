@@ -17448,9 +17448,57 @@ List<String> _googlePlaceTags({
   );
   final tags = <String>{};
   bool textHas(String keyword) => text.contains(_normalizeLocationText(keyword));
+  bool textHasAny(Iterable<String> keywords) => keywords.any(textHas);
+  final hasExplicitHeritageSignal = textHasAny(const [
+    '老街',
+    '古蹟',
+    '古厝',
+    '歷史建築',
+    '故事館',
+    '故事屋',
+    '紀念館',
+    '故居',
+    '遺址',
+    '砲台',
+    '古堡',
+    '城門',
+    '城牆',
+    '鐵道',
+    '糖廠',
+    '碾米廠',
+    '車站古蹟',
+    '文化資產',
+    '文史',
+  ]);
+  final hasCraftSignal = textHasAny(const [
+    '手作',
+    'diy',
+    '工藝',
+    '工坊',
+    '金工',
+    '銀飾',
+    '銀黏土',
+    '陶藝',
+    '體驗課',
+    '體驗教學',
+  ]);
+  final hasCreativeSignal = textHasAny(const [
+    '創意',
+    '彩繪',
+    '文創',
+    '觀光工廠',
+    '工坊',
+    '園區',
+  ]);
 
   if (typeSet.contains('university') || typeSet.contains('school')) {
-    tags.addAll(const ['heritage', 'national_park', 'campus']);
+    tags.add('campus');
+    if (textHasAny(const ['校園', '綠園道', '植物園', '步道'])) {
+      tags.add('national_park');
+    }
+    if (hasExplicitHeritageSignal) {
+      tags.add('heritage');
+    }
   }
   if (typeSet.contains('museum') || typeSet.contains('art_gallery')) {
     tags.add('museum');
@@ -17486,12 +17534,16 @@ List<String> _googlePlaceTags({
       typeSet.contains('transit_station') ||
       typeSet.contains('subway_station') ||
       typeSet.contains('bus_station')) {
-    tags.add('heritage');
+    if (textHasAny(const ['舊車站', '鐵道', '歷史建築', '古蹟'])) {
+      tags.add('heritage');
+    }
   }
   if (typeSet.contains('city_hall') ||
       typeSet.contains('courthouse') ||
       typeSet.contains('library')) {
-    tags.add('heritage');
+    if (hasExplicitHeritageSignal) {
+      tags.add('heritage');
+    }
   }
   if (typeSet.contains('church') ||
       typeSet.contains('hindu_temple') ||
@@ -17517,24 +17569,7 @@ List<String> _googlePlaceTags({
   if (textHas('商圈') || textHas('outlet') || textHas('百貨')) {
     tags.add('department_store');
   }
-  if (textHas('老街') ||
-      textHas('古蹟') ||
-      textHas('教堂') ||
-      textHas('校園') ||
-      textHas('故事館') ||
-      textHas('故事屋') ||
-      textHas('歷史') ||
-      textHas('歷史建築') ||
-      textHas('車站') ||
-      textHas('鐵道') ||
-      textHas('糖廠') ||
-      textHas('碾米廠') ||
-      textHas('農會') ||
-      textHas('倉庫') ||
-      textHas('糧倉') ||
-      textHas('客家文化') ||
-      textHas('紀念館') ||
-      textHas('文化館')) {
+  if (hasExplicitHeritageSignal) {
     tags.add('heritage');
   }
   if (textHas('溪') ||
@@ -17545,12 +17580,10 @@ List<String> _googlePlaceTags({
       textHas('湖')) {
     tags.add('lake_river');
   }
-  if (textHas('創意') ||
-      textHas('彩繪') ||
-      textHas('文創') ||
-      textHas('觀光工廠') ||
-      textHas('工坊') ||
-      textHas('園區')) {
+  if (hasCraftSignal) {
+    tags.add('handcraft_shop');
+  }
+  if (hasCreativeSignal || hasCraftSignal) {
     tags.add('creative_park');
   }
   if (textHas('公園') ||
@@ -17568,8 +17601,8 @@ List<String> _googlePlaceTags({
   if (textHas('寺') || textHas('宮') || textHas('廟')) {
     tags.addAll(const ['temple', 'heritage']);
   }
-  if (tags.isEmpty && typeSet.contains('tourist_attraction')) {
-    tags.add('heritage');
+  if (hasCraftSignal && !hasExplicitHeritageSignal) {
+    tags.remove('heritage');
   }
   return tags.toList();
 }

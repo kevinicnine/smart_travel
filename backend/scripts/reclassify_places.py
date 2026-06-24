@@ -70,6 +70,9 @@ BROAD_KEYWORDS: list[tuple[str, str]] = [
     ("手作", "handcraft_shop"),
     ("工藝", "handcraft_shop"),
     ("陶藝", "handcraft_shop"),
+    ("金工", "handcraft_shop"),
+    ("銀飾", "handcraft_shop"),
+    ("銀黏土", "handcraft_shop"),
     ("農場", "farm"),
     ("牧場", "farm"),
     ("休閒農場", "farm"),
@@ -100,8 +103,8 @@ BROAD_KEYWORDS: list[tuple[str, str]] = [
     ("古厝", "heritage"),
     ("古蹟", "heritage"),
     ("老街", "heritage"),
-    ("歷史", "heritage"),
-    ("文化", "heritage"),
+    ("歷史建築", "heritage"),
+    ("文史", "heritage"),
     ("砲台", "heritage"),
     ("城堡", "heritage"),
     ("城門", "heritage"),
@@ -355,6 +358,53 @@ def _classify_place(place: dict[str, Any]) -> tuple[list[str], list[str], list[s
     text = _normalize_text(raw_text)
     broad_tags: set[str] = set()
     fine_tags: set[str] = set()
+    source = str(place.get("source", "")).strip()
+    existing_tags = {
+        _normalize_text(str(tag))
+        for tag in (place.get("tags") or [])
+        if str(tag).strip()
+    }
+    explicit_heritage_keywords = {
+        _normalize_text(keyword)
+        for keyword in (
+            "老街",
+            "古蹟",
+            "古厝",
+            "歷史建築",
+            "故事館",
+            "故事屋",
+            "紀念館",
+            "故居",
+            "遺址",
+            "砲台",
+            "古堡",
+            "城門",
+            "城牆",
+            "鐵道",
+            "糖廠",
+            "碾米廠",
+            "車站古蹟",
+            "文化資產",
+            "文史",
+        )
+    }
+    craft_keywords = {
+        _normalize_text(keyword)
+        for keyword in (
+            "手作",
+            "diy",
+            "工藝",
+            "工坊",
+            "金工",
+            "銀飾",
+            "銀黏土",
+            "陶藝",
+            "體驗課",
+            "體驗教學",
+        )
+    }
+    has_explicit_heritage = any(keyword in text for keyword in explicit_heritage_keywords)
+    has_craft_signal = any(keyword in text for keyword in craft_keywords)
 
     for keyword, tag in BROAD_KEYWORDS:
         if _normalize_text(keyword) in text:
@@ -365,12 +415,12 @@ def _classify_place(place: dict[str, Any]) -> tuple[list[str], list[str], list[s
             fine_tags.add(fine_tag)
             broad_tags.update(FINE_TO_BROAD.get(fine_tag, set()))
 
-    existing_tags = {
-        _normalize_text(str(tag))
-        for tag in (place.get("tags") or [])
-        if str(tag).strip()
-    }
-    if not broad_tags and existing_tags:
+    if has_craft_signal:
+        broad_tags.add("handcraft_shop")
+        broad_tags.add("creative_park")
+    if has_craft_signal and not has_explicit_heritage:
+        broad_tags.discard("heritage")
+    if not broad_tags and existing_tags and source != "google_place_discovery":
         broad_tags.update(existing_tags)
 
     combined = sorted(tag for tag in (broad_tags | fine_tags) if tag and tag != "other")
