@@ -59,6 +59,11 @@ class _HomePageState extends State<HomePage> {
   List<String> get _selectedInterestMatchTags =>
       expandInterestIdsToMatchTags(widget.selectedInterestIds);
 
+  List<InterestItem> get _selectedInterestItems => widget.selectedInterestIds
+      .map((id) => interestItemsById[id.trim()])
+      .whereType<InterestItem>()
+      .toList(growable: false);
+
   @override
   void initState() {
     super.initState();
@@ -95,15 +100,7 @@ class _HomePageState extends State<HomePage> {
       _isLoadingPlaces = true;
     });
     try {
-      final matchTags = _selectedInterestMatchTags;
-      var raw = await _api.fetchPlaces(
-        tags: matchTags,
-        sort: 'rating',
-        limit: 200,
-      );
-      if (raw.isEmpty && matchTags.isNotEmpty) {
-        raw = await _api.fetchPlaces(sort: 'rating', limit: 200);
-      }
+      final raw = await _api.fetchPlaces(sort: 'rating', limit: 400);
       final places = raw.map(_Place.fromBackend).toList();
       if (places.isNotEmpty) {
         setState(() {
@@ -1199,19 +1196,15 @@ class _HomePageState extends State<HomePage> {
         child: Text('載入推薦景點中...'),
       );
     }
-    final preferredTags = _selectedInterestMatchTags.toSet();
-    final base = preferredTags.isEmpty
-        ? _places
-        : _places.where((p) => p.tags.any(preferredTags.contains)).toList();
-    final recommended = List<_Place>.from(base)
-      ..sort((a, b) {
-        final ar = a.rating ?? 0;
-        final br = b.rating ?? 0;
-        if (ar != br) return br.compareTo(ar);
-        return a.name.compareTo(b.name);
-      });
+    final recommended = _buildPersonalizedRecommendations();
 
     if (recommended.isEmpty) {
+      if (_selectedInterestItems.isNotEmpty) {
+        return const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 24),
+          child: Text('目前找不到明確符合你偏好的推薦，請試試其他興趣組合。'),
+        );
+      }
       return const Text('目前沒有推薦景點，請先在後台匯入資料。');
     }
 
@@ -1249,11 +1242,9 @@ class _HomePageState extends State<HomePage> {
                 children: [
                   ClipRRect(
                     borderRadius: BorderRadius.circular(14),
-                    child: _api
-                            .resolveImageUrl(
-                              place.imageUrl,
-                              placeId: place.id,
-                            )
+                    child:
+                        _api
+                            .resolveImageUrl(place.imageUrl, placeId: place.id)
                             .isNotEmpty
                         ? Image.network(
                             _api.resolveImageUrl(
@@ -1354,6 +1345,94 @@ class _HomePageState extends State<HomePage> {
           );
         },
       ),
+    );
+  }
+
+  List<_Place> _buildPersonalizedRecommendations() {
+    if (_places.isEmpty) return const [];
+
+    final selectedItems = _selectedInterestItems;
+    if (selectedItems.isEmpty) {
+      final fallback = List<_Place>.from(_places)
+        ..sort((a, b) {
+          final ar = a.rating ?? 0;
+          final br = b.rating ?? 0;
+          if (ar != br) return br.compareTo(ar);
+          final ac = a.userRatingsTotal ?? 0;
+          final bc = b.userRatingsTotal ?? 0;
+          if (ac != bc) return bc.compareTo(ac);
+          return a.name.compareTo(b.name);
+        });
+      return fallback.take(10).toList();
+    }
+
+    final scored = _places
+        .map((place) => (place: place, score: _recommendationScoreFor(place)))
+        .where((entry) => entry.score.personalizedScore > 0)
+        .toList();
+
+    scored.sort((a, b) {
+      final scoreCmp = b.score.totalScore.compareTo(a.score.totalScore);
+      if (scoreCmp != 0) return scoreCmp;
+      final itemCmp = b.score.matchedInterestItems.compareTo(
+        a.score.matchedInterestItems,
+      );
+      if (itemCmp != 0) return itemCmp;
+      final ratingCmp = (b.place.rating ?? 0).compareTo(a.place.rating ?? 0);
+      if (ratingCmp != 0) return ratingCmp;
+      return a.place.name.compareTo(b.place.name);
+    });
+
+    return scored.map((entry) => entry.place).take(10).toList();
+  }
+
+  _RecommendationScore _recommendationScoreFor(_Place place) {
+    final normalizedTags = place.tags
+        .map((tag) => tag.toLowerCase().trim())
+        .toSet();
+    final searchableText =
+        '${place.name} ${place.description} ${place.address} ${place.city} ${place.tags.join(' ')}'
+            .toLowerCase();
+
+    var matchedInterestItems = 0;
+    var personalizedScore = 0.0;
+
+    for (final item in _selectedInterestItems) {
+      final itemTags = item.matchTags
+          .map((tag) => tag.toLowerCase().trim())
+          .toSet();
+      final matchedTags = itemTags.intersection(normalizedTags);
+      final matchedKeywords = _interestKeywordsFor(
+        item.id,
+      ).where((keyword) => searchableText.contains(keyword)).toList();
+
+      if (matchedTags.isEmpty && matchedKeywords.isEmpty) {
+        continue;
+      }
+
+      matchedInterestItems += 1;
+      personalizedScore += 5;
+      personalizedScore += matchedKeywords.isEmpty ? 0 : 4;
+      personalizedScore += matchedTags.fold<double>(0, (sum, tag) {
+        return sum + (_broadRecommendationTags.contains(tag) ? 1.2 : 2.6);
+      });
+      if (matchedTags.isNotEmpty && matchedKeywords.isNotEmpty) {
+        personalizedScore += 1.5;
+      }
+    }
+
+    final ratingScore = (place.rating ?? 0) * 0.6;
+    final popularityScore = math.log((place.userRatingsTotal ?? 0) + 1) * 0.22;
+    final totalScore =
+        personalizedScore +
+        ratingScore +
+        popularityScore +
+        (matchedInterestItems * 1.8);
+
+    return _RecommendationScore(
+      personalizedScore: personalizedScore,
+      totalScore: totalScore,
+      matchedInterestItems: matchedInterestItems,
     );
   }
 
@@ -1825,6 +1904,66 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
+}
+
+const Set<String> _broadRecommendationTags = {
+  'heritage',
+  'national_park',
+  'museum',
+  'restaurant',
+  'cafe',
+  'department_store',
+};
+
+const Map<String, List<String>> _interestKeywordHints = {
+  'viewpoint': ['觀景', '景觀', '平台', '展望', '觀景台'],
+  'trail': ['步道', '森林', '步行', '登山'],
+  'wetland': ['濕地'],
+  'lake_river': ['湖', '河', '溪', '潭', '水岸'],
+  'beach': ['海灘', '沙灘', '海岸'],
+  'hot_spring': ['溫泉', '泡湯'],
+  'waterfall': ['瀑布'],
+  'bike_trail': ['單車', '自行車', '綠道', '騎行'],
+  'historic_building': ['古蹟', '歷史', '古厝', '洋樓', '建築'],
+  'old_street': ['老街', '聚落', '街區'],
+  'church_landmark': ['教堂', '聖堂'],
+  'temple': ['廟', '宮', '寺', '祠'],
+  'cultural_district': ['文創', '創意園區', '文化園區', '藝文'],
+  'history_museum': ['博物館', '文物館', '史蹟館'],
+  'art_museum': ['美術館', '藝術館', '展覽'],
+  'science_museum': ['科學', '天文', '探索館'],
+  'aquarium': ['水族館', '海生館'],
+  'zoo': ['動物園'],
+  'amusement': ['樂園', '遊樂', '摩天輪'],
+  'concert_hall': ['音樂廳', '演藝廳', '表演'],
+  'cinema': ['影城', '電影院'],
+  'night_market': ['夜市'],
+  'local_food': ['小吃', '美食', '市場'],
+  'dessert_shop': ['甜點', '咖啡', '下午茶'],
+  'shopping_mall': ['百貨', '商場', '購物中心'],
+  'outlet': ['outlet', '暢貨', '購物中心'],
+  'business_district': ['商圈', '市集', '散策'],
+  'handcraft_shop': ['手作', '金工', '選物', 'diy'],
+  'farm': ['農場', '牧場', '果園'],
+  'camping': ['露營', '營地'],
+  'water_sport': ['水上', '衝浪', 'sup', '獨木舟'],
+  'ball_sport': ['球場', '棒球', '籃球', '足球', '運動'],
+};
+
+List<String> _interestKeywordsFor(String interestId) {
+  return _interestKeywordHints[interestId] ?? const [];
+}
+
+class _RecommendationScore {
+  const _RecommendationScore({
+    required this.personalizedScore,
+    required this.totalScore,
+    required this.matchedInterestItems,
+  });
+
+  final double personalizedScore;
+  final double totalScore;
+  final int matchedInterestItems;
 }
 
 class _Place {
