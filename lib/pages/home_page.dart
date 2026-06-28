@@ -1166,10 +1166,9 @@ class _HomePageState extends State<HomePage> {
   List<String> _cityOptions() {
     final values =
         _places
-            .map((p) => p.city.trim())
+            .map((p) => _normalizeTaiwanAdminText(p.city.trim()))
             .where((city) => city.isNotEmpty)
             .toSet()
-            .map(_normalizeTaiwanAdminText)
             .where((city) => !_offshoreIslandCities.contains(city))
             .toList()
           ..sort(_compareTaiwanCityOrder);
@@ -2028,7 +2027,13 @@ String _normalizeTaiwanAdminText(String input) {
     final ch = String.fromCharCode(rune);
     sb.write(charMap[ch] ?? ch);
   }
-  return sb.toString();
+  final normalized = sb.toString();
+  for (final city in _allTaiwanAdminNames) {
+    if (normalized.contains(city)) {
+      return city;
+    }
+  }
+  return normalized;
 }
 
 const List<String> _taiwanCityNorthToSouth = <String>[
@@ -2054,6 +2059,11 @@ const List<String> _taiwanCityNorthToSouth = <String>[
 ];
 
 const Set<String> _offshoreIslandCities = {'澎湖縣', '金門縣', '連江縣'};
+
+const List<String> _allTaiwanAdminNames = <String>[
+  ..._taiwanCityNorthToSouth,
+  ..._offshoreIslandCities,
+];
 
 int _compareTaiwanCityOrder(String a, String b) {
   final normalizedA = _normalizeTaiwanAdminText(a);

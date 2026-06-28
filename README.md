@@ -65,3 +65,7 @@ All responses are JSON with a `{ "success": bool, "message": "...", "data": {...
 4. Submit the register form via `POST /api/auth/register` with `username`, `email`, `phone`, `password`.
 
 Password reset works similarly: request a code, verify it, then call `/reset-password/complete` with `account`, `email`, `code`, and `newPassword`.
+
+## Lab deployment
+
+For a Render-like deployment on a Linux host using Docker Compose, Nginx, and a dedicated reminder scheduler, see [docs/lab_deploy.md](/Users/kevinicnine/Desktop/smart_travel/docs/lab_deploy.md:1).

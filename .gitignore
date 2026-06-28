@@ -33,6 +33,11 @@ migrate_working_dir/
 /build/
 /coverage/
 .env.local
+backend/.env.production
+deploy/data/*
+!deploy/data/.gitkeep
+deploy/frontend/*
+!deploy/frontend/.gitkeep
 
 # Symbolication related
 app.*.symbols
