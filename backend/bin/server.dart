@@ -1550,6 +1550,9 @@ Future<void> main(List<String> args) async {
         if (_crawlJob != null && _crawlJob!.running) {
           throw ApiException(409, '已有爬取進行中');
         }
+        if (mode != 'google_places') {
+          throw ApiException(400, '目前只保留 Google 抓景點模式');
+        }
         final script = _crawlScriptForMode(mode);
         if (_crawlModeNeedsGoogleKey(mode)) {
           final googleKey = _googleMapsServerKey();
@@ -1559,9 +1562,6 @@ Future<void> main(List<String> args) async {
               '需要設定 GOOGLE_PLACES_SERVER_API_KEY 或 GOOGLE_MAPS_API_KEY',
             );
           }
-        }
-        if (mode != 'google_places' && batchCities.length > 1) {
-          throw ApiException(400, '目前只有 Google 抓景點支援批次多縣市');
         }
         final scriptPath = p.join(_dataDir, '..', 'scripts', script);
         if (!File(scriptPath).existsSync()) {
@@ -1576,9 +1576,7 @@ Future<void> main(List<String> args) async {
           id: const Uuid().v4(),
           mode: mode,
           startedAt: DateTime.now(),
-          profile: mode == 'google_places' && crawlProfile.isNotEmpty
-              ? crawlProfile
-              : null,
+          profile: crawlProfile.isNotEmpty ? crawlProfile : null,
           city: crawlCity.isEmpty ? null : crawlCity,
           cities: cities,
         );
@@ -4723,14 +4721,7 @@ Future<int> _importDbJsonToStore() async {
   return _mergePlacesToStore(_store, places);
 }
 
-const _crawlModesToSync = {
-  'places',
-  'reviews',
-  'merge_tags',
-  'google_places',
-  'merge_ratings',
-  'reclassify_places',
-};
+const _crawlModesToSync = {'google_places'};
 
 void _appendCrawlLog(_CrawlJob job, String line) {
   const maxLines = 400;
@@ -4742,17 +4733,11 @@ void _appendCrawlLog(_CrawlJob job, String line) {
 }
 
 String _crawlScriptForMode(String mode) => switch (mode) {
-  'places' => 'fetch_places.py',
-  'reviews' => 'fetch_places_with_reviews.py',
-  'merge_tags' => 'merge_tags_from_reviews.py',
   'google_places' => 'fetch_places_from_google.py',
-  'merge_ratings' => 'merge_ratings_from_reviews.py',
-  'reclassify_places' => 'reclassify_places.py',
-  _ => throw ApiException(400, '未知的爬取模式'),
+  _ => throw ApiException(400, '目前只保留 Google 抓景點模式'),
 };
 
-bool _crawlModeNeedsGoogleKey(String mode) =>
-    mode == 'reviews' || mode == 'google_places';
+bool _crawlModeNeedsGoogleKey(String mode) => mode == 'google_places';
 
 List<String> _crawlCitiesFromBody(Map<String, dynamic> body) {
   final raw = body['cities'];
@@ -4785,8 +4770,6 @@ Future<Process> _startCrawlProcess({
       'PYTHONIOENCODING': 'utf-8',
       if (mode == 'google_places' && city != null && city.trim().isNotEmpty)
         'GOOGLE_PLACE_CITY': city.trim(),
-      if (mode == 'reclassify_places' && city != null && city.trim().isNotEmpty)
-        'RECLASSIFY_CITY': city.trim(),
       if (mode == 'google_places' && maxRequests != null && maxRequests > 0)
         'MAX_REQUESTS': maxRequests.clamp(50, 1000).toString(),
       if (mode == 'google_places' && maxPages != null && maxPages > 0)

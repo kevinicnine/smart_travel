@@ -907,12 +907,7 @@
             <div class="filters">
               <label>模式
                 <select id="crawlMode" onchange="onCrawlModeChange()">
-                  <option value="places">抓景點 (fetch_places.py)</option>
-                  <option value="reviews">抓評論 + 標籤 (fetch_places_with_reviews.py)</option>
-                  <option value="merge_tags">合併標籤 (merge_tags_from_reviews.py)</option>
-                  <option value="merge_ratings">合併評分 (merge_ratings_from_reviews.py)</option>
-                  <option value="google_places">Google 抓景點 (fetch_places_from_google.py)</option>
-                  <option value="reclassify_places">重跑景點分類 (reclassify_places.py)</option>
+                  <option value="google_places" selected>Google 抓景點 (fetch_places_from_google.py)</option>
                 </select>
               </label>
               <label id="crawlCityWrap" style="display:none;">縣市
@@ -982,7 +977,7 @@
               <button class="primary" onclick="startCrawl()">開始爬取</button>
               <button onclick="stopCrawl()">停止</button>
             </div>
-            <p class="muted" style="margin-top:12px;">大量模式建議用 Google 抓景點 + 批次縣市。系統會依序逐縣市執行，避免單次全台任務過大。</p>
+            <p class="muted" style="margin-top:12px;">目前只保留 Google 抓景點模式。大量抓取建議搭配批次縣市，系統會依序逐縣市執行，避免單次全台任務過大。</p>
             <div id="crawlStatus" class="muted" style="margin-top:12px;"></div>
             <pre id="crawlLogs">尚未開始爬取。</pre>
           </div>
@@ -3084,15 +3079,13 @@
       }
 
       function onCrawlModeChange() {
-        const mode = document.getElementById('crawlMode').value;
-        const google = mode === 'google_places';
-        const reclassify = mode === 'reclassify_places';
-        document.getElementById('crawlCityWrap').style.display = (google || reclassify) ? '' : 'none';
-        document.getElementById('crawlBatchCitiesWrap').style.display = google ? '' : 'none';
-        document.getElementById('crawlScopeWrap').style.display = google ? '' : 'none';
-        document.getElementById('crawlProfileWrap').style.display = google ? '' : 'none';
-        document.getElementById('crawlRequestsWrap').style.display = google ? '' : 'none';
-        document.getElementById('crawlPagesWrap').style.display = google ? '' : 'none';
+        document.getElementById('crawlMode').value = 'google_places';
+        document.getElementById('crawlCityWrap').style.display = '';
+        document.getElementById('crawlBatchCitiesWrap').style.display = '';
+        document.getElementById('crawlScopeWrap').style.display = '';
+        document.getElementById('crawlProfileWrap').style.display = '';
+        document.getElementById('crawlRequestsWrap').style.display = '';
+        document.getElementById('crawlPagesWrap').style.display = '';
       }
 
       async function startCrawl() {
@@ -3104,7 +3097,7 @@
             .map((item) => item.trim())
             .filter(Boolean);
           const body = {
-            mode: document.getElementById('crawlMode').value,
+            mode: 'google_places',
             city: document.getElementById('crawlCity').value,
             cities: batchCities,
             maxRequests: Number(document.getElementById('crawlMaxRequests').value || 0),
